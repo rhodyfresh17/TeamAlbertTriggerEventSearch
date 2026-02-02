@@ -241,13 +241,13 @@ sources:
 
 # Alert configuration
 alerts:
-  # Email alerts
+  # Email alerts (enabled via GitHub secrets)
   email:
-    enabled: true
+    enabled: false
     smtp_server: "smtp.gmail.com"
     smtp_port: 587
-    sender_email: "your-email@gmail.com"  # TODO: Set your sender Gmail address
-    sender_password: ""  # TODO: Set your Gmail app password (see instructions below)
+    sender_email: "your-email@gmail.com"
+    sender_password: ""
     recipient_emails:
       - "mwjacobs3@gmail.com"
 
@@ -256,9 +256,9 @@ alerts:
     enabled: false
     webhook_url: ""
 
-  # Desktop notifications
+  # Desktop notifications (disabled for CI)
   desktop:
-    enabled: true
+    enabled: false
 
   # File-based alerts (always enabled as backup)
   file:
