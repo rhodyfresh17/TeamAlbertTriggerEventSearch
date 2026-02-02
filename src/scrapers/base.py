@@ -29,11 +29,11 @@ class BaseScraper(ABC):
 
         # Load territory config
         self.territory = config.get('territory', {})
-        self.regions = [r.lower() for r in self.territory.get('regions', [])]
-        self.cities = [c.lower() for c in self.territory.get('cities', [])]
-        self.target_companies = [c.lower() for c in self.territory.get('target_companies', []) if c]
-        self.industries = [i.lower() for i in self.territory.get('industries', [])]
-        self.excluded_industries = [i.lower() for i in self.territory.get('excluded_industries', [])]
+        self.regions = [r.lower() for r in (self.territory.get('regions') or [])]
+        self.cities = [c.lower() for c in (self.territory.get('cities') or [])]
+        self.target_companies = [c.lower() for c in (self.territory.get('target_companies') or []) if c]
+        self.industries = [i.lower() for i in (self.territory.get('industries') or [])]
+        self.excluded_industries = [i.lower() for i in (self.territory.get('excluded_industries') or [])]
 
         # Load keywords
         self.keywords = config.get('keywords', {})

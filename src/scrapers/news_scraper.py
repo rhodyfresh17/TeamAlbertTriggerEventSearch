@@ -1,7 +1,7 @@
 """Google News RSS scraper for trigger events."""
 
 import urllib.parse
-import feedparser
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from email.utils import parsedate_to_datetime
@@ -81,10 +81,14 @@ class GoogleNewsScraper(BaseScraper):
         url = f"{self.base_url}{encoded_query}&hl=en-US&gl=US&ceid=US:en"
 
         try:
-            feed = feedparser.parse(url)
+            response = self.session.get(url, timeout=self.timeout)
+            response.raise_for_status()
 
-            for entry in feed.entries[:10]:  # Limit entries per query
-                event = self._process_entry(entry, event_type_hint)
+            root = ET.fromstring(response.content)
+            items = root.findall('.//item')[:10]  # Limit entries per query
+
+            for item in items:
+                event = self._process_entry(item, event_type_hint)
                 if event:
                     events.append(event)
 
@@ -95,13 +99,17 @@ class GoogleNewsScraper(BaseScraper):
 
     def _process_entry(
         self,
-        entry: dict,
+        item: ET.Element,
         event_type_hint: Optional[EventType]
     ) -> Optional[TriggerEvent]:
         """Process a single news entry."""
-        title = entry.get('title', '')
-        link = entry.get('link', '')
-        summary = entry.get('summary', entry.get('description', ''))
+        title_elem = item.find('title')
+        link_elem = item.find('link')
+        desc_elem = item.find('description')
+
+        title = title_elem.text if title_elem is not None else ''
+        link = link_elem.text if link_elem is not None else ''
+        summary = desc_elem.text if desc_elem is not None else ''
 
         # Google News titles often have source appended
         # Format: "Article Title - Source Name"
@@ -150,7 +158,7 @@ class GoogleNewsScraper(BaseScraper):
         )
 
         # Parse date
-        published = self._parse_date(entry)
+        published = self._parse_date(item)
 
         # Extract info
         extracted_company = company_name or self.extract_company_name(full_text)
@@ -175,15 +183,14 @@ class GoogleNewsScraper(BaseScraper):
             relevance_score=relevance
         )
 
-    def _parse_date(self, entry: dict) -> datetime:
+    def _parse_date(self, item: ET.Element) -> datetime:
         """Parse date from news entry."""
-        for field in ['published', 'updated']:
-            date_str = entry.get(field)
-            if date_str:
-                try:
-                    return parsedate_to_datetime(date_str)
-                except Exception:
-                    pass
+        pub_date = item.find('pubDate')
+        if pub_date is not None and pub_date.text:
+            try:
+                return parsedate_to_datetime(pub_date.text)
+            except Exception:
+                pass
 
         return datetime.now(timezone.utc)
 

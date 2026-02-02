@@ -1,7 +1,7 @@
 """SEC EDGAR scraper for M&A filings and corporate events."""
 
 import re
-import feedparser
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 
@@ -23,6 +23,9 @@ class SECScraper(BaseScraper):
         '8.01': 'Other Events',
     }
 
+    # Atom namespace
+    ATOM_NS = '{http://www.w3.org/2005/Atom}'
+
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
 
@@ -42,9 +45,13 @@ class SECScraper(BaseScraper):
         events = []
 
         try:
-            feed = feedparser.parse(self.SEC_8K_FEED)
+            response = self.session.get(self.SEC_8K_FEED, timeout=self.timeout)
+            response.raise_for_status()
 
-            for entry in feed.entries:
+            root = ET.fromstring(response.content)
+            entries = root.findall(f'.//{self.ATOM_NS}entry')
+
+            for entry in entries:
                 event = self._process_filing(entry)
                 if event:
                     events.append(event)
@@ -56,11 +63,15 @@ class SECScraper(BaseScraper):
 
         return events
 
-    def _process_filing(self, entry: dict) -> Optional[TriggerEvent]:
+    def _process_filing(self, entry: ET.Element) -> Optional[TriggerEvent]:
         """Process a single SEC filing entry."""
-        title = entry.get('title', '')
-        link = entry.get('link', '')
-        summary = entry.get('summary', '')
+        title_elem = entry.find(f'{self.ATOM_NS}title')
+        link_elem = entry.find(f'{self.ATOM_NS}link')
+        summary_elem = entry.find(f'{self.ATOM_NS}summary')
+
+        title = title_elem.text if title_elem is not None else ''
+        link = link_elem.get('href', '') if link_elem is not None else ''
+        summary = summary_elem.text if summary_elem is not None else ''
 
         # Parse company info from title
         # Format typically: "8-K - COMPANY NAME (0001234567) (Filer)"
@@ -181,17 +192,14 @@ class SECScraper(BaseScraper):
 
         return acquirer, target, deal_value
 
-    def _parse_date(self, entry: dict) -> datetime:
+    def _parse_date(self, entry: ET.Element) -> datetime:
         """Parse date from SEC filing entry."""
-        # SEC feeds use 'updated' field
-        for field in ['updated', 'published']:
-            date_str = entry.get(field)
-            if date_str:
-                try:
-                    # SEC uses ISO format
-                    return datetime.fromisoformat(date_str.replace('Z', '+00:00'))
-                except Exception:
-                    pass
+        updated_elem = entry.find(f'{self.ATOM_NS}updated')
+        if updated_elem is not None and updated_elem.text:
+            try:
+                return datetime.fromisoformat(updated_elem.text.replace('Z', '+00:00'))
+            except Exception:
+                pass
 
         return datetime.now(timezone.utc)
 

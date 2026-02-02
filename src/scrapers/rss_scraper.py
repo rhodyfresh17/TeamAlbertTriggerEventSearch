@@ -1,6 +1,6 @@
 """RSS feed scraper for business news and PR wires."""
 
-import feedparser
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from email.utils import parsedate_to_datetime
@@ -51,13 +51,23 @@ class RSSScraper(BaseScraper):
         events = []
 
         try:
-            feed = feedparser.parse(url)
+            response = self.session.get(url, timeout=self.timeout)
+            response.raise_for_status()
 
-            if feed.bozo and feed.bozo_exception:
-                print(f"Feed parse warning for {feed_name}: {feed.bozo_exception}")
+            # Parse XML
+            root = ET.fromstring(response.content)
 
-            for entry in feed.entries:
-                event = self._process_entry(entry, feed_name)
+            # Handle both RSS and Atom feeds
+            items = root.findall('.//item')  # RSS
+            if not items:
+                # Try Atom format
+                ns = {'atom': 'http://www.w3.org/2005/Atom'}
+                items = root.findall('.//atom:entry', ns)
+                if not items:
+                    items = root.findall('.//{http://www.w3.org/2005/Atom}entry')
+
+            for item in items:
+                event = self._process_entry(item, feed_name)
                 if event:
                     events.append(event)
 
@@ -66,11 +76,18 @@ class RSSScraper(BaseScraper):
 
         return events
 
-    def _process_entry(self, entry: dict, feed_name: str) -> Optional[TriggerEvent]:
+    def _process_entry(self, item: ET.Element, feed_name: str) -> Optional[TriggerEvent]:
         """Process a single feed entry."""
-        title = entry.get('title', '')
-        link = entry.get('link', '')
-        summary = entry.get('summary', entry.get('description', ''))
+        # Extract fields (handle both RSS and Atom)
+        title = self._get_text(item, 'title') or ''
+        link = self._get_text(item, 'link') or self._get_attr(item, 'link', 'href') or ''
+        summary = self._get_text(item, 'description') or self._get_text(item, 'summary') or ''
+
+        # Handle Atom content
+        if not summary:
+            content = item.find('{http://www.w3.org/2005/Atom}content')
+            if content is not None and content.text:
+                summary = content.text
 
         # Combine title and summary for analysis
         full_text = f"{title} {summary}"
@@ -110,7 +127,7 @@ class RSSScraper(BaseScraper):
         )
 
         # Parse published date
-        published = self._parse_date(entry)
+        published = self._parse_date(item)
 
         # Extract additional info
         extracted_company = company_name or self.extract_company_name(full_text)
@@ -138,25 +155,46 @@ class RSSScraper(BaseScraper):
             relevance_score=relevance
         )
 
-    def _parse_date(self, entry: dict) -> datetime:
+    def _get_text(self, elem: ET.Element, tag: str) -> Optional[str]:
+        """Get text content of a child element."""
+        # Try without namespace
+        child = elem.find(tag)
+        if child is not None and child.text:
+            return child.text.strip()
+
+        # Try with Atom namespace
+        child = elem.find(f'{{http://www.w3.org/2005/Atom}}{tag}')
+        if child is not None and child.text:
+            return child.text.strip()
+
+        return None
+
+    def _get_attr(self, elem: ET.Element, tag: str, attr: str) -> Optional[str]:
+        """Get attribute of a child element."""
+        child = elem.find(tag)
+        if child is not None:
+            return child.get(attr)
+
+        child = elem.find(f'{{http://www.w3.org/2005/Atom}}{tag}')
+        if child is not None:
+            return child.get(attr)
+
+        return None
+
+    def _parse_date(self, item: ET.Element) -> datetime:
         """Parse the published date from a feed entry."""
         # Try different date fields
-        for date_field in ['published', 'updated', 'created']:
-            date_str = entry.get(date_field)
+        for tag in ['pubDate', 'published', 'updated', 'date']:
+            date_str = self._get_text(item, tag)
             if date_str:
                 try:
                     return parsedate_to_datetime(date_str)
                 except Exception:
-                    pass
-
-        # Try parsed versions
-        for parsed_field in ['published_parsed', 'updated_parsed', 'created_parsed']:
-            parsed = entry.get(parsed_field)
-            if parsed:
-                try:
-                    return datetime(*parsed[:6], tzinfo=timezone.utc)
-                except Exception:
-                    pass
+                    try:
+                        # Try ISO format
+                        return datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+                    except Exception:
+                        pass
 
         # Default to now
         return datetime.now(timezone.utc)
