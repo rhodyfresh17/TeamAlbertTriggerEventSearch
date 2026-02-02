@@ -1,0 +1,67 @@
+name: Trigger Event Scraper
+
+on:
+  # Run every 6 hours (to stay within GitHub Actions free tier limits)
+  schedule:
+    - cron: '0 */6 * * *'  # Every 6 hours
+
+  # Allow manual trigger
+  workflow_dispatch:
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Create config from template
+        env:
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
+        run: |
+          # Copy template and inject secrets
+          cp config.example.yaml config.yaml
+
+          # Update email settings if secrets are set
+          if [ -n "$SENDER_EMAIL" ]; then
+            sed -i "s/sender_email: \"your-email@gmail.com\"/sender_email: \"$SENDER_EMAIL\"/" config.yaml
+            sed -i 's/enabled: false/enabled: true/' config.yaml
+          fi
+
+          if [ -n "$EMAIL_PASSWORD" ]; then
+            sed -i "s/sender_password: \"\"/sender_password: \"$EMAIL_PASSWORD\"/" config.yaml
+          fi
+
+      - name: Restore database cache
+        uses: actions/cache@v4
+        with:
+          path: trigger_events.db
+          key: trigger-events-db-${{ github.run_number }}
+          restore-keys: |
+            trigger-events-db-
+
+      - name: Run scraper
+        run: python -m src.main
+
+      - name: Upload alerts as artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: alerts-${{ github.run_number }}
+          path: alerts/
+          retention-days: 30
+
+      - name: Show stats
+        run: python -m src.main --stats

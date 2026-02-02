@@ -1,0 +1,8 @@
+# Sales Territory Trigger Event Scraper
+# Python 3.9+ required
+
+# Core dependencies
+requests>=2.28.0
+PyYAML>=6.0
+
+# Note: beautifulsoup4 and feedparser removed - using built-in xml.etree instead
