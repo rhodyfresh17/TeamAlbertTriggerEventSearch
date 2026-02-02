@@ -1,0 +1,193 @@
+# Sales Territory Trigger Event Scraper Configuration
+# Customize this file to match your sales territory
+
+# Define your sales territory
+territory:
+  name: "East Coast & Eastern Canada"
+
+  # Companies to specifically monitor (add your target accounts)
+  target_companies:
+    # Add your target accounts here
+    # - "Company Name"
+
+  # Geographic regions to monitor
+  regions:
+    # US States
+    - "New York"
+    - "Massachusetts"
+    - "New Jersey"
+    - "Virginia"
+    - "Pennsylvania"
+    - "North Carolina"
+    - "South Carolina"
+    - "Ohio"
+    - "West Virginia"
+    - "Washington DC"
+    - "District of Columbia"
+    - "Maryland"
+    - "Delaware"
+    - "Maine"
+    - "Rhode Island"
+    - "Connecticut"
+    - "New Hampshire"
+    - "Vermont"
+    # Canadian Provinces
+    - "Toronto"
+    - "Ontario"
+    - "Quebec"
+    - "New Brunswick"
+    - "Newfoundland"
+    - "Labrador"
+
+  # Major cities in territory (for more precise matching)
+  cities:
+    - "New York City"
+    - "NYC"
+    - "Boston"
+    - "Philadelphia"
+    - "Toronto"
+    - "Montreal"
+    - "Charlotte"
+    - "Pittsburgh"
+    - "Baltimore"
+    - "Richmond"
+    - "Columbus"
+    - "Cleveland"
+    - "Hartford"
+    - "Providence"
+    - "Newark"
+    - "Raleigh"
+    - "Durham"
+    - "Halifax"
+    - "Quebec City"
+
+  # Industries to focus on
+  industries:
+    - "Technology"
+    - "Healthcare"
+    - "Financial Services"
+    - "Manufacturing"
+    - "Retail"
+    - "Energy"
+    - "Pharmaceuticals"
+    - "Insurance"
+    # Add more industries here
+
+# Keywords to search for trigger events
+keywords:
+  executive_hires:
+    - "CFO"
+    - "Chief Financial Officer"
+    - "VP Finance"
+    - "Vice President Finance"
+    - "Finance Director"
+    - "Controller"
+    - "Treasurer"
+    - "Head of Finance"
+    - "Finance Lead"
+    - "named CFO"
+    - "appointed CFO"
+    - "joins as CFO"
+    - "new CFO"
+    - "hires CFO"
+
+  mergers_acquisitions:
+    - "acquisition"
+    - "acquired"
+    - "acquires"
+    - "merger"
+    - "merged"
+    - "M&A"
+    - "purchase agreement"
+    - "definitive agreement"
+    - "strategic acquisition"
+    - "buyout"
+    - "takeover"
+    - "to acquire"
+    - "has acquired"
+    - "completes acquisition"
+    - "announces acquisition"
+
+  funding_events:
+    - "series A"
+    - "series B"
+    - "series C"
+    - "funding round"
+    - "raises"
+    - "raised"
+    - "investment"
+    - "venture capital"
+    - "private equity"
+    - "IPO"
+    - "going public"
+
+# Data sources to scrape
+sources:
+  # RSS feeds from major PR/news wires
+  rss_feeds:
+    - name: "Business Wire"
+      url: "https://feed.businesswire.com/rss/home/?rss=G1QFDERJXkJeEFpRWQ=="
+      enabled: true
+
+    - name: "PR Newswire - Business"
+      url: "https://www.prnewswire.com/rss/news-releases-list.rss"
+      enabled: true
+
+    - name: "Globe Newswire"
+      url: "https://www.globenewswire.com/RssFeed/orgclass/1/feedTitle/GlobeNewswire%20-%20News%20Releases"
+      enabled: true
+
+    - name: "SEC EDGAR - M&A Filings"
+      url: "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-K&company=&dateb=&owner=include&count=100&output=atom"
+      enabled: true
+
+  # Google News RSS (requires specific search queries)
+  google_news:
+    enabled: true
+    base_url: "https://news.google.com/rss/search?q="
+
+# Alert configuration
+alerts:
+  # Email alerts
+  email:
+    enabled: false
+    smtp_server: "smtp.gmail.com"
+    smtp_port: 587
+    sender_email: "your-email@gmail.com"
+    sender_password: ""  # Use app password for Gmail
+    recipient_emails:
+      - "your-email@gmail.com"
+
+  # Slack alerts
+  slack:
+    enabled: false
+    webhook_url: ""
+
+  # Desktop notifications
+  desktop:
+    enabled: true
+
+  # File-based alerts (always enabled as backup)
+  file:
+    enabled: true
+    output_dir: "alerts"
+
+# Scraper settings
+scraper:
+  # How often to check (in minutes)
+  check_interval: 30
+
+  # Request timeout (seconds)
+  timeout: 30
+
+  # Delay between requests (seconds) - be respectful to servers
+  request_delay: 2
+
+  # User agent string
+  user_agent: "Mozilla/5.0 (compatible; SalesTerritoryBot/1.0)"
+
+  # Maximum age of news to consider (hours)
+  max_age_hours: 72
+
+  # Database file for tracking seen items
+  database: "trigger_events.db"
