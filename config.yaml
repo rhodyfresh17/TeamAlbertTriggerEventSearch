@@ -61,17 +61,110 @@ territory:
     - "Halifax"
     - "Quebec City"
 
-  # Industries to focus on
+  # Industries to focus on (target verticals)
   industries:
-    - "Technology"
+    # Healthcare
     - "Healthcare"
-    - "Financial Services"
-    - "Manufacturing"
-    - "Retail"
+    - "Health System"
+    - "Hospital"
+    - "Medical"
+    - "Health Services"
+    # Nonprofit
+    - "Nonprofit"
+    - "Non-profit"
+    - "Foundation"
+    - "Charity"
+    - "NGO"
+    # Hospitality
+    - "Hospitality"
+    - "Hotel"
+    - "Resort"
+    - "Lodging"
+    # Restaurant/Franchise
+    - "Restaurant"
+    - "Franchise"
+    - "Food Service"
+    - "QSR"
+    - "Fast Food"
+    - "Dining"
+    # Construction
+    - "Construction"
+    - "General Contractor"
+    - "Builder"
+    - "Engineering"
+    - "Infrastructure"
+    # Field Services
+    - "Field Services"
+    - "HVAC"
+    - "Plumbing"
+    - "Electrical"
+    - "Facilities"
+    - "Property Management"
+    - "Maintenance"
+    # Energy
     - "Energy"
-    - "Pharmaceuticals"
+    - "Utilities"
+    - "Power"
+    # Renewables
+    - "Renewable"
+    - "Solar"
+    - "Wind Energy"
+    - "Clean Energy"
+    - "Green Energy"
+    # Oil & Gas
+    - "Oil"
+    - "Gas"
+    - "Petroleum"
+    - "Drilling"
+    - "Pipeline"
+    # Financial Services (Insurance only - no banks)
     - "Insurance"
-    # Add more industries here
+    - "Underwriting"
+    - "Claims"
+    - "Insurer"
+
+  # Industries/companies to EXCLUDE from results
+  excluded_industries:
+    - "Bank"
+    - "Banking"
+    - "Credit Union"
+    - "Savings Bank"
+    - "Federal Reserve"
+    - "Mortgage Lender"
+
+  # Company size filters (target mid-market private companies)
+  company_filters:
+    # Avoid public companies
+    exclude_public_companies: true
+    public_company_indicators:
+      - "NYSE"
+      - "NASDAQ"
+      - "stock exchange"
+      - "publicly traded"
+      - "ticker symbol"
+      - "(NYSE:"
+      - "(NASDAQ:"
+      - "common stock"
+      - "shareholders"
+      - "SEC filing"
+
+    # Target company size
+    min_employees: 20
+    max_employees: 2000
+    min_revenue_millions: 20
+    max_revenue_millions: 500
+
+    # Keywords indicating target size
+    target_size_indicators:
+      - "mid-market"
+      - "middle market"
+      - "mid-size"
+      - "regional"
+      - "growing"
+      - "private company"
+      - "privately held"
+      - "family-owned"
+      - "employee-owned"
 
 # Keywords to search for trigger events
 keywords:
