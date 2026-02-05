@@ -285,6 +285,10 @@ sources:
       url: "https://www.restaurantbusinessonline.com/rss.xml"
       enabled: true
 
+    - name: "QSR Magazine"
+      url: "https://www.qsrmagazine.com/rss.xml"
+      enabled: true
+
     # Funding/Startup sources
     - name: "Crunchbase News"
       url: "https://news.crunchbase.com/feed/"
