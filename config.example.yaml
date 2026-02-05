@@ -417,13 +417,6 @@ territory:
       - "Apple"
       - "Oracle"
       - "Salesforce"
-      - "Four Seasons"
-      - "Marriott"
-      - "Hilton"
-      - "Hyatt"
-      - "MGM"
-      - "Wynn"
-      - "Caesars"
 
     # Target company size
     min_employees: 20
