@@ -24,7 +24,7 @@ import yaml
 from .models import TriggerEvent
 from .database import DatabaseManager
 from .alerts import AlertManager
-from .scrapers import RSSScraper, GoogleNewsScraper
+from .scrapers import RSSScraper, GoogleNewsScraper, JobScraper
 from .enrichment import CompanyEnricher
 
 
@@ -44,6 +44,7 @@ class TriggerEventMonitor:
         self.scrapers = [
             RSSScraper(self.config),
             GoogleNewsScraper(self.config),
+            JobScraper(self.config),
         ]
 
         if self.enricher.enabled:

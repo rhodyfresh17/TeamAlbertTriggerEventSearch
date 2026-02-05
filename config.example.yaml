@@ -665,3 +665,32 @@ scraper:
 
   # Database file for tracking seen items
   database: "trigger_events.db"
+
+# Job site search for companies hiring finance leaders
+job_search:
+  enabled: true
+
+  # Job titles to search for (indicates company needs financial leadership)
+  titles:
+    - "CFO"
+    - "Chief Financial Officer"
+    - "Controller"
+    - "Finance Director"
+    - "Director of Finance"
+    - "VP Finance"
+    - "Vice President Finance"
+    - "Head of Finance"
+
+  # Locations to search (within your territory)
+  locations:
+    - "New York, NY"
+    - "Boston, MA"
+    - "Philadelphia, PA"
+    - "New Jersey"
+    - "Connecticut"
+    - "Maryland"
+    - "Virginia"
+    - "Washington DC"
+    - "North Carolina"
+    - "Toronto, ON"
+    - "Montreal, QC"
