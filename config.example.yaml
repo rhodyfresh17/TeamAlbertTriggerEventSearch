@@ -694,3 +694,12 @@ job_search:
     - "North Carolina"
     - "Toronto, ON"
     - "Montreal, QC"
+
+  # Job boards to search (enable/disable each)
+  boards:
+    indeed: true
+    ziprecruiter: true
+    simplyhired: true
+    google_jobs: true
+    ladders: true        # Executive jobs ($100K+)
+    cfo_com: true        # CFO-specific news and jobs

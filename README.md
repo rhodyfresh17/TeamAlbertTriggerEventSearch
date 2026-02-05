@@ -7,7 +7,7 @@ Monitor news sources for sales trigger events (CFO hires, M&A, acquisitions, fun
 ## Features
 
 - **22+ news sources**: Industry-specific publications, PR wires, funding news, and Google News
-- **Job site search**: Finds companies hiring CFOs, controllers, and finance directors on Indeed
+- **Job site search**: Finds companies hiring CFOs, controllers, and finance directors (Indeed, ZipRecruiter, SimplyHired, Ladders, CFO.com)
 - **Territory filtering**: Filter by US states, Canadian provinces, and major cities
 - **Industry targeting**: Healthcare, Nonprofit, Hospitality, Restaurant/Franchise, Construction, Field Services, Energy, Oil & Gas, Insurance, Casino/Gaming, Transportation/Logistics, Travel/Hotels, Airlines/Aviation
 - **Company size filtering**: Target mid-market private companies (20-2000 employees, $20M-$500M revenue)
