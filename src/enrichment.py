@@ -14,6 +14,7 @@ class CompanyInfo:
     website: Optional[str] = None
     revenue: Optional[str] = None
     revenue_range: Optional[str] = None
+    revenue_millions: Optional[float] = None  # Parsed revenue in millions
     employee_count: Optional[int] = None
     employee_range: Optional[str] = None
     industry: Optional[str] = None
@@ -21,6 +22,8 @@ class CompanyInfo:
     description: Optional[str] = None
     linkedin_url: Optional[str] = None
     founded_year: Optional[int] = None
+    is_public: bool = False  # Whether company is publicly traded
+    stock_symbol: Optional[str] = None
 
 
 class ApolloEnricher:
@@ -72,18 +75,25 @@ class ApolloEnricher:
             if not org:
                 return None
 
+            # Check if company is public (Apollo provides this)
+            is_public = org.get('publicly_traded_exchange') is not None
+            stock_symbol = org.get('publicly_traded_symbol')
+
             info = CompanyInfo(
                 name=org.get('name', company_name),
                 website=org.get('website_url'),
                 revenue=self._format_revenue(org.get('estimated_annual_revenue')),
                 revenue_range=org.get('revenue_range'),
+                revenue_millions=self._parse_revenue_millions(org.get('estimated_annual_revenue'), org.get('revenue_range')),
                 employee_count=org.get('estimated_num_employees'),
                 employee_range=org.get('employee_count_range'),
                 industry=org.get('industry'),
                 location=self._format_location(org),
                 description=org.get('short_description'),
                 linkedin_url=org.get('linkedin_url'),
-                founded_year=org.get('founded_year')
+                founded_year=org.get('founded_year'),
+                is_public=is_public,
+                stock_symbol=stock_symbol
             )
 
             # Cache the result
@@ -100,6 +110,38 @@ class ApolloEnricher:
             return None
         # Apollo returns strings like "$10M - $50M"
         return revenue
+
+    def _parse_revenue_millions(self, revenue: Optional[str], revenue_range: Optional[str]) -> Optional[float]:
+        """Parse revenue into millions as a float for filtering."""
+        import re
+
+        text = revenue or revenue_range
+        if not text:
+            return None
+
+        # Try to extract numbers with M/B suffix
+        # Patterns: "$10M", "$1.5B", "$10M - $50M", "10 million", etc.
+        text = text.upper().replace(',', '').replace('$', '')
+
+        # Look for billion
+        match = re.search(r'([\d.]+)\s*B', text)
+        if match:
+            return float(match.group(1)) * 1000  # Convert to millions
+
+        # Look for million
+        match = re.search(r'([\d.]+)\s*M', text)
+        if match:
+            return float(match.group(1))
+
+        # Try plain number (assume it's in dollars)
+        match = re.search(r'([\d.]+)', text)
+        if match:
+            val = float(match.group(1))
+            if val > 1000:  # Likely in thousands or raw dollars
+                return val / 1_000_000
+            return val
+
+        return None
 
     def _format_location(self, data: Dict[str, Any]) -> Optional[str]:
         """Format location from company data."""
@@ -253,6 +295,39 @@ class CompanyEnricher:
 
         return None
 
+    def verify_company(self, info: CompanyInfo, config: Dict[str, Any]) -> tuple[bool, str]:
+        """
+        Verify if a company meets target criteria.
+
+        Returns: (is_valid, reason)
+        """
+        filters = config.get('territory', {}).get('company_filters', {})
+        min_employees = filters.get('min_employees', 20)
+        max_employees = filters.get('max_employees', 2000)
+        min_revenue = filters.get('min_revenue_millions', 20)
+        max_revenue = filters.get('max_revenue_millions', 500)
+        exclude_public = filters.get('exclude_public_companies', True)
+
+        # Check if public company
+        if exclude_public and info.is_public:
+            return False, f"Public company ({info.stock_symbol or 'publicly traded'})"
+
+        # Check employee count
+        if info.employee_count:
+            if info.employee_count > max_employees:
+                return False, f"Too large ({info.employee_count:,} employees, max {max_employees:,})"
+            if info.employee_count < min_employees:
+                return False, f"Too small ({info.employee_count:,} employees, min {min_employees:,})"
+
+        # Check revenue
+        if info.revenue_millions:
+            if info.revenue_millions > max_revenue:
+                return False, f"Revenue too high (${info.revenue_millions:.0f}M, max ${max_revenue}M)"
+            if info.revenue_millions < min_revenue:
+                return False, f"Revenue too low (${info.revenue_millions:.0f}M, min ${min_revenue}M)"
+
+        return True, "Meets criteria"
+
     def format_for_alert(self, info: Optional[CompanyInfo]) -> str:
         """Format enriched data for alert output."""
         if not info:
@@ -262,6 +337,10 @@ class CompanyEnricher:
 
         if info.website:
             lines.append(f"Website: {info.website}")
+        if info.is_public:
+            lines.append(f"Status: PUBLIC ({info.stock_symbol})" if info.stock_symbol else "Status: PUBLIC")
+        else:
+            lines.append("Status: Private")
         if info.revenue or info.revenue_range:
             lines.append(f"Revenue: {info.revenue or info.revenue_range}")
         if info.employee_count or info.employee_range:

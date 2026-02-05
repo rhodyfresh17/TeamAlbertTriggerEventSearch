@@ -15,7 +15,7 @@ import argparse
 import signal
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List
 
@@ -71,6 +71,10 @@ class TriggerEventMonitor:
         all_events = []
         new_events = []
 
+        # Get max age setting
+        max_age_hours = self.config.get('scraper', {}).get('max_age_hours', 72)
+        cutoff_date = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+
         # Run all scrapers
         for scraper in self.scrapers:
             scraper_name = type(scraper).__name__
@@ -83,8 +87,18 @@ class TriggerEventMonitor:
             except Exception as e:
                 print(f"  Error: {e}")
 
-        # Filter for new events (not seen before)
+        # Filter for new events (not seen before) and recent events only
+        old_events_skipped = 0
         for event in all_events:
+            # Check if event is too old
+            event_date = event.published_date
+            if event_date.tzinfo is None:
+                event_date = event_date.replace(tzinfo=timezone.utc)
+
+            if event_date < cutoff_date:
+                old_events_skipped += 1
+                continue
+
             if not self.db.has_seen_url(event.url):
                 new_events.append(event)
                 self.db.mark_url_seen(event.url)
@@ -92,35 +106,61 @@ class TriggerEventMonitor:
 
         print(f"\n{'-'*40}")
         print(f"Total potential events: {len(all_events)}")
+        print(f"Skipped (older than {max_age_hours}h): {old_events_skipped}")
         print(f"New events (not seen before): {len(new_events)}")
 
-        # Enrich new events with company data (only high-relevance to conserve API credits)
-        # Free tier limit: ~100 credits/month, so only enrich score > 80
-        ENRICHMENT_THRESHOLD = 80
+        # Verify companies and enrich data before alerting
+        verified_events = []
+        skipped_companies = []
+
         if new_events and self.enricher.enabled:
-            high_relevance = [e for e in new_events if e.relevance_score >= ENRICHMENT_THRESHOLD and e.company_name]
-            print(f"\nEnriching {len(high_relevance)} high-relevance events (score >= {ENRICHMENT_THRESHOLD}) via {self.enricher.provider}...")
-            for event in high_relevance:
+            print(f"\nVerifying companies via {self.enricher.provider}...")
+            for event in new_events:
+                if not event.company_name:
+                    # No company name - include but skip verification
+                    verified_events.append(event)
+                    continue
+
+                # Look up company info
                 info = self.enricher.enrich(event.company_name)
                 if info:
-                    event.company_website = info.website
-                    event.company_revenue = info.revenue or info.revenue_range
-                    event.company_employees = str(info.employee_count) if info.employee_count else info.employee_range
-                    event.company_industry = info.industry
-                    event.company_linkedin = info.linkedin_url
-                    print(f"  Enriched: {event.company_name}")
+                    # Verify company meets criteria
+                    is_valid, reason = self.enricher.verify_company(info, self.config)
 
-        # Send alerts for new events
-        if new_events:
-            print(f"\nSending alerts for {len(new_events)} new events...")
-            self._send_alerts(new_events)
+                    if is_valid:
+                        # Add enrichment data to event
+                        event.company_website = info.website
+                        event.company_revenue = info.revenue or info.revenue_range
+                        event.company_employees = str(info.employee_count) if info.employee_count else info.employee_range
+                        event.company_industry = info.industry
+                        event.company_linkedin = info.linkedin_url
+                        verified_events.append(event)
+                        print(f"  PASS: {event.company_name} - {reason}")
+                    else:
+                        skipped_companies.append((event.company_name, reason))
+                        print(f"  SKIP: {event.company_name} - {reason}")
+                else:
+                    # Couldn't verify - include anyway (might be valid small company)
+                    verified_events.append(event)
+                    print(f"  UNKNOWN: {event.company_name} - no data found, including")
+        else:
+            # No enrichment available - use all events
+            verified_events = new_events
+
+        if skipped_companies:
+            print(f"\nSkipped {len(skipped_companies)} events (company doesn't meet criteria)")
+
+        # Send alerts only for verified events
+        if verified_events:
+            print(f"\nSending alerts for {len(verified_events)} verified events...")
+            self._send_alerts(verified_events)
 
             # Print summary
-            self._print_event_summary(new_events)
+            self._print_event_summary(verified_events)
         else:
-            print("\nNo new events found this cycle.")
+            print("\nNo events passed verification this cycle.")
 
-        return new_events
+        return verified_events
 
     def _send_alerts(self, events: List[TriggerEvent]):
         """Send alerts and update database."""
@@ -144,7 +184,13 @@ class TriggerEventMonitor:
         for i, event in enumerate(sorted_events[:10], 1):  # Top 10
             print(f"\n{i}. [{event.event_type.value.upper()}] {event.title[:60]}...")
             print(f"   Company: {event.company_name or 'Unknown'}")
-            print(f"   Source: {event.source.value}")
+            if event.company_employees:
+                print(f"   Employees: {event.company_employees}")
+            if event.company_revenue:
+                print(f"   Revenue: {event.company_revenue}")
+            if event.company_industry:
+                print(f"   Industry: {event.company_industry}")
+            print(f"   Source: {event.source_name or event.source.value}")
             print(f"   Relevance: {event.relevance_score:.0f}%")
             print(f"   URL: {event.url}")
 
