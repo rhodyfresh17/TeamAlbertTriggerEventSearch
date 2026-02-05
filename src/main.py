@@ -25,6 +25,7 @@ from .models import TriggerEvent
 from .database import DatabaseManager
 from .alerts import AlertManager
 from .scrapers import RSSScraper, SECScraper, GoogleNewsScraper
+from .enrichment import CompanyEnricher
 
 
 class TriggerEventMonitor:
@@ -36,6 +37,7 @@ class TriggerEventMonitor:
             self.config.get('scraper', {}).get('database', 'trigger_events.db')
         )
         self.alert_manager = AlertManager(self.config)
+        self.enricher = CompanyEnricher(self.config)
         self.running = True
 
         # Initialize scrapers
@@ -44,6 +46,11 @@ class TriggerEventMonitor:
             SECScraper(self.config),
             GoogleNewsScraper(self.config),
         ]
+
+        if self.enricher.enabled:
+            print("Company enrichment enabled (ZoomInfo)")
+        else:
+            print("Company enrichment disabled (no API key)")
 
     def _load_config(self, config_path: str) -> dict:
         """Load configuration from YAML file."""

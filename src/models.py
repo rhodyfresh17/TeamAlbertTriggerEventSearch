@@ -60,6 +60,13 @@ class TriggerEvent:
     # Alert status
     alert_sent: bool = False
 
+    # Enrichment data (from ZoomInfo, etc.)
+    company_website: Optional[str] = None
+    company_revenue: Optional[str] = None
+    company_employees: Optional[str] = None
+    company_industry: Optional[str] = None
+    company_linkedin: Optional[str] = None
+
     def to_dict(self) -> dict:
         """Convert to dictionary for storage."""
         return {
@@ -81,7 +88,12 @@ class TriggerEvent:
             'matched_keywords': self.matched_keywords,
             'matched_regions': self.matched_regions,
             'relevance_score': self.relevance_score,
-            'alert_sent': self.alert_sent
+            'alert_sent': self.alert_sent,
+            'company_website': self.company_website,
+            'company_revenue': self.company_revenue,
+            'company_employees': self.company_employees,
+            'company_industry': self.company_industry,
+            'company_linkedin': self.company_linkedin
         }
 
     @classmethod
@@ -106,7 +118,12 @@ class TriggerEvent:
             matched_keywords=data.get('matched_keywords', []),
             matched_regions=data.get('matched_regions', []),
             relevance_score=data.get('relevance_score', 0.0),
-            alert_sent=data.get('alert_sent', False)
+            alert_sent=data.get('alert_sent', False),
+            company_website=data.get('company_website'),
+            company_revenue=data.get('company_revenue'),
+            company_employees=data.get('company_employees'),
+            company_industry=data.get('company_industry'),
+            company_linkedin=data.get('company_linkedin')
         )
 
     def format_alert(self) -> str:
@@ -125,6 +142,19 @@ class TriggerEvent:
             lines.append(f"Company: {self.company_name}")
         if self.company_location:
             lines.append(f"Location: {self.company_location}")
+
+        # Enriched company data
+        if self.company_website:
+            lines.append(f"Website: {self.company_website}")
+        if self.company_revenue:
+            lines.append(f"Est. Revenue: {self.company_revenue}")
+        if self.company_employees:
+            lines.append(f"Employees: {self.company_employees}")
+        if self.company_industry:
+            lines.append(f"Industry: {self.company_industry}")
+        if self.company_linkedin:
+            lines.append(f"LinkedIn: {self.company_linkedin}")
+
         if self.person_name:
             lines.append(f"Person: {self.person_name}")
         if self.person_title:
