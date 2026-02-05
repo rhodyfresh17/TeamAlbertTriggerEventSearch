@@ -131,30 +131,6 @@ python -m src.main --cleanup 60
 python -m src.main --stats
 ```
 
-## Feedback & Learning
-
-Rate events to improve relevance over time. The system learns from your feedback and adjusts scores for future events.
-
-```bash
-# Interactive feedback mode - rate recent events
-python -m src.main --feedback
-
-# Rate a specific event by ID (shown in alerts)
-python -m src.main --rate abc123 good
-python -m src.main --rate abc123 bad
-```
-
-Each alert includes a rating command at the bottom:
-```
-Rate this event: python -m src.main --rate abc123 good/bad
-```
-
-**How it works:**
-- Rating events as "good" increases scores for similar patterns (keywords, regions, event types)
-- Rating as "bad" decreases scores for those patterns
-- The system tracks patterns like keywords, locations, and event types
-- View learned patterns with `--stats`
-
 ## Testing
 
 ```bash

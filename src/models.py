@@ -179,8 +179,6 @@ class TriggerEvent:
             f"Matched Keywords: {', '.join(self.matched_keywords)}",
             f"Matched Regions: {', '.join(self.matched_regions)}",
             f"Relevance Score: {self.relevance_score:.2f}",
-            f"",
-            f"Rate this event: python -m src.main --rate {self.id[:8]} good/bad",
             f"{'='*60}",
         ])
 

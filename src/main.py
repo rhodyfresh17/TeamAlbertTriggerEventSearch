@@ -86,11 +86,6 @@ class TriggerEventMonitor:
         # Filter for new events (not seen before)
         for event in all_events:
             if not self.db.has_seen_url(event.url):
-                # Apply learned feedback adjustment to relevance score
-                adjustment = self.db.get_learned_adjustment(event)
-                if adjustment != 0:
-                    event.relevance_score = max(0, min(100, event.relevance_score + adjustment))
-
                 new_events.append(event)
                 self.db.mark_url_seen(event.url)
                 self.db.save_event(event)
@@ -207,24 +202,6 @@ class TriggerEventMonitor:
         for event_type, count in stats.get('events_by_type', {}).items():
             print(f"  - {event_type}: {count}")
 
-        # Show feedback stats
-        feedback_stats = self.db.get_feedback_stats()
-        if feedback_stats['total_positive'] > 0 or feedback_stats['total_negative'] > 0:
-            print(f"\nFeedback statistics:")
-            print(f"  Positive ratings: {feedback_stats['total_positive']}")
-            print(f"  Negative ratings: {feedback_stats['total_negative']}")
-            print(f"  Learned patterns: {feedback_stats['total_patterns']}")
-
-            if feedback_stats['top_positive_patterns']:
-                print(f"\n  Top relevant patterns:")
-                for p in feedback_stats['top_positive_patterns'][:3]:
-                    print(f"    + {p[0]}: {p[1]} (adj: {p[2]:+.1f})")
-
-            if feedback_stats['top_negative_patterns']:
-                print(f"\n  Top irrelevant patterns:")
-                for p in feedback_stats['top_negative_patterns'][:3]:
-                    print(f"    - {p[0]}: {p[1]} (adj: {p[2]:+.1f})")
-
         # Show recent events
         recent = self.db.get_recent_events(hours=24)
         if recent:
@@ -238,101 +215,6 @@ class TriggerEventMonitor:
         self.db.cleanup_old_entries(days)
         print("Cleanup complete.")
 
-    def rate_event(self, event_id: str, rating: str):
-        """Rate a specific event by ID.
-
-        Args:
-            event_id: The event ID (or partial ID)
-            rating: 'good', 'bad', '+', '-', '1', or '-1'
-        """
-        # Normalize rating
-        if rating.lower() in ('good', '+', '1', 'relevant', 'yes', 'y'):
-            rating_value = 1
-            rating_label = "RELEVANT"
-        elif rating.lower() in ('bad', '-', '-1', 'irrelevant', 'no', 'n'):
-            rating_value = -1
-            rating_label = "NOT RELEVANT"
-        else:
-            print(f"Invalid rating: {rating}")
-            print("Use: good/bad, +/-, 1/-1, yes/no")
-            return
-
-        # Find event (support partial ID matching)
-        event = self.db.get_event_by_id(event_id)
-        if not event:
-            # Try partial match
-            recent = self.db.get_recent_events(hours=168)  # Last week
-            matches = [e for e in recent if e.id.startswith(event_id)]
-            if len(matches) == 1:
-                event = matches[0]
-            elif len(matches) > 1:
-                print(f"Multiple events match '{event_id}':")
-                for e in matches[:5]:
-                    print(f"  {e.id[:8]} - {e.title[:50]}...")
-                return
-            else:
-                print(f"Event not found: {event_id}")
-                return
-
-        # Save feedback
-        self.db.save_feedback(event.id, rating_value, event)
-        print(f"Rated event as {rating_label}:")
-        print(f"  ID: {event.id[:8]}")
-        print(f"  Title: {event.title[:60]}")
-        print(f"  Company: {event.company_name or 'Unknown'}")
-
-    def feedback_interactive(self):
-        """Interactive feedback mode - rate recent unrated events."""
-        events = self.db.get_unrated_events(limit=20)
-
-        if not events:
-            print("No unrated events found.")
-            return
-
-        print(f"\n{'='*60}")
-        print("INTERACTIVE FEEDBACK MODE")
-        print(f"{'='*60}")
-        print(f"\nFound {len(events)} unrated events.")
-        print("For each event, enter: g=good, b=bad, s=skip, q=quit\n")
-
-        rated = 0
-        for i, event in enumerate(events, 1):
-            print(f"\n[{i}/{len(events)}] {event.event_type.value.upper()}")
-            print(f"Title: {event.title[:70]}...")
-            print(f"Company: {event.company_name or 'Unknown'}")
-            print(f"Location: {', '.join(event.matched_regions) if event.matched_regions else 'Unknown'}")
-            print(f"Keywords: {', '.join(event.matched_keywords[:5]) if event.matched_keywords else 'None'}")
-            print(f"Score: {event.relevance_score:.0f}% | Source: {event.source_name or event.source.value}")
-            print(f"URL: {event.url}")
-
-            while True:
-                try:
-                    response = input("\nRating [g/b/s/q]: ").strip().lower()
-                except (EOFError, KeyboardInterrupt):
-                    print("\nExiting feedback mode.")
-                    return
-
-                if response in ('g', 'good', '+', '1', 'y', 'yes'):
-                    self.db.save_feedback(event.id, 1, event)
-                    print("  -> Marked as RELEVANT")
-                    rated += 1
-                    break
-                elif response in ('b', 'bad', '-', '-1', 'n', 'no'):
-                    self.db.save_feedback(event.id, -1, event)
-                    print("  -> Marked as NOT RELEVANT")
-                    rated += 1
-                    break
-                elif response in ('s', 'skip', ''):
-                    print("  -> Skipped")
-                    break
-                elif response in ('q', 'quit', 'exit'):
-                    print(f"\nFeedback session complete. Rated {rated} events.")
-                    return
-                else:
-                    print("Invalid input. Use: g=good, b=bad, s=skip, q=quit")
-
-        print(f"\nFeedback session complete. Rated {rated} events.")
-
 
 def main():
     parser = argparse.ArgumentParser(
@@ -345,8 +227,6 @@ Examples:
   python -m src.main --stats            # Show statistics
   python -m src.main --config my.yaml   # Use custom config
   python -m src.main --cleanup 60       # Clean entries older than 60 days
-  python -m src.main --feedback         # Interactive feedback mode
-  python -m src.main --rate abc123 good # Rate a specific event
         """
     )
 
@@ -371,17 +251,6 @@ Examples:
         metavar='DAYS',
         help='Clean up entries older than DAYS'
     )
-    parser.add_argument(
-        '--feedback', '-f',
-        action='store_true',
-        help='Interactive feedback mode to rate recent events'
-    )
-    parser.add_argument(
-        '--rate', '-r',
-        nargs=2,
-        metavar=('EVENT_ID', 'RATING'),
-        help='Rate a specific event (e.g., --rate abc123 good)'
-    )
 
     args = parser.parse_args()
 
@@ -392,10 +261,6 @@ Examples:
         monitor.show_stats()
     elif args.cleanup:
         monitor.cleanup(args.cleanup)
-    elif args.feedback:
-        monitor.feedback_interactive()
-    elif args.rate:
-        monitor.rate_event(args.rate[0], args.rate[1])
     elif args.daemon:
         monitor.run_daemon()
     else:
