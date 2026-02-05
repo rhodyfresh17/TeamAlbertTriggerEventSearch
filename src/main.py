@@ -175,14 +175,29 @@ class TriggerEventMonitor:
     def _print_event_summary(self, events: List[TriggerEvent]):
         """Print a summary of discovered events."""
         print(f"\n{'='*60}")
-        print("EVENT SUMMARY")
+        print("EVENT SUMMARY (Most Recent First)")
         print(f"{'='*60}")
 
-        # Sort by relevance
-        sorted_events = sorted(events, key=lambda e: e.relevance_score, reverse=True)
+        # Sort by published date (most recent first), then by relevance
+        sorted_events = sorted(events, key=lambda e: (e.published_date, e.relevance_score), reverse=True)
 
         for i, event in enumerate(sorted_events[:10], 1):  # Top 10
+            # Calculate how recent the article is
+            now = datetime.now(timezone.utc)
+            event_date = event.published_date
+            if event_date.tzinfo is None:
+                event_date = event_date.replace(tzinfo=timezone.utc)
+            age = now - event_date
+
+            if age.total_seconds() < 3600:
+                age_str = f"{int(age.total_seconds() / 60)} min ago"
+            elif age.total_seconds() < 86400:
+                age_str = f"{int(age.total_seconds() / 3600)} hours ago"
+            else:
+                age_str = f"{int(age.days)} days ago"
+
             print(f"\n{i}. [{event.event_type.value.upper()}] {event.title[:60]}...")
+            print(f"   Published: {event.published_date.strftime('%Y-%m-%d %H:%M')} ({age_str})")
             print(f"   Company: {event.company_name or 'Unknown'}")
             if event.company_employees:
                 print(f"   Employees: {event.company_employees}")

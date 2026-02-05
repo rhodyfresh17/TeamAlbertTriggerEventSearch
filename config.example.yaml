@@ -660,8 +660,8 @@ scraper:
   # User agent string
   user_agent: "Mozilla/5.0 (compatible; SalesTerritoryBot/1.0)"
 
-  # Maximum age of news to consider (hours)
-  max_age_hours: 72
+  # Maximum age of news to consider (hours) - 7 days
+  max_age_hours: 168
 
   # Database file for tracking seen items
   database: "trigger_events.db"
