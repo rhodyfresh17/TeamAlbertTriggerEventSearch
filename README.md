@@ -14,7 +14,7 @@ Monitor news sources for sales trigger events (CFO hires, M&A, acquisitions, fun
 - **Industry targeting**: Healthcare, Nonprofit, Hospitality, Restaurant/Franchise, Construction, Field Services, Energy, Oil & Gas, Insurance, Casino/Gaming, Transportation/Logistics, Travel/Hotels, Airlines/Aviation
 - **Smart filtering**: Skips public companies, verifies 20-2000 employees, $20M-$500M revenue
 - **Multiple alert channels**: Email, Slack, File, Desktop notifications
-- **Automated runs**: GitHub Actions runs every 3 hours
+- **Automated runs**: GitHub Actions runs every hour
 
 ## Quick Start
 
@@ -151,7 +151,7 @@ alerts:
 
 ## GitHub Actions Setup
 
-The scraper runs automatically every 3 hours. Set these secrets:
+The scraper runs automatically every hour. Set these secrets:
 
 | Secret | Description |
 |--------|-------------|

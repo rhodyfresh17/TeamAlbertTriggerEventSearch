@@ -59,6 +59,11 @@ class BaseScraper(ABC):
             loc.lower() for loc in (self.territory.get('excluded_locations') or [])
         ]
 
+        # Load content exclusions (irrelevant content types)
+        self.excluded_content = [
+            c.lower() for c in (self.territory.get('excluded_content') or [])
+        ]
+
         # Require territory match (stricter filtering)
         self.require_territory_match = self.territory.get('require_territory_match', True)
 
@@ -72,25 +77,45 @@ class BaseScraper(ABC):
         content = f"{url}:{title}"
         return hashlib.md5(content.encode()).hexdigest()
 
+    def is_excluded_content(self, text: str) -> bool:
+        """Check if text contains excluded content types (concerts, sports, etc.)."""
+        text_lower = text.lower()
+        for excluded in self.excluded_content:
+            if excluded in text_lower:
+                return True
+        return False
+
     def detect_event_type(self, text: str) -> Optional[EventType]:
         """Detect the type of trigger event from text."""
         text_lower = text.lower()
 
+        # First check if this is excluded content (concerts, sports, etc.)
+        if self.is_excluded_content(text):
+            return None
+
         # Check for CFO specifically first
         cfo_patterns = ['cfo', 'chief financial officer']
         if any(pattern in text_lower for pattern in cfo_patterns):
-            return EventType.CFO_HIRE
+            # Make sure it's about hiring, not just mentioning CFO
+            hire_indicators = ['named', 'appointed', 'hired', 'joins', 'new cfo', 'promoted', 'announces']
+            if any(ind in text_lower for ind in hire_indicators):
+                return EventType.CFO_HIRE
 
         # Check for executive hires
         if any(kw in text_lower for kw in self.exec_hire_keywords):
-            return EventType.EXECUTIVE_HIRE
+            hire_indicators = ['named', 'appointed', 'hired', 'joins', 'promoted', 'announces', 'welcomes']
+            if any(ind in text_lower for ind in hire_indicators):
+                return EventType.EXECUTIVE_HIRE
 
         # Check for M&A
         if any(kw in text_lower for kw in self.ma_keywords):
             return EventType.MERGER_ACQUISITION
 
-        # Check for funding
-        if any(kw in text_lower for kw in self.funding_keywords):
+        # Check for funding - require stronger signals
+        funding_strong = ['series a', 'series b', 'series c', 'series d', 'funding round',
+                          'raises $', 'raised $', 'secures $', 'secured $', 'investment round',
+                          'venture capital', 'private equity', 'seed funding', 'seed round']
+        if any(kw in text_lower for kw in funding_strong):
             return EventType.FUNDING
 
         return None
