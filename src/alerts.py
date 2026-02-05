@@ -194,7 +194,7 @@ class EmailAlertHandler(AlertHandler):
                     </div>
                     <div class="event-company">{event.company_name or 'Unknown Company'}</div>
                     <div class="event-meta">
-                        Source: {event.source.value} |
+                        Source: {event.source_name or event.source.value.replace('_', ' ').title()} |
                         Date: {event.published_date.strftime('%Y-%m-%d')} |
                         Relevance: {event.relevance_score:.0f}%
                     </div>
@@ -324,7 +324,7 @@ class SlackAlertHandler(AlertHandler):
                     "type": "section",
                     "fields": [
                         {"type": "mrkdwn", "text": f"*Company:*\n{event.company_name or 'Unknown'}"},
-                        {"type": "mrkdwn", "text": f"*Source:*\n{event.source.value}"},
+                        {"type": "mrkdwn", "text": f"*Source:*\n{event.source_name or event.source.value.replace('_', ' ').title()}"},
                         {"type": "mrkdwn", "text": f"*Relevance:*\n{event.relevance_score:.0f}%"},
                         {"type": "mrkdwn", "text": f"*Date:*\n{event.published_date.strftime('%Y-%m-%d')}"},
                     ]

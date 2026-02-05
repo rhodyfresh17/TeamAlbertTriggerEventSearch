@@ -203,6 +203,7 @@ class GoogleNewsScraper(BaseScraper):
             title=title,
             event_type=event_type,
             source=EventSource.GOOGLE_NEWS,
+            source_name=source_name or "Google News",
             url=link,
             published_date=published,
             company_name=extracted_company,

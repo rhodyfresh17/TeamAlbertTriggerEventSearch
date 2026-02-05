@@ -38,6 +38,9 @@ class TriggerEvent:
     published_date: datetime
     discovered_date: datetime = field(default_factory=datetime.now)
 
+    # Human-readable source name (e.g., "QSR Magazine", "Becker's Hospital Review")
+    source_name: Optional[str] = None
+
     # Company information
     company_name: Optional[str] = None
     company_location: Optional[str] = None
@@ -74,6 +77,7 @@ class TriggerEvent:
             'title': self.title,
             'event_type': self.event_type.value,
             'source': self.source.value,
+            'source_name': self.source_name,
             'url': self.url,
             'published_date': self.published_date.isoformat(),
             'discovered_date': self.discovered_date.isoformat(),
@@ -107,6 +111,7 @@ class TriggerEvent:
             url=data['url'],
             published_date=datetime.fromisoformat(data['published_date']),
             discovered_date=datetime.fromisoformat(data['discovered_date']),
+            source_name=data.get('source_name'),
             company_name=data.get('company_name'),
             company_location=data.get('company_location'),
             description=data.get('description'),
@@ -128,13 +133,16 @@ class TriggerEvent:
 
     def format_alert(self) -> str:
         """Format event for alert notification."""
+        # Use source_name if available, otherwise fall back to source enum
+        display_source = self.source_name or self.source.value.replace('_', ' ').title()
+
         lines = [
             f"{'='*60}",
             f"TRIGGER EVENT: {self.event_type.value.upper().replace('_', ' ')}",
             f"{'='*60}",
             f"",
             f"Title: {self.title}",
-            f"Source: {self.source.value}",
+            f"Source: {display_source}",
             f"Date: {self.published_date.strftime('%Y-%m-%d %H:%M')}",
         ]
 

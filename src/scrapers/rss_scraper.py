@@ -154,6 +154,7 @@ class RSSScraper(BaseScraper):
             title=title,
             event_type=event_type,
             source=source,
+            source_name=feed_name,
             url=link,
             published_date=published,
             company_name=extracted_company,
