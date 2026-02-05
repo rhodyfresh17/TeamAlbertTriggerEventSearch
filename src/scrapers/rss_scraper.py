@@ -114,9 +114,19 @@ class RSSScraper(BaseScraper):
         # Check target company
         matches_company, company_name = self.matches_target_company(full_text)
 
-        # Require either territory match, industry match, or target company
-        if not (in_territory or matches_target_industry or matches_company):
+        # Check for excluded international locations
+        if self.is_excluded_location(full_text):
             return None
+
+        # STRICT FILTERING: Require territory match OR target company
+        # Industry alone is NOT sufficient (avoids international companies)
+        if self.require_territory_match:
+            if not (in_territory or matches_company):
+                return None
+        else:
+            # Fallback to looser filtering if disabled
+            if not (in_territory or matches_target_industry or matches_company):
+                return None
 
         # Calculate relevance
         relevance = self.calculate_relevance_score(

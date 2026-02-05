@@ -54,6 +54,14 @@ class BaseScraper(ABC):
             i.lower() for i in (self.company_filters.get('target_size_indicators') or [])
         ]
 
+        # Load geographic exclusions (international locations to filter out)
+        self.excluded_locations = [
+            loc.lower() for loc in (self.territory.get('excluded_locations') or [])
+        ]
+
+        # Require territory match (stricter filtering)
+        self.require_territory_match = self.territory.get('require_territory_match', True)
+
     @abstractmethod
     def scrape(self) -> List[TriggerEvent]:
         """Scrape and return list of trigger events."""
@@ -87,10 +95,22 @@ class BaseScraper(ABC):
 
         return None
 
+    def is_excluded_location(self, text: str) -> bool:
+        """Check if text mentions an excluded international location."""
+        text_lower = text.lower()
+        for location in self.excluded_locations:
+            if location in text_lower:
+                return True
+        return False
+
     def matches_territory(self, text: str) -> tuple[bool, List[str]]:
         """Check if text mentions locations in our territory."""
         text_lower = text.lower()
         matched = []
+
+        # First check if it's an excluded location (international)
+        if self.is_excluded_location(text):
+            return False, []
 
         # Check regions
         for region in self.regions:
