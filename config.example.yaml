@@ -289,6 +289,14 @@ sources:
       url: "https://www.qsrmagazine.com/rss.xml"
       enabled: true
 
+    - name: "Franchise Times"
+      url: "https://www.franchisetimes.com/feed/"
+      enabled: true
+
+    - name: "Franchise Wire"
+      url: "https://www.franchisewire.com/feed/"
+      enabled: true
+
     # Funding/Startup sources
     - name: "Crunchbase News"
       url: "https://news.crunchbase.com/feed/"
