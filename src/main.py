@@ -24,7 +24,7 @@ import yaml
 from .models import TriggerEvent
 from .database import DatabaseManager
 from .alerts import AlertManager
-from .scrapers import RSSScraper, SECScraper, GoogleNewsScraper
+from .scrapers import RSSScraper, GoogleNewsScraper
 from .enrichment import CompanyEnricher
 
 
@@ -43,7 +43,6 @@ class TriggerEventMonitor:
         # Initialize scrapers
         self.scrapers = [
             RSSScraper(self.config),
-            SECScraper(self.config),
             GoogleNewsScraper(self.config),
         ]
 
