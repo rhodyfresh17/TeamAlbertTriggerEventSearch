@@ -72,7 +72,19 @@ class FileAlertHandler(AlertHandler):
                         by_type[event.event_type] = []
                     by_type[event.event_type].append(event)
 
-                for event_type, type_events in by_type.items():
+                # Priority order: CFO hires first, then funding, then M&A
+                type_order = [
+                    EventType.CFO_HIRE,
+                    EventType.FUNDING,
+                    EventType.EXECUTIVE_HIRE,
+                    EventType.MERGER_ACQUISITION,
+                    EventType.OTHER,
+                ]
+
+                for event_type in type_order:
+                    if event_type not in by_type:
+                        continue
+                    type_events = by_type[event_type]
                     f.write(f"\n## {event_type.value.upper().replace('_', ' ')} ({len(type_events)} events)\n")
                     f.write(f"{'-'*40}\n\n")
 
@@ -158,7 +170,19 @@ class EmailAlertHandler(AlertHandler):
                 by_type[event.event_type] = []
             by_type[event.event_type].append(event)
 
-        for event_type, type_events in by_type.items():
+        # Priority order: CFO hires first, then funding, then M&A
+        type_order = [
+            EventType.CFO_HIRE,
+            EventType.FUNDING,
+            EventType.EXECUTIVE_HIRE,
+            EventType.MERGER_ACQUISITION,
+            EventType.OTHER,
+        ]
+
+        for event_type in type_order:
+            if event_type not in by_type:
+                continue
+            type_events = by_type[event_type]
             html += f"<h2>{event_type.value.replace('_', ' ').title()} ({len(type_events)})</h2>"
 
             for event in sorted(type_events, key=lambda e: e.relevance_score, reverse=True):

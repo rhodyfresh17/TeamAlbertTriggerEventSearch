@@ -45,10 +45,13 @@ class BaseScraper(ABC):
         self.company_filters = self.territory.get('company_filters', {})
         self.exclude_public = self.company_filters.get('exclude_public_companies', True)
         self.public_indicators = [
-            i.lower() for i in self.company_filters.get('public_company_indicators', [])
+            i.lower() for i in (self.company_filters.get('public_company_indicators') or [])
+        ]
+        self.excluded_public_companies = [
+            c.lower() for c in (self.company_filters.get('excluded_public_companies') or [])
         ]
         self.target_size_indicators = [
-            i.lower() for i in self.company_filters.get('target_size_indicators', [])
+            i.lower() for i in (self.company_filters.get('target_size_indicators') or [])
         ]
 
     @abstractmethod
@@ -126,9 +129,17 @@ class BaseScraper(ABC):
             return False
 
         text_lower = text.lower()
+
+        # Check for known large public companies by name
+        for company in self.excluded_public_companies:
+            if company in text_lower:
+                return True
+
+        # Check for public company indicators
         for indicator in self.public_indicators:
             if indicator in text_lower:
                 return True
+
         return False
 
     def is_target_company_size(self, text: str) -> bool:

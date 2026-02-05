@@ -147,6 +147,36 @@ territory:
       - "common stock"
       - "shareholders"
       - "SEC filing"
+      - "Fortune 500"
+      - "Fortune 100"
+      - "S&P 500"
+      - "billion dollar"
+      - "$B"
+      - "market cap"
+
+    # Known large public companies to exclude from M&A alerts
+    excluded_public_companies:
+      - "Boston Scientific"
+      - "Johnson & Johnson"
+      - "Medtronic"
+      - "Abbott"
+      - "UnitedHealth"
+      - "CVS Health"
+      - "Cigna"
+      - "Humana"
+      - "HCA Healthcare"
+      - "McKesson"
+      - "AmerisourceBergen"
+      - "Cardinal Health"
+      - "Anthem"
+      - "Centene"
+      - "Walgreens"
+      - "Amazon"
+      - "Google"
+      - "Microsoft"
+      - "Apple"
+      - "Oracle"
+      - "Salesforce"
 
     # Target company size
     min_employees: 20
