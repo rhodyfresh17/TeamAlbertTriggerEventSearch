@@ -130,6 +130,34 @@ python -m src.main --cleanup 60
 python -m src.main --stats
 ```
 
+## Testing
+
+```bash
+# Run all tests
+pytest
+
+# Run with verbose output
+pytest -v
+
+# Run specific test file
+pytest tests/test_scrapers.py
+```
+
+## Feed Health Check
+
+Verify all RSS feeds are working:
+
+```bash
+# Check all feeds
+python scripts/check_feeds.py
+
+# Verbose output (shows each feed)
+python scripts/check_feeds.py --verbose
+
+# Export results to file
+python scripts/check_feeds.py --export feed_status.txt
+```
+
 ## Relevance Scoring
 
 Events are scored 0-100 based on:
