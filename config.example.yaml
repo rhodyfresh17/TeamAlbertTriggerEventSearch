@@ -426,17 +426,9 @@ sources:
       url: "https://www.globenewswire.com/RssFeed/orgclass/1/feedTitle/GlobeNewswire%20-%20News%20Releases"
       enabled: true
 
-    - name: "EIN Presswire"
-      url: "https://www.einpresswire.com/rss/world"
-      enabled: true
-
-    - name: "Financewire"
-      url: "https://financewire.net/feed/"
-      enabled: true
-
-    - name: "FINSMES"
-      url: "https://www.finsmes.com/feed"
-      enabled: true
+    # EIN Presswire - disabled (404)
+    # Financewire - disabled (malformed XML)
+    # FINSMES - disabled (403 blocked)
 
     # Industry-specific sources
     - name: "Nonprofit Times"
@@ -447,17 +439,13 @@ sources:
       url: "https://nonprofitquarterly.org/feed/"
       enabled: true
 
-    - name: "Restaurant Business Magazine"
-      url: "https://www.restaurantbusinessonline.com/rss.xml"
-      enabled: true
+    # Restaurant Business Magazine - disabled (malformed XML)
 
     - name: "QSR Magazine"
       url: "https://www.qsrmagazine.com/rss.xml"
       enabled: true
 
-    - name: "Franchise Times"
-      url: "https://www.franchisetimes.com/feed/"
-      enabled: true
+    # Franchise Times - disabled (429 rate limited)
 
     - name: "Franchise Wire"
       url: "https://www.franchisewire.com/feed/"
@@ -468,57 +456,43 @@ sources:
       url: "https://news.crunchbase.com/feed/"
       enabled: true
 
-    - name: "VC News Daily"
-      url: "https://vcnewsdaily.com/feed/"
-      enabled: true
+    # VC News Daily - disabled (404)
 
     - name: "PEHub"
       url: "https://www.pehub.com/feed/"
       enabled: true
 
-    - name: "PE News"
-      url: "https://www.penews.com/rss/latest-news"
-      enabled: true
+    # PE News - disabled (401 requires auth)
 
     # Healthcare sources
     - name: "Fierce Healthcare"
       url: "https://www.fiercehealthcare.com/rss/xml"
       enabled: true
 
-    - name: "Modern Healthcare"
-      url: "https://www.modernhealthcare.com/section/rss"
-      enabled: true
+    # Modern Healthcare - disabled (404)
 
     # Insurance sources
-    - name: "Insurance News Net"
-      url: "https://insurancenewsnet.com/feed"
-      enabled: true
+    # Insurance News Net - disabled (404)
 
     - name: "Insurance Journal"
       url: "https://www.insurancejournal.com/feed/"
       enabled: true
 
-    - name: "Insurance Business"
-      url: "https://www.insurancebusinessmag.com/us/rss/"
-      enabled: true
+    # Insurance Business - disabled (403 blocked)
 
     # Construction sources
     - name: "Construction Dive"
       url: "https://www.constructiondive.com/feeds/news/"
       enabled: true
 
-    - name: "ENR (Engineering News-Record)"
-      url: "https://www.enr.com/rss/news"
-      enabled: true
+    # ENR (Engineering News-Record) - disabled (404)
 
     # Energy/Utilities sources
     - name: "Utility Dive"
       url: "https://www.utilitydive.com/feeds/news/"
       enabled: true
 
-    - name: "Oil & Gas Journal"
-      url: "https://www.ogj.com/rss"
-      enabled: true
+    # Oil & Gas Journal - disabled (malformed XML)
 
     - name: "Solar Power World"
       url: "https://www.solarpowerworldonline.com/feed/"
@@ -529,33 +503,20 @@ sources:
       url: "https://www.hotelmanagement.net/rss.xml"
       enabled: true
 
-    - name: "Hospitality Net"
-      url: "https://www.hospitalitynet.org/rss/news.xml"
-      enabled: true
+    # Hospitality Net - disabled (404)
 
     # Field Services/HVAC sources
-    - name: "ACHR News"
-      url: "https://www.achrnews.com/rss"
-      enabled: true
-
-    - name: "Contracting Business"
-      url: "https://www.contractingbusiness.com/rss"
-      enabled: true
+    # ACHR News - disabled (malformed XML)
+    # Contracting Business - disabled (404)
 
     # Additional Healthcare
-    - name: "Becker's Hospital Review"
-      url: "https://www.beckershospitalreview.com/rss/hospital-management-administration.html"
-      enabled: true
+    # Becker's Hospital Review - disabled (403 blocked)
 
     # Additional Nonprofit
-    - name: "Chronicle of Philanthropy"
-      url: "https://www.philanthropy.com/feed"
-      enabled: true
+    # Chronicle of Philanthropy - disabled (malformed XML)
 
     # Mid-Market Focus
-    - name: "Middle Market Growth"
-      url: "https://middlemarketgrowth.org/feed/"
-      enabled: true
+    # Middle Market Growth - disabled (malformed XML)
 
   # Google News RSS (requires specific search queries)
   google_news:

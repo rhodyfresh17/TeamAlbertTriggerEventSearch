@@ -6,7 +6,7 @@ Monitor news sources for sales trigger events (CFO hires, M&A, acquisitions, fun
 
 ## Features
 
-- **35+ news sources**: Industry-specific publications, PR wires, funding news, and Google News
+- **15+ news sources**: Industry-specific publications, PR wires, funding news, and Google News
 - **Territory filtering**: Filter by US states, Canadian provinces, and major cities
 - **Industry targeting**: Healthcare, Nonprofit, Hospitality, Restaurant/Franchise, Construction, Field Services, Energy, Oil & Gas, Insurance
 - **Company size filtering**: Target mid-market private companies (20-2000 employees, $20M-$500M revenue)
@@ -169,84 +169,60 @@ Events are scored 0-100 based on:
 ## Data Sources
 
 ### General PR Wires
-| Source | Content |
-|--------|---------|
-| Business Wire | Press releases |
-| PR Newswire | Press releases |
-| Globe Newswire | Press releases |
-| EIN Presswire | Press releases |
+| Source | Status | Content |
+|--------|--------|---------|
+| Business Wire | ✅ Active | Press releases |
+| PR Newswire | ✅ Active | Press releases |
+| Globe Newswire | ✅ Active | Press releases |
 
 ### Funding & M&A
-| Source | Content |
-|--------|---------|
-| Crunchbase News | Startup funding, acquisitions |
-| VC News Daily | Venture capital deals |
-| PEHub | Private equity news |
-| PE News | Private equity transactions |
-| Financewire | Financial news |
-| FINSMES | Funding announcements |
-| Middle Market Growth | Mid-market M&A |
+| Source | Status | Content |
+|--------|--------|---------|
+| Crunchbase News | ✅ Active | Startup funding, acquisitions |
+| PEHub | ✅ Active | Private equity news |
 
 ### Healthcare
-| Source | Content |
-|--------|---------|
-| Fierce Healthcare | Healthcare industry |
-| Modern Healthcare | Healthcare business |
-| Becker's Hospital Review | Hospital M&A, executives |
+| Source | Status | Content |
+|--------|--------|---------|
+| Fierce Healthcare | ✅ Active | Healthcare industry |
 
 ### Nonprofit
-| Source | Content |
-|--------|---------|
-| Nonprofit Times | Nonprofit news |
-| Nonprofit Quarterly | Nonprofit sector |
-| Chronicle of Philanthropy | Philanthropy news |
+| Source | Status | Content |
+|--------|--------|---------|
+| Nonprofit Times | ✅ Active | Nonprofit news |
+| Nonprofit Quarterly | ✅ Active | Nonprofit sector |
 
 ### Restaurant & Franchise
-| Source | Content |
-|--------|---------|
-| Restaurant Business Magazine | Restaurant industry |
-| QSR Magazine | Quick service restaurants |
-| Franchise Times | Franchise news |
-| Franchise Wire | Franchise announcements |
+| Source | Status | Content |
+|--------|--------|---------|
+| QSR Magazine | ✅ Active | Quick service restaurants |
+| Franchise Wire | ✅ Active | Franchise announcements |
 
 ### Insurance
-| Source | Content |
-|--------|---------|
-| Insurance News Net | Insurance industry |
-| Insurance Journal | Insurance news |
-| Insurance Business | Insurance sector |
+| Source | Status | Content |
+|--------|--------|---------|
+| Insurance Journal | ✅ Active | Insurance news |
 
 ### Construction
-| Source | Content |
-|--------|---------|
-| Construction Dive | Construction news |
-| ENR (Engineering News-Record) | Engineering/construction |
+| Source | Status | Content |
+|--------|--------|---------|
+| Construction Dive | ✅ Active | Construction news |
 
 ### Energy & Utilities
-| Source | Content |
-|--------|---------|
-| Utility Dive | Utilities news |
-| Oil & Gas Journal | Oil & gas industry |
-| Solar Power World | Solar/renewables |
+| Source | Status | Content |
+|--------|--------|---------|
+| Utility Dive | ✅ Active | Utilities news |
+| Solar Power World | ✅ Active | Solar/renewables |
 
 ### Hospitality
-| Source | Content |
-|--------|---------|
-| Hotel Management | Hotel industry |
-| Hospitality Net | Hospitality news |
-
-### Field Services / HVAC
-| Source | Content |
-|--------|---------|
-| ACHR News | HVAC/R industry |
-| Contracting Business | HVAC contractors |
+| Source | Status | Content |
+|--------|--------|---------|
+| Hotel Management | ✅ Active | Hotel industry |
 
 ### Search-Based
-| Source | Content |
-|--------|---------|
-| Google News | Aggregated news searches |
-| LinkedIn (via Google) | Executive announcements |
-| Crunchbase (via Google) | Funding/acquisition news |
+| Source | Status | Content |
+|--------|--------|---------|
+| Google News | ✅ Active | Aggregated news searches |
 
 ## Troubleshooting
 
