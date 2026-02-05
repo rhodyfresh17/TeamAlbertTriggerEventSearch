@@ -122,6 +122,47 @@ territory:
     - "Underwriting"
     - "Claims"
     - "Insurer"
+    # Casino & Gaming
+    - "Casino"
+    - "Gaming"
+    - "Gambling"
+    - "Sportsbook"
+    - "iGaming"
+    - "Slots"
+    - "Poker"
+    - "Sports Betting"
+    # Transportation & Logistics
+    - "Transportation"
+    - "Logistics"
+    - "Trucking"
+    - "Freight"
+    - "Shipping"
+    - "Supply Chain"
+    - "Warehousing"
+    - "Distribution"
+    - "Fleet"
+    - "Carrier"
+    # Leisure Travel & Hotels
+    - "Leisure Travel"
+    - "Travel Agency"
+    - "Tour Operator"
+    - "Vacation"
+    - "Tourism"
+    - "Boutique Hotel"
+    - "Hotel Chain"
+    - "Motel"
+    - "Bed and Breakfast"
+    - "Timeshare"
+    # Airlines & Aviation
+    - "Airline"
+    - "Aviation"
+    - "Airport"
+    - "Aircraft"
+    - "Aerospace"
+    - "Air Travel"
+    - "Charter"
+    - "Private Jet"
+    - "Flight"
 
   # STRICT FILTERING: Require territory match (not just industry)
   # Set to false to allow industry-only matches (may include international)
@@ -426,17 +467,9 @@ sources:
       url: "https://www.globenewswire.com/RssFeed/orgclass/1/feedTitle/GlobeNewswire%20-%20News%20Releases"
       enabled: true
 
-    - name: "EIN Presswire"
-      url: "https://www.einpresswire.com/rss/world"
-      enabled: true
-
-    - name: "Financewire"
-      url: "https://financewire.net/feed/"
-      enabled: true
-
-    - name: "FINSMES"
-      url: "https://www.finsmes.com/feed"
-      enabled: true
+    # EIN Presswire - disabled (404)
+    # Financewire - disabled (malformed XML)
+    # FINSMES - disabled (403 blocked)
 
     # Industry-specific sources
     - name: "Nonprofit Times"
@@ -447,17 +480,13 @@ sources:
       url: "https://nonprofitquarterly.org/feed/"
       enabled: true
 
-    - name: "Restaurant Business Magazine"
-      url: "https://www.restaurantbusinessonline.com/rss.xml"
-      enabled: true
+    # Restaurant Business Magazine - disabled (malformed XML)
 
     - name: "QSR Magazine"
       url: "https://www.qsrmagazine.com/rss.xml"
       enabled: true
 
-    - name: "Franchise Times"
-      url: "https://www.franchisetimes.com/feed/"
-      enabled: true
+    # Franchise Times - disabled (429 rate limited)
 
     - name: "Franchise Wire"
       url: "https://www.franchisewire.com/feed/"
@@ -468,57 +497,43 @@ sources:
       url: "https://news.crunchbase.com/feed/"
       enabled: true
 
-    - name: "VC News Daily"
-      url: "https://vcnewsdaily.com/feed/"
-      enabled: true
+    # VC News Daily - disabled (404)
 
     - name: "PEHub"
       url: "https://www.pehub.com/feed/"
       enabled: true
 
-    - name: "PE News"
-      url: "https://www.penews.com/rss/latest-news"
-      enabled: true
+    # PE News - disabled (401 requires auth)
 
     # Healthcare sources
     - name: "Fierce Healthcare"
       url: "https://www.fiercehealthcare.com/rss/xml"
       enabled: true
 
-    - name: "Modern Healthcare"
-      url: "https://www.modernhealthcare.com/section/rss"
-      enabled: true
+    # Modern Healthcare - disabled (404)
 
     # Insurance sources
-    - name: "Insurance News Net"
-      url: "https://insurancenewsnet.com/feed"
-      enabled: true
+    # Insurance News Net - disabled (404)
 
     - name: "Insurance Journal"
       url: "https://www.insurancejournal.com/feed/"
       enabled: true
 
-    - name: "Insurance Business"
-      url: "https://www.insurancebusinessmag.com/us/rss/"
-      enabled: true
+    # Insurance Business - disabled (403 blocked)
 
     # Construction sources
     - name: "Construction Dive"
       url: "https://www.constructiondive.com/feeds/news/"
       enabled: true
 
-    - name: "ENR (Engineering News-Record)"
-      url: "https://www.enr.com/rss/news"
-      enabled: true
+    # ENR (Engineering News-Record) - disabled (404)
 
     # Energy/Utilities sources
     - name: "Utility Dive"
       url: "https://www.utilitydive.com/feeds/news/"
       enabled: true
 
-    - name: "Oil & Gas Journal"
-      url: "https://www.ogj.com/rss"
-      enabled: true
+    # Oil & Gas Journal - disabled (malformed XML)
 
     - name: "Solar Power World"
       url: "https://www.solarpowerworldonline.com/feed/"
@@ -529,33 +544,76 @@ sources:
       url: "https://www.hotelmanagement.net/rss.xml"
       enabled: true
 
-    - name: "Hospitality Net"
-      url: "https://www.hospitalitynet.org/rss/news.xml"
-      enabled: true
+    # Hospitality Net - disabled (404)
 
     # Field Services/HVAC sources
-    - name: "ACHR News"
-      url: "https://www.achrnews.com/rss"
-      enabled: true
-
-    - name: "Contracting Business"
-      url: "https://www.contractingbusiness.com/rss"
-      enabled: true
+    # ACHR News - disabled (malformed XML)
+    # Contracting Business - disabled (404)
 
     # Additional Healthcare
-    - name: "Becker's Hospital Review"
-      url: "https://www.beckershospitalreview.com/rss/hospital-management-administration.html"
-      enabled: true
+    # Becker's Hospital Review - disabled (403 blocked)
 
     # Additional Nonprofit
-    - name: "Chronicle of Philanthropy"
-      url: "https://www.philanthropy.com/feed"
-      enabled: true
+    # Chronicle of Philanthropy - disabled (malformed XML)
 
     # Mid-Market Focus
-    - name: "Middle Market Growth"
-      url: "https://middlemarketgrowth.org/feed/"
+    # Middle Market Growth - disabled (malformed XML)
+
+    # WebWire Industry Feeds
+    - name: "WebWire - Business"
+      url: "http://rssfeeds.webwire.com/WebWire-News-Business-Announcements"
       enabled: true
+
+    - name: "WebWire - Construction"
+      url: "http://rssfeeds.webwire.com/WebWire-News-Architecture-Construction-Building"
+      enabled: true
+
+    - name: "WebWire - Oil & Energy"
+      url: "http://rssfeeds.webwire.com/WebWire-News-Oil-Energy"
+      enabled: true
+
+    # WebWire - Healthcare - disabled (404)
+    # WebWire - Insurance - disabled (404)
+    # WebWire - Transportation - disabled (404)
+    # WebWire - Gaming - disabled (404)
+    # WebWire - Hospitality - disabled (404)
+
+    # Casino & Gaming sources
+    - name: "CDC Gaming Reports"
+      url: "https://cdcgaming.com/feed/"
+      enabled: true
+
+    - name: "SBC Americas (Sports Betting)"
+      url: "https://sbcamericas.com/feed/"
+      enabled: true
+
+    # Transportation & Logistics sources
+    - name: "Supply Chain Brain"
+      url: "https://www.supplychainbrain.com/rss/articles"
+      enabled: true
+
+    - name: "FreightWaves"
+      url: "https://www.freightwaves.com/news/feed"
+      enabled: true
+
+    # Travel & Hotels sources
+    - name: "Hotel Dive"
+      url: "https://www.hoteldive.com/feeds/news/"
+      enabled: true
+
+    - name: "Skift (Travel Industry)"
+      url: "https://skift.com/feed/"
+      enabled: true
+
+    # Travel Weekly - disabled (404)
+
+    # Airlines & Aviation sources
+    - name: "Simple Flying"
+      url: "https://simpleflying.com/feed/"
+      enabled: true
+
+    # FlightGlobal - disabled (404)
+    # Aero-News Network - disabled (403)
 
   # Google News RSS (requires specific search queries)
   google_news:
@@ -607,3 +665,32 @@ scraper:
 
   # Database file for tracking seen items
   database: "trigger_events.db"
+
+# Job site search for companies hiring finance leaders
+job_search:
+  enabled: true
+
+  # Job titles to search for (indicates company needs financial leadership)
+  titles:
+    - "CFO"
+    - "Chief Financial Officer"
+    - "Controller"
+    - "Finance Director"
+    - "Director of Finance"
+    - "VP Finance"
+    - "Vice President Finance"
+    - "Head of Finance"
+
+  # Locations to search (within your territory)
+  locations:
+    - "New York, NY"
+    - "Boston, MA"
+    - "Philadelphia, PA"
+    - "New Jersey"
+    - "Connecticut"
+    - "Maryland"
+    - "Virginia"
+    - "Washington DC"
+    - "North Carolina"
+    - "Toronto, ON"
+    - "Montreal, QC"
