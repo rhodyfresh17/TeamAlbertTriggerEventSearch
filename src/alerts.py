@@ -187,6 +187,7 @@ class EmailAlertHandler(AlertHandler):
 
             for event in sorted(type_events, key=lambda e: e.relevance_score, reverse=True):
                 css_class = event_type.value.replace('_', '-')
+                event_id_short = event.id[:8]
                 html += f"""
                 <div class="event {css_class}">
                     <div class="event-title">
@@ -199,6 +200,9 @@ class EmailAlertHandler(AlertHandler):
                         Relevance: {event.relevance_score:.0f}%
                     </div>
                     {f'<p>{event.description[:200]}...</p>' if event.description else ''}
+                    <div class="event-feedback" style="margin-top: 10px; font-size: 12px; color: #666;">
+                        Rate: <code>python -m src.main --rate {event_id_short} good</code> or <code>bad</code>
+                    </div>
                 </div>
                 """
 
