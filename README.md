@@ -6,9 +6,9 @@ Monitor news sources for sales trigger events (CFO hires, M&A, acquisitions, fun
 
 ## Features
 
-- **15+ news sources**: Industry-specific publications, PR wires, funding news, and Google News
+- **30+ news sources**: Industry-specific publications, PR wires, funding news, and Google News
 - **Territory filtering**: Filter by US states, Canadian provinces, and major cities
-- **Industry targeting**: Healthcare, Nonprofit, Hospitality, Restaurant/Franchise, Construction, Field Services, Energy, Oil & Gas, Insurance
+- **Industry targeting**: Healthcare, Nonprofit, Hospitality, Restaurant/Franchise, Construction, Field Services, Energy, Oil & Gas, Insurance, Casino/Gaming, Transportation/Logistics, Travel/Hotels, Airlines/Aviation
 - **Company size filtering**: Target mid-market private companies (20-2000 employees, $20M-$500M revenue)
 - **Public company exclusion**: Automatically filters out NYSE/NASDAQ listed companies
 - **Company enrichment**: Apollo.io integration for company data (website, revenue, employees)
@@ -218,6 +218,44 @@ Events are scored 0-100 based on:
 | Source | Status | Content |
 |--------|--------|---------|
 | Hotel Management | ✅ Active | Hotel industry |
+
+### WebWire Industry Feeds
+| Source | Status | Content |
+|--------|--------|---------|
+| WebWire - Business | ✅ Active | Business announcements |
+| WebWire - Construction | ✅ Active | Architecture/Construction |
+| WebWire - Oil & Energy | ✅ Active | Energy sector news |
+| WebWire - Healthcare | ✅ Active | Healthcare industry |
+| WebWire - Insurance | ✅ Active | Insurance news |
+| WebWire - Transportation | ✅ Active | Transportation news |
+| WebWire - Gaming | ✅ Active | Gaming industry |
+| WebWire - Hospitality | ✅ Active | Hospitality news |
+
+### Casino & Gaming
+| Source | Status | Content |
+|--------|--------|---------|
+| CDC Gaming Reports | ✅ Active | Casino industry news |
+| SBC Americas | ✅ Active | Sports betting news |
+
+### Transportation & Logistics
+| Source | Status | Content |
+|--------|--------|---------|
+| Supply Chain Brain | ✅ Active | Supply chain news |
+| FreightWaves | ✅ Active | Freight/trucking news |
+
+### Travel & Hotels
+| Source | Status | Content |
+|--------|--------|---------|
+| Hotel Dive | ✅ Active | Hotel industry news |
+| Skift | ✅ Active | Travel industry |
+| Travel Weekly | ✅ Active | Travel news |
+
+### Airlines & Aviation
+| Source | Status | Content |
+|--------|--------|---------|
+| Simple Flying | ✅ Active | Commercial aviation |
+| FlightGlobal | ✅ Active | Aerospace/airlines |
+| Aero-News Network | ✅ Active | Aviation news |
 
 ### Search-Based
 | Source | Status | Content |

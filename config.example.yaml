@@ -122,6 +122,47 @@ territory:
     - "Underwriting"
     - "Claims"
     - "Insurer"
+    # Casino & Gaming
+    - "Casino"
+    - "Gaming"
+    - "Gambling"
+    - "Sportsbook"
+    - "iGaming"
+    - "Slots"
+    - "Poker"
+    - "Sports Betting"
+    # Transportation & Logistics
+    - "Transportation"
+    - "Logistics"
+    - "Trucking"
+    - "Freight"
+    - "Shipping"
+    - "Supply Chain"
+    - "Warehousing"
+    - "Distribution"
+    - "Fleet"
+    - "Carrier"
+    # Leisure Travel & Hotels
+    - "Leisure Travel"
+    - "Travel Agency"
+    - "Tour Operator"
+    - "Vacation"
+    - "Tourism"
+    - "Boutique Hotel"
+    - "Hotel Chain"
+    - "Motel"
+    - "Bed and Breakfast"
+    - "Timeshare"
+    # Airlines & Aviation
+    - "Airline"
+    - "Aviation"
+    - "Airport"
+    - "Aircraft"
+    - "Aerospace"
+    - "Air Travel"
+    - "Charter"
+    - "Private Jet"
+    - "Flight"
 
   # STRICT FILTERING: Require territory match (not just industry)
   # Set to false to allow industry-only matches (may include international)
@@ -517,6 +558,83 @@ sources:
 
     # Mid-Market Focus
     # Middle Market Growth - disabled (malformed XML)
+
+    # WebWire Industry Feeds
+    - name: "WebWire - Business"
+      url: "http://rssfeeds.webwire.com/WebWire-News-Business-Announcements"
+      enabled: true
+
+    - name: "WebWire - Construction"
+      url: "http://rssfeeds.webwire.com/WebWire-News-Architecture-Construction-Building"
+      enabled: true
+
+    - name: "WebWire - Oil & Energy"
+      url: "http://rssfeeds.webwire.com/WebWire-News-Oil-Energy"
+      enabled: true
+
+    - name: "WebWire - Healthcare"
+      url: "http://rssfeeds.webwire.com/WebWire-News-Healthcare"
+      enabled: true
+
+    - name: "WebWire - Insurance"
+      url: "http://rssfeeds.webwire.com/WebWire-News-Insurance"
+      enabled: true
+
+    - name: "WebWire - Transportation"
+      url: "http://rssfeeds.webwire.com/WebWire-News-Transportation"
+      enabled: true
+
+    - name: "WebWire - Gaming"
+      url: "http://rssfeeds.webwire.com/WebWire-News-Gaming"
+      enabled: true
+
+    - name: "WebWire - Hospitality"
+      url: "http://rssfeeds.webwire.com/WebWire-News-Hospitality"
+      enabled: true
+
+    # Casino & Gaming sources
+    - name: "CDC Gaming Reports"
+      url: "https://cdcgaming.com/feed/"
+      enabled: true
+
+    - name: "SBC Americas (Sports Betting)"
+      url: "https://sbcamericas.com/feed/"
+      enabled: true
+
+    # Transportation & Logistics sources
+    - name: "Supply Chain Brain"
+      url: "https://www.supplychainbrain.com/rss/articles"
+      enabled: true
+
+    - name: "FreightWaves"
+      url: "https://www.freightwaves.com/news/feed"
+      enabled: true
+
+    # Travel & Hotels sources
+    - name: "Hotel Dive"
+      url: "https://www.hoteldive.com/feeds/news/"
+      enabled: true
+
+    - name: "Skift (Travel Industry)"
+      url: "https://skift.com/feed/"
+      enabled: true
+
+    - name: "Travel Weekly"
+      url: "https://www.travelweekly.com/rss/news"
+      enabled: true
+
+    # Airlines & Aviation sources
+    - name: "Simple Flying"
+      url: "https://simpleflying.com/feed/"
+      enabled: true
+
+    - name: "FlightGlobal"
+      url: "https://www.flightglobal.com/rss"
+      enabled: true
+
+    - name: "Aero-News Network"
+      url: "https://www.aero-news.net/index.cfm?do=main.rss&type=1"
+      enabled: true
 
   # Google News RSS (requires specific search queries)
   google_news:
