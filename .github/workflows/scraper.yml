@@ -24,13 +24,31 @@ jobs:
         run: |
           pip install requests pyyaml
           cp config.example.yaml config.yaml
-          if [ -n "$SENDER_EMAIL" ]; then
-            sed -i "s/sender_email: \"your-email@gmail.com\"/sender_email: \"$SENDER_EMAIL\"/" config.yaml
-            sed -i 's/enabled: false/enabled: true/' config.yaml
+
+          # Configure email if secrets are set
+          if [ -n "$SENDER_EMAIL" ] && [ -n "$EMAIL_PASSWORD" ]; then
+            echo "Configuring email alerts..."
+            # Use Python to safely update YAML (handles special chars)
+            python3 << 'PYEOF'
+import yaml
+import os
+
+with open('config.yaml', 'r') as f:
+    config = yaml.safe_load(f)
+
+config['alerts']['email']['enabled'] = True
+config['alerts']['email']['sender_email'] = os.environ['SENDER_EMAIL']
+config['alerts']['email']['sender_password'] = os.environ['EMAIL_PASSWORD']
+
+with open('config.yaml', 'w') as f:
+    yaml.dump(config, f, default_flow_style=False)
+
+print("Email configured for:", os.environ['SENDER_EMAIL'])
+PYEOF
+          else
+            echo "Email secrets not set - using file alerts only"
           fi
-          if [ -n "$EMAIL_PASSWORD" ]; then
-            sed -i "s/sender_password: \"\"/sender_password: \"$EMAIL_PASSWORD\"/" config.yaml
-          fi
+
           python -m src.main
 
       - uses: actions/upload-artifact@v4
