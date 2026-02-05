@@ -7,15 +7,14 @@ Monitor news sources for sales trigger events (CFO hires, M&A, acquisitions, fun
 ## Features
 
 - **22+ news sources**: Industry-specific publications, PR wires, funding news, and Google News
-- **Job site search**: Finds companies hiring CFOs, controllers, and finance directors (Indeed, ZipRecruiter, SimplyHired, Ladders, CFO.com)
+- **6 job boards**: Indeed, ZipRecruiter, SimplyHired, Google Jobs, Ladders ($100K+), CFO.com
+- **Company verification**: Apollo.io validates company size and public/private status before alerting
+- **Recency prioritized**: Most recent news first, shows "5 min ago" timestamps
 - **Territory filtering**: Filter by US states, Canadian provinces, and major cities
 - **Industry targeting**: Healthcare, Nonprofit, Hospitality, Restaurant/Franchise, Construction, Field Services, Energy, Oil & Gas, Insurance, Casino/Gaming, Transportation/Logistics, Travel/Hotels, Airlines/Aviation
-- **Company size filtering**: Target mid-market private companies (20-2000 employees, $20M-$500M revenue)
-- **Public company exclusion**: Automatically filters out NYSE/NASDAQ listed companies
-- **Company enrichment**: Apollo.io integration for company data (website, revenue, employees)
+- **Smart filtering**: Skips public companies, verifies 20-2000 employees, $20M-$500M revenue
 - **Multiple alert channels**: Email, Slack, File, Desktop notifications
-- **Deduplication**: SQLite database tracks seen events to avoid duplicates
-- **Automated runs**: GitHub Actions runs every 6 hours
+- **Automated runs**: GitHub Actions runs every 3 hours
 
 ## Quick Start
 
@@ -31,6 +30,39 @@ python -m src.main --daemon
 
 # View statistics
 python -m src.main --stats
+```
+
+## How It Works
+
+1. **Scrapes** 22+ RSS feeds and 6 job boards for trigger events
+2. **Filters** by date (last 7 days), territory, and industry
+3. **Verifies** companies via Apollo.io API:
+   - Skips public companies (NYSE/NASDAQ)
+   - Skips companies with >2,000 employees
+   - Skips companies with >$500M revenue
+4. **Alerts** via email with most recent events first
+
+```
+Verifying companies via Apollo.io...
+  PASS: Regional Healthcare - Meets criteria
+  SKIP: Microsoft - Public company (MSFT)
+  SKIP: Big Corp - Too large (50,000 employees, max 2,000)
+```
+
+## Output Example
+
+```
+EVENT SUMMARY (Most Recent First)
+============================================================
+
+1. [CFO_HIRE] Regional Healthcare Names New CFO...
+   Published: 2026-02-05 14:30 (5 min ago)
+   Company: Regional Healthcare Inc
+   Employees: 450
+   Revenue: $75M - $100M
+   Industry: Healthcare
+   Source: Business Wire
+   Relevance: 85%
 ```
 
 ## Configuration
@@ -51,19 +83,6 @@ territory:
     # ... add your target cities
 ```
 
-### Target Industries
-```yaml
-  industries:
-    - "Healthcare"
-    - "Hospital"
-    - "Nonprofit"
-    - "Restaurant"
-    - "Franchise"
-    - "Construction"
-    - "Insurance"
-    # ... customizable
-```
-
 ### Company Filters
 ```yaml
   company_filters:
@@ -72,6 +91,31 @@ territory:
     max_employees: 2000
     min_revenue_millions: 20
     max_revenue_millions: 500
+```
+
+### Job Board Settings
+```yaml
+job_search:
+  enabled: true
+  titles:
+    - "CFO"
+    - "Chief Financial Officer"
+    - "Controller"
+    - "Finance Director"
+  boards:
+    indeed: true
+    ziprecruiter: true
+    simplyhired: true
+    google_jobs: true
+    ladders: true        # Executive jobs ($100K+)
+    cfo_com: true        # CFO-specific news
+```
+
+### Scraper Settings
+```yaml
+scraper:
+  max_age_hours: 168     # 7 days
+  check_interval: 30     # Minutes between daemon checks
 ```
 
 ### Alert Configuration
@@ -103,20 +147,56 @@ alerts:
 2. **Executive Hires** - VP Finance, Controller, Finance Director
 3. **M&A Activity** - Mergers, acquisitions, buyouts
 4. **Funding Events** - Series A/B/C, private equity investments
+5. **Job Postings** - Companies hiring for finance leadership roles
 
-## Output
+## GitHub Actions Setup
 
-Alerts are saved to the `alerts/` directory:
-- `alert_batch_YYYYMMDD_HHMMSS.txt` - Human-readable summary
-- `alert_batch_YYYYMMDD_HHMMSS.json` - Machine-readable JSON
+The scraper runs automatically every 3 hours. Set these secrets:
 
-Each alert includes:
-- Event type and title
-- Company name and location
-- Source and publication date
-- Relevance score
-- Matched keywords and regions
-- Direct link to source
+| Secret | Description |
+|--------|-------------|
+| `SENDER_EMAIL` | Gmail address for sending alerts |
+| `EMAIL_PASSWORD` | Gmail app password |
+| `APOLLO_API_KEY` | Apollo.io API key for company verification |
+
+## Data Sources
+
+### Job Boards (6 sources)
+| Source | Description |
+|--------|-------------|
+| Indeed | General job board |
+| ZipRecruiter | Job aggregator |
+| SimplyHired | Job search engine |
+| Google Jobs | Job announcements via Google News |
+| Ladders | Executive jobs $100K+ |
+| CFO.com | CFO-specific hiring news |
+
+### News & PR (22+ sources)
+| Category | Sources |
+|----------|---------|
+| PR Wires | Business Wire, PR Newswire, Globe Newswire |
+| Funding/M&A | Crunchbase News, PEHub |
+| Healthcare | Fierce Healthcare |
+| Nonprofit | Nonprofit Times, Nonprofit Quarterly |
+| Restaurant | QSR Magazine, Franchise Wire |
+| Insurance | Insurance Journal |
+| Construction | Construction Dive |
+| Energy | Utility Dive, Solar Power World, WebWire Oil & Energy |
+| Hospitality | Hotel Management, Hotel Dive |
+| Casino/Gaming | CDC Gaming Reports, SBC Americas |
+| Transport | Supply Chain Brain, FreightWaves |
+| Travel | Skift |
+| Aviation | Simple Flying |
+| Search | Google News (aggregated) |
+
+## Relevance Scoring
+
+Events are scored 0-100 based on:
+- Event type (CFO hire = 45pts, M&A = 35pts)
+- Territory match (up to 20pts)
+- Industry match (15pts)
+- Target company match (50pts bonus)
+- Ladders/CFO.com sources get +10 bonus
 
 ## Usage Examples
 
@@ -131,130 +211,6 @@ python -m src.main --cleanup 60
 python -m src.main --stats
 ```
 
-## Testing
-
-```bash
-# Run all tests
-pytest
-
-# Run with verbose output
-pytest -v
-
-# Run specific test file
-pytest tests/test_scrapers.py
-```
-
-## Feed Health Check
-
-Verify all RSS feeds are working:
-
-```bash
-# Check all feeds
-python scripts/check_feeds.py
-
-# Verbose output (shows each feed)
-python scripts/check_feeds.py --verbose
-
-# Export results to file
-python scripts/check_feeds.py --export feed_status.txt
-```
-
-## Relevance Scoring
-
-Events are scored 0-100 based on:
-- Event type (CFO hire = 40pts, M&A = 35pts)
-- Territory match (up to 30pts)
-- Industry match (20pts)
-- Target company match (50pts bonus)
-
-## Data Sources
-
-### General PR Wires
-| Source | Status | Content |
-|--------|--------|---------|
-| Business Wire | ✅ Active | Press releases |
-| PR Newswire | ✅ Active | Press releases |
-| Globe Newswire | ✅ Active | Press releases |
-
-### Funding & M&A
-| Source | Status | Content |
-|--------|--------|---------|
-| Crunchbase News | ✅ Active | Startup funding, acquisitions |
-| PEHub | ✅ Active | Private equity news |
-
-### Healthcare
-| Source | Status | Content |
-|--------|--------|---------|
-| Fierce Healthcare | ✅ Active | Healthcare industry |
-
-### Nonprofit
-| Source | Status | Content |
-|--------|--------|---------|
-| Nonprofit Times | ✅ Active | Nonprofit news |
-| Nonprofit Quarterly | ✅ Active | Nonprofit sector |
-
-### Restaurant & Franchise
-| Source | Status | Content |
-|--------|--------|---------|
-| QSR Magazine | ✅ Active | Quick service restaurants |
-| Franchise Wire | ✅ Active | Franchise announcements |
-
-### Insurance
-| Source | Status | Content |
-|--------|--------|---------|
-| Insurance Journal | ✅ Active | Insurance news |
-
-### Construction
-| Source | Status | Content |
-|--------|--------|---------|
-| Construction Dive | ✅ Active | Construction news |
-
-### Energy & Utilities
-| Source | Status | Content |
-|--------|--------|---------|
-| Utility Dive | ✅ Active | Utilities news |
-| Solar Power World | ✅ Active | Solar/renewables |
-
-### Hospitality
-| Source | Status | Content |
-|--------|--------|---------|
-| Hotel Management | ✅ Active | Hotel industry |
-
-### WebWire Industry Feeds
-| Source | Status | Content |
-|--------|--------|---------|
-| WebWire - Business | ✅ Active | Business announcements |
-| WebWire - Construction | ✅ Active | Architecture/Construction |
-| WebWire - Oil & Energy | ✅ Active | Energy sector news |
-
-### Casino & Gaming
-| Source | Status | Content |
-|--------|--------|---------|
-| CDC Gaming Reports | ✅ Active | Casino industry news |
-| SBC Americas | ✅ Active | Sports betting news |
-
-### Transportation & Logistics
-| Source | Status | Content |
-|--------|--------|---------|
-| Supply Chain Brain | ✅ Active | Supply chain news |
-| FreightWaves | ✅ Active | Freight/trucking news |
-
-### Travel & Hotels
-| Source | Status | Content |
-|--------|--------|---------|
-| Hotel Dive | ✅ Active | Hotel industry news |
-| Skift | ✅ Active | Travel industry |
-
-### Airlines & Aviation
-| Source | Status | Content |
-|--------|--------|---------|
-| Simple Flying | ✅ Active | Commercial aviation |
-
-### Search-Based
-| Source | Status | Content |
-|--------|--------|---------|
-| Google News | ✅ Active | Aggregated news searches |
-
 ## Troubleshooting
 
 **No events found:**
@@ -267,8 +223,13 @@ Events are scored 0-100 based on:
 - Check SMTP settings and firewall
 
 **Too many irrelevant results:**
-- Add more specific industries to the exclusion list
+- Ensure Apollo API key is set for company verification
+- Add companies to exclusion list
 - Tighten territory matching
+
+**Still seeing public companies:**
+- Set `APOLLO_API_KEY` secret in GitHub Actions
+- Apollo verifies public/private status before alerting
 
 ## License
 
