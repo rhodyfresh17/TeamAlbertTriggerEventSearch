@@ -25,29 +25,28 @@ jobs:
           pip install requests pyyaml
           cp config.example.yaml config.yaml
 
-          # Configure email if secrets are set
-          if [ -n "$SENDER_EMAIL" ] && [ -n "$EMAIL_PASSWORD" ]; then
-            echo "Configuring email alerts..."
-            # Use Python to safely update YAML (handles special chars)
-            python3 << 'PYEOF'
-import yaml
-import os
+          # Configure email using Python (handles special chars safely)
+          python3 -c "
+          import yaml
+          import os
 
-with open('config.yaml', 'r') as f:
-    config = yaml.safe_load(f)
+          with open('config.yaml', 'r') as f:
+              config = yaml.safe_load(f)
 
-config['alerts']['email']['enabled'] = True
-config['alerts']['email']['sender_email'] = os.environ['SENDER_EMAIL']
-config['alerts']['email']['sender_password'] = os.environ['EMAIL_PASSWORD']
+          sender = os.environ.get('SENDER_EMAIL', '')
+          password = os.environ.get('EMAIL_PASSWORD', '')
 
-with open('config.yaml', 'w') as f:
-    yaml.dump(config, f, default_flow_style=False)
+          if sender and password:
+              config['alerts']['email']['enabled'] = True
+              config['alerts']['email']['sender_email'] = sender
+              config['alerts']['email']['sender_password'] = password
+              print('Email configured for:', sender)
+          else:
+              print('Email secrets not set - using file alerts only')
 
-print("Email configured for:", os.environ['SENDER_EMAIL'])
-PYEOF
-          else
-            echo "Email secrets not set - using file alerts only"
-          fi
+          with open('config.yaml', 'w') as f:
+              yaml.dump(config, f, default_flow_style=False)
+          "
 
           python -m src.main
 
