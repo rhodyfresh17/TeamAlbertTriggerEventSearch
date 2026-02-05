@@ -572,25 +572,11 @@ sources:
       url: "http://rssfeeds.webwire.com/WebWire-News-Oil-Energy"
       enabled: true
 
-    - name: "WebWire - Healthcare"
-      url: "http://rssfeeds.webwire.com/WebWire-News-Healthcare"
-      enabled: true
-
-    - name: "WebWire - Insurance"
-      url: "http://rssfeeds.webwire.com/WebWire-News-Insurance"
-      enabled: true
-
-    - name: "WebWire - Transportation"
-      url: "http://rssfeeds.webwire.com/WebWire-News-Transportation"
-      enabled: true
-
-    - name: "WebWire - Gaming"
-      url: "http://rssfeeds.webwire.com/WebWire-News-Gaming"
-      enabled: true
-
-    - name: "WebWire - Hospitality"
-      url: "http://rssfeeds.webwire.com/WebWire-News-Hospitality"
-      enabled: true
+    # WebWire - Healthcare - disabled (404)
+    # WebWire - Insurance - disabled (404)
+    # WebWire - Transportation - disabled (404)
+    # WebWire - Gaming - disabled (404)
+    # WebWire - Hospitality - disabled (404)
 
     # Casino & Gaming sources
     - name: "CDC Gaming Reports"
@@ -619,22 +605,15 @@ sources:
       url: "https://skift.com/feed/"
       enabled: true
 
-    - name: "Travel Weekly"
-      url: "https://www.travelweekly.com/rss/news"
-      enabled: true
+    # Travel Weekly - disabled (404)
 
     # Airlines & Aviation sources
     - name: "Simple Flying"
       url: "https://simpleflying.com/feed/"
       enabled: true
 
-    - name: "FlightGlobal"
-      url: "https://www.flightglobal.com/rss"
-      enabled: true
-
-    - name: "Aero-News Network"
-      url: "https://www.aero-news.net/index.cfm?do=main.rss&type=1"
-      enabled: true
+    # FlightGlobal - disabled (404)
+    # Aero-News Network - disabled (403)
 
   # Google News RSS (requires specific search queries)
   google_news:
