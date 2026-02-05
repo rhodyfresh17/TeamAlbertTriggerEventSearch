@@ -1,5 +1,6 @@
 """RSS feed scraper for business news and PR wires."""
 
+import re
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
@@ -7,6 +8,24 @@ from email.utils import parsedate_to_datetime
 
 from .base import BaseScraper
 from ..models import TriggerEvent, EventType, EventSource
+
+
+def strip_html(text: str) -> str:
+    """Remove HTML tags and clean up text."""
+    if not text:
+        return ""
+    # Remove HTML tags
+    clean = re.sub(r'<[^>]+>', '', text)
+    # Decode common HTML entities
+    clean = clean.replace('&nbsp;', ' ')
+    clean = clean.replace('&amp;', '&')
+    clean = clean.replace('&lt;', '<')
+    clean = clean.replace('&gt;', '>')
+    clean = clean.replace('&quot;', '"')
+    clean = clean.replace('&#39;', "'")
+    # Clean up whitespace
+    clean = re.sub(r'\s+', ' ', clean).strip()
+    return clean
 
 
 class RSSScraper(BaseScraper):
@@ -81,13 +100,16 @@ class RSSScraper(BaseScraper):
         # Extract fields (handle both RSS and Atom)
         title = self._get_text(item, 'title') or ''
         link = self._get_text(item, 'link') or self._get_attr(item, 'link', 'href') or ''
-        summary = self._get_text(item, 'description') or self._get_text(item, 'summary') or ''
+        raw_summary = self._get_text(item, 'description') or self._get_text(item, 'summary') or ''
 
         # Handle Atom content
-        if not summary:
+        if not raw_summary:
             content = item.find('{http://www.w3.org/2005/Atom}content')
             if content is not None and content.text:
-                summary = content.text
+                raw_summary = content.text
+
+        # Strip HTML from summary
+        summary = strip_html(raw_summary)
 
         # Combine title and summary for analysis
         full_text = f"{title} {summary}"
