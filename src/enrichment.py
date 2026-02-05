@@ -1,4 +1,4 @@
-"""Company data enrichment using ZoomInfo API."""
+"""Company data enrichment using Apollo.io or ZoomInfo API."""
 
 import os
 from typing import Dict, Any, Optional
@@ -21,6 +21,96 @@ class CompanyInfo:
     description: Optional[str] = None
     linkedin_url: Optional[str] = None
     founded_year: Optional[int] = None
+
+
+class ApolloEnricher:
+    """Enrich company data using Apollo.io API."""
+
+    BASE_URL = "https://api.apollo.io/v1/organizations/enrich"
+
+    def __init__(self, api_key: Optional[str] = None):
+        self.api_key = api_key or os.environ.get('APOLLO_API_KEY', '')
+        self.enabled = bool(self.api_key)
+        self.cache: Dict[str, CompanyInfo] = {}
+
+    def enrich_company(self, company_name: str) -> Optional[CompanyInfo]:
+        """Look up company information by name."""
+        if not self.enabled:
+            return None
+
+        # Check cache first
+        cache_key = company_name.lower().strip()
+        if cache_key in self.cache:
+            return self.cache[cache_key]
+
+        try:
+            headers = {
+                'Content-Type': 'application/json',
+                'Cache-Control': 'no-cache'
+            }
+
+            params = {
+                'api_key': self.api_key,
+                'name': company_name
+            }
+
+            response = requests.get(
+                self.BASE_URL,
+                headers=headers,
+                params=params,
+                timeout=10
+            )
+
+            if response.status_code != 200:
+                print(f"Apollo API error: {response.status_code}")
+                return None
+
+            data = response.json()
+            org = data.get('organization')
+
+            if not org:
+                return None
+
+            info = CompanyInfo(
+                name=org.get('name', company_name),
+                website=org.get('website_url'),
+                revenue=self._format_revenue(org.get('estimated_annual_revenue')),
+                revenue_range=org.get('revenue_range'),
+                employee_count=org.get('estimated_num_employees'),
+                employee_range=org.get('employee_count_range'),
+                industry=org.get('industry'),
+                location=self._format_location(org),
+                description=org.get('short_description'),
+                linkedin_url=org.get('linkedin_url'),
+                founded_year=org.get('founded_year')
+            )
+
+            # Cache the result
+            self.cache[cache_key] = info
+            return info
+
+        except Exception as e:
+            print(f"Error enriching company {company_name}: {e}")
+            return None
+
+    def _format_revenue(self, revenue: Optional[str]) -> Optional[str]:
+        """Format revenue string."""
+        if not revenue:
+            return None
+        # Apollo returns strings like "$10M - $50M"
+        return revenue
+
+    def _format_location(self, data: Dict[str, Any]) -> Optional[str]:
+        """Format location from company data."""
+        parts = []
+        if data.get('city'):
+            parts.append(data['city'])
+        if data.get('state'):
+            parts.append(data['state'])
+        if data.get('country') and data.get('country') != 'United States':
+            parts.append(data['country'])
+
+        return ', '.join(parts) if parts else None
 
 
 class ZoomInfoEnricher:
@@ -128,18 +218,35 @@ class CompanyEnricher:
     def __init__(self, config: Dict[str, Any]):
         enrichment_config = config.get('enrichment', {})
 
-        # Initialize ZoomInfo if configured
+        # Initialize Apollo.io (preferred provider)
+        apollo_key = enrichment_config.get('apollo_api_key') or os.environ.get('APOLLO_API_KEY', '')
+        self.apollo = ApolloEnricher(apollo_key) if apollo_key else None
+
+        # Initialize ZoomInfo as fallback
         zoominfo_key = enrichment_config.get('zoominfo_api_key') or os.environ.get('ZOOMINFO_API_KEY', '')
         self.zoominfo = ZoomInfoEnricher(zoominfo_key) if zoominfo_key else None
 
-        self.enabled = self.zoominfo and self.zoominfo.enabled
+        self.enabled = (self.apollo and self.apollo.enabled) or (self.zoominfo and self.zoominfo.enabled)
+
+        if self.apollo and self.apollo.enabled:
+            self.provider = "Apollo.io"
+        elif self.zoominfo and self.zoominfo.enabled:
+            self.provider = "ZoomInfo"
+        else:
+            self.provider = None
 
     def enrich(self, company_name: str) -> Optional[CompanyInfo]:
         """Enrich company data using available providers."""
         if not self.enabled or not company_name:
             return None
 
-        # Try ZoomInfo
+        # Try Apollo first (preferred)
+        if self.apollo and self.apollo.enabled:
+            result = self.apollo.enrich_company(company_name)
+            if result:
+                return result
+
+        # Fall back to ZoomInfo
         if self.zoominfo and self.zoominfo.enabled:
             return self.zoominfo.enrich_company(company_name)
 

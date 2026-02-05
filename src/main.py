@@ -48,7 +48,7 @@ class TriggerEventMonitor:
         ]
 
         if self.enricher.enabled:
-            print("Company enrichment enabled (ZoomInfo)")
+            print(f"Company enrichment enabled ({self.enricher.provider})")
         else:
             print("Company enrichment disabled (no API key)")
 
@@ -93,6 +93,20 @@ class TriggerEventMonitor:
         print(f"\n{'-'*40}")
         print(f"Total potential events: {len(all_events)}")
         print(f"New events (not seen before): {len(new_events)}")
+
+        # Enrich new events with company data
+        if new_events and self.enricher.enabled:
+            print(f"\nEnriching company data via {self.enricher.provider}...")
+            for event in new_events:
+                if event.company_name:
+                    info = self.enricher.enrich(event.company_name)
+                    if info:
+                        event.company_website = info.website
+                        event.company_revenue = info.revenue or info.revenue_range
+                        event.company_employees = str(info.employee_count) if info.employee_count else info.employee_range
+                        event.company_industry = info.industry
+                        event.company_linkedin = info.linkedin_url
+                        print(f"  Enriched: {event.company_name}")
 
         # Send alerts for new events
         if new_events:

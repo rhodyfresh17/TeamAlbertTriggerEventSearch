@@ -21,6 +21,7 @@ jobs:
         env:
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
           SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
+          APOLLO_API_KEY: ${{ secrets.APOLLO_API_KEY }}
         run: |
           pip install requests pyyaml
           cp config.example.yaml config.yaml
