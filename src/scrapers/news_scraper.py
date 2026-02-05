@@ -78,6 +78,15 @@ class GoogleNewsScraper(BaseScraper):
         ]
         queries.extend(linkedin_queries)
 
+        # Crunchbase-sourced news (funding rounds, acquisitions)
+        crunchbase_queries = [
+            ('site:crunchbase.com series funding', EventType.FUNDING),
+            ('site:crunchbase.com acquisition', EventType.MERGER_ACQUISITION),
+            ('site:news.crunchbase.com raises', EventType.FUNDING),
+            ('site:news.crunchbase.com acquired', EventType.MERGER_ACQUISITION),
+        ]
+        queries.extend(crunchbase_queries)
+
         return queries
 
     def _scrape_query(
