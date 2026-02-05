@@ -290,6 +290,27 @@ sources:
       url: "https://news.crunchbase.com/feed/"
       enabled: true
 
+    - name: "VC News Daily"
+      url: "https://vcnewsdaily.com/feed/"
+      enabled: true
+
+    - name: "PEHub"
+      url: "https://www.pehub.com/feed/"
+      enabled: true
+
+    - name: "PE News"
+      url: "https://www.penews.com/rss/latest-news"
+      enabled: true
+
+    # Healthcare sources
+    - name: "Fierce Healthcare"
+      url: "https://www.fiercehealthcare.com/rss/xml"
+      enabled: true
+
+    - name: "Modern Healthcare"
+      url: "https://www.modernhealthcare.com/section/rss"
+      enabled: true
+
   # Google News RSS (requires specific search queries)
   google_news:
     enabled: true
