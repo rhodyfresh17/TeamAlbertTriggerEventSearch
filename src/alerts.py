@@ -185,8 +185,25 @@ class EmailAlertHandler(AlertHandler):
             type_events = by_type[event_type]
             html += f"<h2>{event_type.value.replace('_', ' ').title()} ({len(type_events)})</h2>"
 
-            for event in sorted(type_events, key=lambda e: e.relevance_score, reverse=True):
+            # Sort by most recent first
+            for event in sorted(type_events, key=lambda e: e.published_date, reverse=True):
                 css_class = event_type.value.replace('_', '-')
+
+                # Calculate age
+                from datetime import datetime, timezone
+                now = datetime.now(timezone.utc)
+                event_date = event.published_date
+                if event_date.tzinfo is None:
+                    event_date = event_date.replace(tzinfo=timezone.utc)
+                age = now - event_date
+
+                if age.total_seconds() < 3600:
+                    age_str = f"{int(age.total_seconds() / 60)} min ago"
+                elif age.total_seconds() < 86400:
+                    age_str = f"{int(age.total_seconds() / 3600)} hours ago"
+                else:
+                    age_str = f"{int(age.days)} days ago"
+
                 html += f"""
                 <div class="event {css_class}">
                     <div class="event-title">
@@ -194,8 +211,9 @@ class EmailAlertHandler(AlertHandler):
                     </div>
                     <div class="event-company">{event.company_name or 'Unknown Company'}</div>
                     <div class="event-meta">
+                        <strong>{age_str}</strong> |
                         Source: {event.source_name or event.source.value.replace('_', ' ').title()} |
-                        Date: {event.published_date.strftime('%Y-%m-%d')} |
+                        {event.published_date.strftime('%Y-%m-%d %H:%M')} |
                         Relevance: {event.relevance_score:.0f}%
                     </div>
                     {f'<p>{event.description[:200]}...</p>' if event.description else ''}
