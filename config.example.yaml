@@ -272,6 +272,19 @@ sources:
       url: "https://www.finsmes.com/feed"
       enabled: true
 
+    # Industry-specific sources
+    - name: "Nonprofit Times"
+      url: "https://www.thenonprofittimes.com/feed/"
+      enabled: true
+
+    - name: "Nonprofit Quarterly"
+      url: "https://nonprofitquarterly.org/feed/"
+      enabled: true
+
+    - name: "Restaurant Business Magazine"
+      url: "https://www.restaurantbusinessonline.com/rss.xml"
+      enabled: true
+
   # Google News RSS (requires specific search queries)
   google_news:
     enabled: true
