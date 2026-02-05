@@ -25,6 +25,7 @@ from .models import TriggerEvent
 from .database import DatabaseManager
 from .alerts import AlertManager
 from .scrapers import RSSScraper, SECScraper, GoogleNewsScraper
+from .enrichment import CompanyEnricher
 
 
 class TriggerEventMonitor:
@@ -36,6 +37,7 @@ class TriggerEventMonitor:
             self.config.get('scraper', {}).get('database', 'trigger_events.db')
         )
         self.alert_manager = AlertManager(self.config)
+        self.enricher = CompanyEnricher(self.config)
         self.running = True
 
         # Initialize scrapers
@@ -44,6 +46,11 @@ class TriggerEventMonitor:
             SECScraper(self.config),
             GoogleNewsScraper(self.config),
         ]
+
+        if self.enricher.enabled:
+            print(f"Company enrichment enabled ({self.enricher.provider})")
+        else:
+            print("Company enrichment disabled (no API key)")
 
     def _load_config(self, config_path: str) -> dict:
         """Load configuration from YAML file."""
@@ -86,6 +93,20 @@ class TriggerEventMonitor:
         print(f"\n{'-'*40}")
         print(f"Total potential events: {len(all_events)}")
         print(f"New events (not seen before): {len(new_events)}")
+
+        # Enrich new events with company data
+        if new_events and self.enricher.enabled:
+            print(f"\nEnriching company data via {self.enricher.provider}...")
+            for event in new_events:
+                if event.company_name:
+                    info = self.enricher.enrich(event.company_name)
+                    if info:
+                        event.company_website = info.website
+                        event.company_revenue = info.revenue or info.revenue_range
+                        event.company_employees = str(info.employee_count) if info.employee_count else info.employee_range
+                        event.company_industry = info.industry
+                        event.company_linkedin = info.linkedin_url
+                        print(f"  Enriched: {event.company_name}")
 
         # Send alerts for new events
         if new_events:
