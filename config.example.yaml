@@ -260,8 +260,80 @@ sources:
       url: "https://www.globenewswire.com/RssFeed/orgclass/1/feedTitle/GlobeNewswire%20-%20News%20Releases"
       enabled: true
 
-    - name: "SEC EDGAR - M&A Filings"
-      url: "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-K&company=&dateb=&owner=include&count=100&output=atom"
+    - name: "EIN Presswire"
+      url: "https://www.einpresswire.com/rss/world"
+      enabled: true
+
+    - name: "Financewire"
+      url: "https://financewire.net/feed/"
+      enabled: true
+
+    - name: "FINSMES"
+      url: "https://www.finsmes.com/feed"
+      enabled: true
+
+    # Industry-specific sources
+    - name: "Nonprofit Times"
+      url: "https://www.thenonprofittimes.com/feed/"
+      enabled: true
+
+    - name: "Nonprofit Quarterly"
+      url: "https://nonprofitquarterly.org/feed/"
+      enabled: true
+
+    - name: "Restaurant Business Magazine"
+      url: "https://www.restaurantbusinessonline.com/rss.xml"
+      enabled: true
+
+    - name: "QSR Magazine"
+      url: "https://www.qsrmagazine.com/rss.xml"
+      enabled: true
+
+    - name: "Franchise Times"
+      url: "https://www.franchisetimes.com/feed/"
+      enabled: true
+
+    - name: "Franchise Wire"
+      url: "https://www.franchisewire.com/feed/"
+      enabled: true
+
+    # Funding/Startup sources
+    - name: "Crunchbase News"
+      url: "https://news.crunchbase.com/feed/"
+      enabled: true
+
+    - name: "VC News Daily"
+      url: "https://vcnewsdaily.com/feed/"
+      enabled: true
+
+    - name: "PEHub"
+      url: "https://www.pehub.com/feed/"
+      enabled: true
+
+    - name: "PE News"
+      url: "https://www.penews.com/rss/latest-news"
+      enabled: true
+
+    # Healthcare sources
+    - name: "Fierce Healthcare"
+      url: "https://www.fiercehealthcare.com/rss/xml"
+      enabled: true
+
+    - name: "Modern Healthcare"
+      url: "https://www.modernhealthcare.com/section/rss"
+      enabled: true
+
+    # Insurance sources
+    - name: "Insurance News Net"
+      url: "https://insurancenewsnet.com/feed"
+      enabled: true
+
+    - name: "Insurance Journal"
+      url: "https://www.insurancejournal.com/feed/"
+      enabled: true
+
+    - name: "Insurance Business"
+      url: "https://www.insurancebusinessmag.com/us/rss/"
       enabled: true
 
   # Google News RSS (requires specific search queries)
