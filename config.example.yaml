@@ -336,6 +336,61 @@ sources:
       url: "https://www.insurancebusinessmag.com/us/rss/"
       enabled: true
 
+    # Construction sources
+    - name: "Construction Dive"
+      url: "https://www.constructiondive.com/feeds/news/"
+      enabled: true
+
+    - name: "ENR (Engineering News-Record)"
+      url: "https://www.enr.com/rss/news"
+      enabled: true
+
+    # Energy/Utilities sources
+    - name: "Utility Dive"
+      url: "https://www.utilitydive.com/feeds/news/"
+      enabled: true
+
+    - name: "Oil & Gas Journal"
+      url: "https://www.ogj.com/rss"
+      enabled: true
+
+    - name: "Solar Power World"
+      url: "https://www.solarpowerworldonline.com/feed/"
+      enabled: true
+
+    # Hospitality sources
+    - name: "Hotel Management"
+      url: "https://www.hotelmanagement.net/rss.xml"
+      enabled: true
+
+    - name: "Hospitality Net"
+      url: "https://www.hospitalitynet.org/rss/news.xml"
+      enabled: true
+
+    # Field Services/HVAC sources
+    - name: "ACHR News"
+      url: "https://www.achrnews.com/rss"
+      enabled: true
+
+    - name: "Contracting Business"
+      url: "https://www.contractingbusiness.com/rss"
+      enabled: true
+
+    # Additional Healthcare
+    - name: "Becker's Hospital Review"
+      url: "https://www.beckershospitalreview.com/rss/hospital-management-administration.html"
+      enabled: true
+
+    # Additional Nonprofit
+    - name: "Chronicle of Philanthropy"
+      url: "https://www.philanthropy.com/feed"
+      enabled: true
+
+    # Mid-Market Focus
+    - name: "Middle Market Growth"
+      url: "https://middlemarketgrowth.org/feed/"
+      enabled: true
+
   # Google News RSS (requires specific search queries)
   google_news:
     enabled: true
