@@ -49,20 +49,21 @@ class ApolloEnricher:
                 'Cache-Control': 'no-cache'
             }
 
-            params = {
+            # Apollo API requires POST with api_key in body
+            payload = {
                 'api_key': self.api_key,
                 'name': company_name
             }
 
-            response = requests.get(
+            response = requests.post(
                 self.BASE_URL,
                 headers=headers,
-                params=params,
+                json=payload,
                 timeout=10
             )
 
             if response.status_code != 200:
-                print(f"Apollo API error: {response.status_code}")
+                print(f"Apollo API error: {response.status_code} - {response.text[:200]}")
                 return None
 
             data = response.json()
