@@ -323,6 +323,11 @@ territory:
     - "Mississippi"
     - "New Mexico"
     - "Hawaii"
+    - "Lanai"
+    - "Maui"
+    - "Oahu"
+    - "Kauai"
+    - "Honolulu"
     - "Alaska"
     - "Idaho"
     - "Montana"
@@ -338,6 +343,34 @@ territory:
     - "Savings Bank"
     - "Federal Reserve"
     - "Mortgage Lender"
+
+  # Content types to EXCLUDE (irrelevant articles)
+  excluded_content:
+    - "concert"
+    - "theatre"
+    - "theater"
+    - "performance"
+    - "festival"
+    - "music event"
+    - "Grammy"
+    - "award show"
+    - "red carpet"
+    - "celebrity"
+    - "entertainment"
+    - "box office"
+    - "movie premiere"
+    - "film festival"
+    - "sports game"
+    - "championship"
+    - "playoff"
+    - "tournament"
+    - "recipe"
+    - "cookbook"
+    - "weather"
+    - "obituary"
+    - "wedding"
+    - "engagement"
+    - "baby shower"
 
   # Company size filters (target mid-market private companies)
   company_filters:
@@ -384,6 +417,13 @@ territory:
       - "Apple"
       - "Oracle"
       - "Salesforce"
+      - "Four Seasons"
+      - "Marriott"
+      - "Hilton"
+      - "Hyatt"
+      - "MGM"
+      - "Wynn"
+      - "Caesars"
 
     # Target company size
     min_employees: 20
