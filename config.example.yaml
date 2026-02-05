@@ -323,6 +323,19 @@ sources:
       url: "https://www.modernhealthcare.com/section/rss"
       enabled: true
 
+    # Insurance sources
+    - name: "Insurance News Net"
+      url: "https://insurancenewsnet.com/feed"
+      enabled: true
+
+    - name: "Insurance Journal"
+      url: "https://www.insurancejournal.com/feed/"
+      enabled: true
+
+    - name: "Insurance Business"
+      url: "https://www.insurancebusinessmag.com/us/rss/"
+      enabled: true
+
   # Google News RSS (requires specific search queries)
   google_news:
     enabled: true
