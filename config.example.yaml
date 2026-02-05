@@ -260,8 +260,16 @@ sources:
       url: "https://www.globenewswire.com/RssFeed/orgclass/1/feedTitle/GlobeNewswire%20-%20News%20Releases"
       enabled: true
 
-    - name: "SEC EDGAR - M&A Filings"
-      url: "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-K&company=&dateb=&owner=include&count=100&output=atom"
+    - name: "EIN Presswire"
+      url: "https://www.einpresswire.com/rss/world"
+      enabled: true
+
+    - name: "Financewire"
+      url: "https://financewire.net/feed/"
+      enabled: true
+
+    - name: "FINSMES"
+      url: "https://www.finsmes.com/feed"
       enabled: true
 
   # Google News RSS (requires specific search queries)

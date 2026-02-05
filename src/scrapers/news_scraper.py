@@ -66,6 +66,18 @@ class GoogleNewsScraper(BaseScraper):
             queries.append((f'{industry} CFO', EventType.CFO_HIRE))
             queries.append((f'{industry} acquisition', EventType.MERGER_ACQUISITION))
 
+        # LinkedIn-sourced news (executive moves often announced there first)
+        linkedin_queries = [
+            ('site:linkedin.com CFO appointed', EventType.CFO_HIRE),
+            ('site:linkedin.com "excited to announce" CFO', EventType.CFO_HIRE),
+            ('site:linkedin.com "new role" CFO finance', EventType.CFO_HIRE),
+            ('site:linkedin.com "thrilled to join" CFO', EventType.CFO_HIRE),
+            ('site:linkedin.com acquisition announced', EventType.MERGER_ACQUISITION),
+            ('site:linkedin.com "pleased to announce" acquisition', EventType.MERGER_ACQUISITION),
+            ('site:linkedin.com funding round raised', EventType.FUNDING),
+        ]
+        queries.extend(linkedin_queries)
+
         return queries
 
     def _scrape_query(
