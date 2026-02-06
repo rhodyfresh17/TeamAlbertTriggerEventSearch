@@ -439,20 +439,37 @@ territory:
 # Keywords to search for trigger events
 keywords:
   executive_hires:
+    # Executive titles
     - "CFO"
     - "Chief Financial Officer"
     - "VP Finance"
     - "Vice President Finance"
-    - "Finance Director"
-    - "Controller"
-    - "Treasurer"
     - "Head of Finance"
+    - "Treasurer"
     - "Finance Lead"
+    # Director titles
+    - "Controller"
+    - "Finance Director"
+    - "Director of Finance"
+    - "Director of Accounting"
+    - "Accounting Director"
+    # Manager titles
+    - "Accounting Manager"
+    - "Finance Manager"
+    # Individual contributor titles
+    - "Senior Accountant"
+    - "Staff Accountant"
+    - "Senior Financial Analyst"
+    - "Accountant"
+    # Hire indicators
     - "named CFO"
     - "appointed CFO"
     - "joins as CFO"
     - "new CFO"
     - "hires CFO"
+    - "named Controller"
+    - "appointed Controller"
+    - "hiring accountant"
 
   mergers_acquisitions:
     - "acquisition"
@@ -705,14 +722,27 @@ job_search:
 
   # Job titles to search for (indicates company needs financial leadership)
   titles:
+    # Executive level
     - "CFO"
     - "Chief Financial Officer"
-    - "Controller"
-    - "Finance Director"
-    - "Director of Finance"
     - "VP Finance"
     - "Vice President Finance"
     - "Head of Finance"
+    # Director level
+    - "Controller"
+    - "Finance Director"
+    - "Director of Finance"
+    - "Director of Accounting"
+    - "Accounting Director"
+    # Manager level
+    - "Accounting Manager"
+    - "Finance Manager"
+    - "Controller Manager"
+    # Senior individual contributors
+    - "Senior Accountant"
+    - "Staff Accountant"
+    - "Senior Financial Analyst"
+    - "Accountant"
 
   # Locations to search (within your territory)
   locations:
