@@ -109,58 +109,17 @@ class TriggerEventMonitor:
         print(f"Skipped (older than {max_age_hours}h): {old_events_skipped}")
         print(f"New events (not seen before): {len(new_events)}")
 
-        # Verify companies and enrich data before alerting
-        verified_events = []
-        skipped_companies = []
-
-        if new_events and self.enricher.enabled:
-            print(f"\nVerifying companies via {self.enricher.provider}...")
-            for event in new_events:
-                if not event.company_name:
-                    # No company name - include but skip verification
-                    verified_events.append(event)
-                    continue
-
-                # Look up company info
-                info = self.enricher.enrich(event.company_name)
-                if info:
-                    # Verify company meets criteria
-                    is_valid, reason = self.enricher.verify_company(info, self.config)
-
-                    if is_valid:
-                        # Add enrichment data to event
-                        event.company_website = info.website
-                        event.company_revenue = info.revenue or info.revenue_range
-                        event.company_employees = str(info.employee_count) if info.employee_count else info.employee_range
-                        event.company_industry = info.industry
-                        event.company_linkedin = info.linkedin_url
-                        verified_events.append(event)
-                        print(f"  PASS: {event.company_name} - {reason}")
-                    else:
-                        skipped_companies.append((event.company_name, reason))
-                        print(f"  SKIP: {event.company_name} - {reason}")
-                else:
-                    # Couldn't verify - include anyway (might be valid small company)
-                    verified_events.append(event)
-                    print(f"  UNKNOWN: {event.company_name} - no data found, including")
-        else:
-            # No enrichment available - use all events
-            verified_events = new_events
-
-        if skipped_companies:
-            print(f"\nSkipped {len(skipped_companies)} events (company doesn't meet criteria)")
-
-        # Send alerts only for verified events
-        if verified_events:
-            print(f"\nSending alerts for {len(verified_events)} verified events...")
-            self._send_alerts(verified_events)
+        # Send alerts for all new events (no company verification)
+        if new_events:
+            print(f"\nSending alerts for {len(new_events)} new events...")
+            self._send_alerts(new_events)
 
             # Print summary
-            self._print_event_summary(verified_events)
+            self._print_event_summary(new_events)
         else:
-            print("\nNo events passed verification this cycle.")
+            print("\nNo new events this cycle.")
 
-        return verified_events
+        return new_events
 
     def _send_alerts(self, events: List[TriggerEvent]):
         """Send alerts and update database."""
