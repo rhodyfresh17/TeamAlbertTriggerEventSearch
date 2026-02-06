@@ -140,10 +140,17 @@ class RSSScraper(BaseScraper):
         if self.is_excluded_location(full_text):
             return None
 
+        # Check if this is a PE-backed acquisition (bypass territory filter)
+        is_pe_backed = self._is_pe_backed(full_text)
+        is_ma_event = event_type == EventType.MERGER_ACQUISITION
+
         # STRICT FILTERING: Require territory match OR target company
-        # Industry alone is NOT sufficient (avoids international companies)
+        # Exception: PE-backed acquisitions don't require territory match
         if self.require_territory_match:
-            if not (in_territory or matches_company):
+            if is_pe_backed and is_ma_event:
+                # PE-backed M&A - include regardless of territory
+                pass
+            elif not (in_territory or matches_company):
                 return None
         else:
             # Fallback to looser filtering if disabled
@@ -241,6 +248,31 @@ class RSSScraper(BaseScraper):
                 return source
 
         return EventSource.OTHER
+
+    def _is_pe_backed(self, text: str) -> bool:
+        """Check if text indicates a PE-backed company or deal."""
+        text_lower = text.lower()
+        pe_indicators = [
+            'private equity',
+            'pe-backed',
+            'pe backed',
+            '-backed',
+            'portfolio company',
+            'capital partners',
+            'equity partners',
+            'investment partners',
+            'growth equity',
+            'buyout',
+            'lbo',
+            'leveraged buyout',
+            'sponsor-backed',
+            'sponsor backed',
+            'add-on acquisition',
+            'bolt-on acquisition',
+            'platform acquisition',
+            'tuck-in acquisition',
+        ]
+        return any(indicator in text_lower for indicator in pe_indicators)
 
     def _get_matched_keywords(self, text: str, event_type: EventType) -> List[str]:
         """Get list of matched keywords."""
