@@ -63,40 +63,67 @@ class JobScraper(BaseScraper):
             return []
 
         events = []
+        results = {}
 
         print("  Scraping job boards for finance leadership positions...")
 
         # Scrape each enabled job board
         if self.job_boards.get('indeed', True):
-            print("    - Indeed")
-            events.extend(self._scrape_indeed())
+            print("    - Indeed", end="")
+            indeed_events = self._scrape_indeed()
+            events.extend(indeed_events)
+            results['Indeed'] = len(indeed_events)
+            print(f" ({len(indeed_events)} found)")
 
         if self.job_boards.get('ziprecruiter', True):
-            print("    - ZipRecruiter")
-            events.extend(self._scrape_ziprecruiter())
+            print("    - ZipRecruiter", end="")
+            zr_events = self._scrape_ziprecruiter()
+            events.extend(zr_events)
+            results['ZipRecruiter'] = len(zr_events)
+            print(f" ({len(zr_events)} found)")
 
         if self.job_boards.get('simplyhired', True):
-            print("    - SimplyHired")
-            events.extend(self._scrape_simplyhired())
+            print("    - SimplyHired", end="")
+            sh_events = self._scrape_simplyhired()
+            events.extend(sh_events)
+            results['SimplyHired'] = len(sh_events)
+            print(f" ({len(sh_events)} found)")
 
         if self.job_boards.get('google_jobs', True):
-            print("    - Google Jobs")
-            events.extend(self._scrape_google_jobs())
+            print("    - Google Jobs", end="")
+            gj_events = self._scrape_google_jobs()
+            events.extend(gj_events)
+            results['Google'] = len(gj_events)
+            print(f" ({len(gj_events)} found)")
 
         if self.job_boards.get('ladders', True):
-            print("    - Ladders")
-            events.extend(self._scrape_ladders())
+            print("    - Ladders", end="")
+            lad_events = self._scrape_ladders()
+            events.extend(lad_events)
+            results['Ladders'] = len(lad_events)
+            print(f" ({len(lad_events)} found)")
 
         if self.job_boards.get('cfo_com', True):
-            print("    - CFO.com")
-            events.extend(self._scrape_cfo_com())
+            print("    - CFO.com", end="")
+            cfo_events = self._scrape_cfo_com()
+            events.extend(cfo_events)
+            results['CFO.com'] = len(cfo_events)
+            print(f" ({len(cfo_events)} found)")
 
-        print(f"    Found {len(events)} job postings")
+        # Summary
+        working = [k for k, v in results.items() if v > 0]
+        if working:
+            print(f"    Job sources returning results: {', '.join(working)}")
+        else:
+            print("    Note: No job postings found (RSS feeds may be unavailable)")
+
+        print(f"    Total job postings: {len(events)}")
         return events
 
     def _scrape_indeed(self) -> List[TriggerEvent]:
         """Scrape Indeed RSS feeds for job postings."""
         events = []
+        errors = 0
 
         for title in self.job_titles[:3]:  # Limit to top 3 titles
             for location in self.location_queries[:4]:  # Limit locations
@@ -109,8 +136,11 @@ class JobScraper(BaseScraper):
                     events.extend(feed_events)
                     self.delay_request()
                 except Exception as e:
+                    errors += 1
                     continue
 
+        if errors > 0:
+            print(f"      (Indeed: {errors} feed errors)")
         return events
 
     def _scrape_ziprecruiter(self) -> List[TriggerEvent]:
@@ -270,6 +300,7 @@ class JobScraper(BaseScraper):
         try:
             response = self.session.get(url, timeout=self.timeout)
             if response.status_code != 200:
+                # Silently skip - many job sites no longer offer RSS
                 return []
 
             root = ET.fromstring(response.content)
@@ -283,8 +314,9 @@ class JobScraper(BaseScraper):
                     continue
 
         except ET.ParseError:
+            # Invalid XML - RSS feed might not exist
             pass
-        except Exception as e:
+        except Exception:
             pass
 
         return events
