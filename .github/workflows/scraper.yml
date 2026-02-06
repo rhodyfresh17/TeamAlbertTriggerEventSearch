@@ -18,6 +18,15 @@ jobs:
         with:
           python-version: '3.11'
 
+      # Cache the database to prevent duplicate alerts
+      - name: Cache database
+        uses: actions/cache@v4
+        with:
+          path: trigger_events.db
+          key: trigger-events-db-${{ github.run_id }}
+          restore-keys: |
+            trigger-events-db-
+
       - name: Run scraper
         env:
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
@@ -26,6 +35,13 @@ jobs:
         run: |
           pip install requests pyyaml
           cp config.example.yaml config.yaml
+
+          # Show database status
+          if [ -f trigger_events.db ]; then
+            echo "Database found ($(stat -c%s trigger_events.db) bytes)"
+          else
+            echo "No existing database - first run"
+          fi
 
           # Configure email using Python (handles special chars safely)
           python3 -c "
