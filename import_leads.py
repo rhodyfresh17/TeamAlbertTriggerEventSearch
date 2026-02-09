@@ -248,8 +248,9 @@ Examples:
 
     args = parser.parse_args()
 
-    global DB_PATH
-    DB_PATH = args.db
+    # Update DB path if custom path provided
+    if args.db != DB_PATH:
+        globals()['DB_PATH'] = args.db
 
     leads = []
 
