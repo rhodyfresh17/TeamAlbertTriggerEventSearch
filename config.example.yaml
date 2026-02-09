@@ -593,6 +593,84 @@ sources:
       url: "https://health.einnews.com/rss/healthcare_news"
       enabled: true
 
+    # EIN News - State-specific feeds (East Coast territory)
+    - name: "EIN News - New York"
+      url: "https://newyork.einnews.com/rss"
+      enabled: true
+
+    - name: "EIN News - Massachusetts"
+      url: "https://massachusetts.einnews.com/rss"
+      enabled: true
+
+    - name: "EIN News - New Jersey"
+      url: "https://newjersey.einnews.com/rss"
+      enabled: true
+
+    - name: "EIN News - Pennsylvania"
+      url: "https://pennsylvania.einnews.com/rss"
+      enabled: true
+
+    - name: "EIN News - Virginia"
+      url: "https://virginia.einnews.com/rss"
+      enabled: true
+
+    - name: "EIN News - Maryland"
+      url: "https://maryland.einnews.com/rss"
+      enabled: true
+
+    - name: "EIN News - Connecticut"
+      url: "https://connecticut.einnews.com/rss"
+      enabled: true
+
+    - name: "EIN News - North Carolina"
+      url: "https://northcarolina.einnews.com/rss"
+      enabled: true
+
+    - name: "EIN News - South Carolina"
+      url: "https://southcarolina.einnews.com/rss"
+      enabled: true
+
+    - name: "EIN News - Ohio"
+      url: "https://ohio.einnews.com/rss"
+      enabled: true
+
+    - name: "EIN News - Delaware"
+      url: "https://delaware.einnews.com/rss"
+      enabled: true
+
+    - name: "EIN News - Rhode Island"
+      url: "https://rhodeisland.einnews.com/rss"
+      enabled: true
+
+    - name: "EIN News - New Hampshire"
+      url: "https://newhampshire.einnews.com/rss"
+      enabled: true
+
+    - name: "EIN News - Vermont"
+      url: "https://vermont.einnews.com/rss"
+      enabled: true
+
+    - name: "EIN News - Maine"
+      url: "https://maine.einnews.com/rss"
+      enabled: true
+
+    - name: "EIN News - West Virginia"
+      url: "https://westvirginia.einnews.com/rss"
+      enabled: true
+
+    - name: "EIN News - Washington DC"
+      url: "https://dc.einnews.com/rss"
+      enabled: true
+
+    # EIN News - Canadian provinces
+    - name: "EIN News - Ontario"
+      url: "https://ontario.einnews.com/rss"
+      enabled: true
+
+    - name: "EIN News - Quebec"
+      url: "https://quebec.einnews.com/rss"
+      enabled: true
+
     # Financewire - disabled (malformed XML)
     # FINSMES - disabled (403 blocked)
 
