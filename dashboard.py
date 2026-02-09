@@ -198,8 +198,8 @@ def main():
     # Event type filter
     event_types = st.sidebar.multiselect(
         "Event Types",
-        ["cfo_hire", "executive_hire", "merger_acquisition", "funding", "other"],
-        default=["cfo_hire", "executive_hire", "merger_acquisition", "funding"]
+        ["cfo_hire", "executive_hire", "merger_acquisition", "funding", "stable_target", "other"],
+        default=["cfo_hire", "executive_hire", "merger_acquisition", "funding", "stable_target"]
     )
 
     # Lead status filter
