@@ -13,6 +13,7 @@ class EventType(Enum):
     MERGER_ACQUISITION = "merger_acquisition"
     FUNDING = "funding"
     EXPANSION = "expansion"
+    STABLE_TARGET = "stable_target"  # Prospect companies from external sources
     OTHER = "other"
 
 
