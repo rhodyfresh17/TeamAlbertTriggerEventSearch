@@ -270,13 +270,35 @@ Examples:
         else:
             leads = [data]
 
-    # Read from stdin
+    # Read from stdin (supports JSON array or newline-delimited JSON)
     elif args.stdin or not sys.stdin.isatty():
-        data = json.load(sys.stdin)
-        if isinstance(data, list):
-            leads = data
-        else:
-            leads = [data]
+        content = sys.stdin.read().strip()
+        try:
+            # Try parsing as a single JSON array or object
+            data = json.loads(content)
+            if isinstance(data, list):
+                leads = data
+            else:
+                leads = [data]
+        except json.JSONDecodeError:
+            # Try parsing as newline-delimited JSON (NDJSON)
+            leads = []
+            for line in content.split('\n'):
+                line = line.strip()
+                if line and line.startswith('{'):
+                    try:
+                        leads.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        pass
+            # Also try parsing multiple JSON objects without newlines
+            if not leads:
+                import re
+                objects = re.findall(r'\{[^{}]*\}', content)
+                for obj_str in objects:
+                    try:
+                        leads.append(json.loads(obj_str))
+                    except json.JSONDecodeError:
+                        pass
 
     else:
         parser.print_help()
