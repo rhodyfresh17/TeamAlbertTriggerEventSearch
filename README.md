@@ -8,10 +8,12 @@ Monitor news sources for sales trigger events (CFO hires, M&A, acquisitions, fun
 
 - **22+ news sources**: Industry-specific publications, PR wires, funding news, and Google News
 - **6 job boards**: Indeed, ZipRecruiter, SimplyHired, Google Jobs, Ladders ($100K+), CFO.com
-- **Company verification**: Apollo.io validates company size and public/private status before alerting
+- **Interactive dashboard**: Streamlit dashboard for reviewing and managing leads
+- **Lead tracking**: Track leads through stages (new → reviewing → contacted → closed)
+- **PE-backed bypass**: Automatically includes PE-backed acquisitions regardless of territory
 - **Recency prioritized**: Most recent news first, shows "5 min ago" timestamps
 - **Territory filtering**: Filter by US states, Canadian provinces, and major cities
-- **Industry targeting**: Healthcare, Nonprofit, Hospitality, Restaurant/Franchise, Construction, Field Services, Energy, Oil & Gas, Insurance, Casino/Gaming, Transportation/Logistics, Travel/Hotels, Airlines/Aviation
+- **Industry targeting**: Healthcare, Nonprofit, Hospitality, Restaurant/Franchise, Construction, Field Services, Energy, Oil & Gas, Insurance, Casino/Gaming, Transportation/Logistics, Travel/Hotels, Airlines/Aviation, Child Services, Medical Labs, Business Services, and more
 - **Smart filtering**: Skips public companies, verifies 20-2000 employees, $20M-$500M revenue
 - **Multiple alert channels**: Email, Slack, File, Desktop notifications
 - **Automated runs**: GitHub Actions runs every hour
@@ -30,7 +32,46 @@ python -m src.main --daemon
 
 # View statistics
 python -m src.main --stats
+
+# Launch the dashboard
+python3 -m streamlit run dashboard.py
 ```
+
+## Interactive Dashboard
+
+The Streamlit dashboard provides an interactive interface to manage and review trigger event alerts.
+
+### Running the Dashboard
+
+```bash
+# From the project directory
+python3 -m streamlit run dashboard.py
+
+# Opens at http://localhost:8501
+```
+
+### Dashboard Features
+
+- **Filtering**: Filter by event type, date range, lead status, and search terms
+- **Lead Management**: Track leads through stages (new, reviewing, contacted, interested, closed)
+- **Notes**: Add notes to each lead for tracking conversations
+- **Multiple Views**:
+  - **Card View**: Detailed view with full descriptions and status controls
+  - **Table View**: Quick scanning of all events with sortable columns
+  - **Analytics**: Charts showing events by type, status, over time, and top companies
+- **Export**: Download filtered results as CSV for use in CRM or spreadsheets
+
+### Lead Statuses
+
+| Status | Icon | Description |
+|--------|------|-------------|
+| new | `blue` | Unreviewed event |
+| reviewing | `yellow` | Currently evaluating |
+| contacted | `orange` | Reached out to company |
+| interested | `green` | Positive response received |
+| not_relevant | `gray` | Not a fit for territory |
+| closed_won | `check` | Converted to client |
+| closed_lost | `x` | Did not convert |
 
 ## How It Works
 
