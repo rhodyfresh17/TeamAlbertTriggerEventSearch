@@ -212,6 +212,78 @@ def main():
     # Search
     search = st.sidebar.text_input("Search", placeholder="Company, title, or keyword...")
 
+    # CSV Upload section
+    st.sidebar.divider()
+    st.sidebar.header("Import Leads")
+    uploaded_file = st.sidebar.file_uploader("Upload CSV", type=['csv'])
+
+    if uploaded_file is not None:
+        try:
+            import_df = pd.read_csv(uploaded_file)
+            st.sidebar.success(f"Loaded {len(import_df)} rows")
+
+            # Show column mapping
+            st.sidebar.write("**Map columns:**")
+            cols = import_df.columns.tolist()
+
+            title_col = st.sidebar.selectbox("Title/Event", cols, index=0)
+            company_col = st.sidebar.selectbox("Company Name", cols, index=min(1, len(cols)-1))
+
+            # Optional columns
+            url_col = st.sidebar.selectbox("URL (optional)", ["None"] + cols)
+            location_col = st.sidebar.selectbox("Location (optional)", ["None"] + cols)
+            desc_col = st.sidebar.selectbox("Description (optional)", ["None"] + cols)
+            event_type_col = st.sidebar.selectbox("Event Type (optional)", ["None"] + cols)
+
+            if st.sidebar.button("Import Leads"):
+                conn = get_connection()
+                cursor = conn.cursor()
+                imported = 0
+
+                for _, row in import_df.iterrows():
+                    title = str(row[title_col]) if pd.notna(row[title_col]) else ""
+                    company = str(row[company_col]) if pd.notna(row[company_col]) else ""
+
+                    if not title and not company:
+                        continue
+
+                    # Generate ID and URL
+                    import hashlib
+                    url = str(row[url_col]) if url_col != "None" and pd.notna(row.get(url_col)) else f"https://import.local/{hashlib.md5(title.encode()).hexdigest()[:8]}"
+                    lead_id = hashlib.md5(f"{url}:{title}".encode()).hexdigest()
+
+                    # Get optional fields
+                    location = str(row[location_col]) if location_col != "None" and pd.notna(row.get(location_col)) else None
+                    description = str(row[desc_col]) if desc_col != "None" and pd.notna(row.get(desc_col)) else None
+                    event_type = str(row[event_type_col]).lower() if event_type_col != "None" and pd.notna(row.get(event_type_col)) else "stable_target"
+
+                    # Normalize event type
+                    if event_type not in ["cfo_hire", "executive_hire", "merger_acquisition", "funding", "stable_target", "other"]:
+                        event_type = "stable_target"
+
+                    now = datetime.now().isoformat()
+
+                    try:
+                        cursor.execute('''
+                            INSERT OR IGNORE INTO events (
+                                id, title, event_type, source, url, published_date, discovered_date,
+                                company_name, company_location, description, lead_status
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ''', (lead_id, title or company, event_type, "csv_import", url, now, now,
+                              company, location, description, "new"))
+                        if cursor.rowcount > 0:
+                            imported += 1
+                    except Exception as e:
+                        pass
+
+                conn.commit()
+                conn.close()
+                st.sidebar.success(f"Imported {imported} leads!")
+                st.rerun()
+
+        except Exception as e:
+            st.sidebar.error(f"Error reading CSV: {e}")
+
     # Stats section
     stats = get_stats()
 
