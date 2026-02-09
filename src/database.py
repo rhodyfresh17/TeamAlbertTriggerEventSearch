@@ -42,9 +42,22 @@ class DatabaseManager:
                     matched_keywords TEXT,
                     matched_regions TEXT,
                     relevance_score REAL,
-                    alert_sent INTEGER DEFAULT 0
+                    alert_sent INTEGER DEFAULT 0,
+                    lead_status TEXT DEFAULT 'new',
+                    notes TEXT
                 )
             ''')
+
+            # Add lead_status column if it doesn't exist (migration)
+            try:
+                cursor.execute('ALTER TABLE events ADD COLUMN lead_status TEXT DEFAULT "new"')
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+
+            try:
+                cursor.execute('ALTER TABLE events ADD COLUMN notes TEXT')
+            except sqlite3.OperationalError:
+                pass  # Column already exists
 
             # Seen URLs table (for deduplication)
             cursor.execute('''
