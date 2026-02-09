@@ -19,6 +19,7 @@ Usage:
 
 import argparse
 import json
+import os
 import sqlite3
 import sys
 import hashlib
@@ -230,9 +231,10 @@ def main():
         epilog="""
 Examples:
   python import_leads.py leads.json
+  python import_leads.py leads.json --sync          # Import and sync to S3
   python import_leads.py --json '{"title": "Acme Corp hires new CFO", "company_name": "Acme Corp"}'
   echo '{"title": "..."}' | python import_leads.py --stdin
-  cat clawdbot_output.json | python import_leads.py --stdin
+  cat clawdbot_output.json | python import_leads.py --stdin --sync
         """
     )
 
@@ -241,6 +243,8 @@ Examples:
     parser.add_argument("--stdin", "-s", action="store_true", help="Read JSON from stdin")
     parser.add_argument("--source", default="clawdbot", help="Source identifier (default: clawdbot)")
     parser.add_argument("--db", default=DB_PATH, help=f"Database path (default: {DB_PATH})")
+    parser.add_argument("--sync", action="store_true", help="Sync database to S3 after import")
+    parser.add_argument("--bucket", default=None, help="S3 bucket for sync (default: SYNC_BUCKET env var)")
 
     args = parser.parse_args()
 
@@ -282,6 +286,19 @@ Examples:
     if leads:
         stats = import_leads_batch(leads, args.source)
         print(f"\nImport complete: {stats['imported']} imported, {stats['skipped']} skipped, {stats['errors']} errors")
+
+        # Auto-sync to S3 if requested
+        if args.sync and stats['imported'] > 0:
+            print("\nSyncing to S3...")
+            try:
+                from sync_db import push_to_s3
+                bucket = args.bucket or os.environ.get("SYNC_BUCKET", "trigger-events-sync")
+                if push_to_s3(bucket):
+                    print("Sync complete!")
+                else:
+                    print("Sync failed - check AWS credentials")
+            except ImportError:
+                print("Error: sync_db.py not found. Run sync manually.")
 
 
 if __name__ == "__main__":
