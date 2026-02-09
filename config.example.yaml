@@ -61,109 +61,114 @@ territory:
     - "Halifax"
     - "Quebec City"
 
-  # Industries to focus on (target verticals)
+  # Target NAICS codes (ranked by priority - best to worst)
+  naics_codes:
+    # Tier 1 - Top Priority
+    - code: "551112"
+      name: "Offices of Other Holding Companies"
+      priority: 1
+    - code: "624110"
+      name: "Child and Youth Services"
+      priority: 1
+    - code: "813910"
+      name: "Business Associations"
+      priority: 1
+    - code: "561499"
+      name: "All Other Business Support Services"
+      priority: 1
+    - code: "813312"
+      name: "Environment, Conservation and Wildlife Organizations"
+      priority: 1
+
+    # Tier 2 - High Priority
+    - code: "611710"
+      name: "Educational Support Services"
+      priority: 2
+    - code: "624410"
+      name: "Child Care Services"
+      priority: 2
+    - code: "621999"
+      name: "All Other Miscellaneous Ambulatory Health Care Services"
+      priority: 2
+    - code: "238170"
+      name: "Siding Contractors"
+      priority: 2
+    - code: "621511"
+      name: "Medical Laboratories"
+      priority: 2
+
+    # Tier 3 - Medium-High Priority
+    - code: "213112"
+      name: "Support Activities for Oil and Gas Operations"
+      priority: 3
+    - code: "524210"
+      name: "Insurance Agencies and Brokerages"
+      priority: 3
+    - code: "721110"
+      name: "Hotels (except Casino Hotels) and Motels"
+      priority: 3
+    - code: "541330"
+      name: "Engineering Services"
+      priority: 3
+    - code: "624310"
+      name: "Vocational Rehabilitation Services"
+      priority: 3
+
+    # Tier 4 - Medium Priority
+    - code: "561110"
+      name: "Office Administrative Services"
+      priority: 4
+    - code: "813319"
+      name: "Other Social Advocacy Organizations"
+      priority: 4
+    - code: "561421"
+      name: "Telephone Answering Services"
+      priority: 4
+    - code: "523940"
+      name: "Portfolio Management and Investment Advice"
+      priority: 4
+    - code: "621111"
+      name: "Offices of Physicians (except Mental Health Specialists)"
+      priority: 4
+
+    # Tier 5 - Standard Priority
+    - code: "713110"
+      name: "Amusement and Theme Parks"
+      priority: 5
+    - code: "813211"
+      name: "Grantmaking Foundations"
+      priority: 5
+    - code: "525910"
+      name: "Open-End Investment Funds"
+      priority: 5
+    - code: "813920"
+      name: "Professional Organizations"
+      priority: 5
+    - code: "621512"
+      name: "Diagnostic Imaging Centers"
+      priority: 5
+    - code: "722513"
+      name: "Limited-Service Restaurants"
+      priority: 5
+    - code: "221118"
+      name: "Other Electric Power Generation"
+      priority: 5
+    - code: "561311"
+      name: "Employment Placement Agencies"
+      priority: 5
+    - code: "624210"
+      name: "Community Food Services"
+      priority: 5
+
+  # Industries to focus on (aligned with NAICS codes above)
   industries:
-    # Healthcare
-    - "Healthcare"
-    - "Health System"
-    - "Hospital"
-    - "Medical"
-    - "Health Services"
-    # Nonprofit
-    - "Nonprofit"
-    - "Non-profit"
-    - "Foundation"
-    - "Charity"
-    - "NGO"
-    # Hospitality
-    - "Hospitality"
-    - "Hotel"
-    - "Resort"
-    - "Lodging"
-    # Restaurant/Franchise
-    - "Restaurant"
-    - "Franchise"
-    - "Food Service"
-    - "QSR"
-    - "Fast Food"
-    - "Dining"
-    # Construction
-    - "Construction"
-    - "General Contractor"
-    - "Builder"
-    - "Engineering"
-    - "Infrastructure"
-    # Field Services
-    - "Field Services"
-    - "HVAC"
-    - "Plumbing"
-    - "Electrical"
-    - "Facilities"
-    - "Property Management"
-    - "Maintenance"
-    # Energy
-    - "Energy"
-    - "Utilities"
-    - "Power"
-    # Renewables
-    - "Renewable"
-    - "Solar"
-    - "Wind Energy"
-    - "Clean Energy"
-    - "Green Energy"
-    # Oil & Gas
-    - "Oil"
-    - "Gas"
-    - "Petroleum"
-    - "Drilling"
-    - "Pipeline"
-    # Financial Services (Insurance only - no banks)
-    - "Insurance"
-    - "Underwriting"
-    - "Claims"
-    - "Insurer"
-    # Casino & Gaming
-    - "Casino"
-    - "Gaming"
-    - "Gambling"
-    - "Sportsbook"
-    - "iGaming"
-    - "Slots"
-    - "Poker"
-    - "Sports Betting"
-    # Transportation & Logistics
-    - "Transportation"
-    - "Logistics"
-    - "Trucking"
-    - "Freight"
-    - "Shipping"
-    - "Supply Chain"
-    - "Warehousing"
-    - "Distribution"
-    - "Fleet"
-    - "Carrier"
-    # Leisure Travel & Hotels
-    - "Leisure Travel"
-    - "Travel Agency"
-    - "Tour Operator"
-    - "Vacation"
-    - "Tourism"
-    - "Boutique Hotel"
-    - "Hotel Chain"
-    - "Motel"
-    - "Bed and Breakfast"
-    - "Timeshare"
-    # Airlines & Aviation
-    - "Airline"
-    - "Aviation"
-    - "Airport"
-    - "Aircraft"
-    - "Aerospace"
-    - "Air Travel"
-    - "Charter"
-    - "Private Jet"
-    - "Flight"
-    # Child & Youth Services
+    # 551112 - Holding Companies (Tier 1)
+    - "Holding Company"
+    - "Investment Holding"
+    - "Parent Company"
+    - "Subsidiary"
+
+    # 624110/624410 - Child & Youth Services (Tier 1-2)
     - "Child Services"
     - "Youth Services"
     - "Child Care"
@@ -171,7 +176,41 @@ territory:
     - "Preschool"
     - "Early Childhood"
     - "After School"
-    # Medical & Diagnostic Services
+    - "Youth Program"
+
+    # 813910/813920 - Business & Professional Associations (Tier 1)
+    - "Business Association"
+    - "Trade Association"
+    - "Professional Organization"
+    - "Membership Organization"
+    - "Chamber of Commerce"
+
+    # 561499/561110/561421 - Business Support Services (Tier 1-4)
+    - "Business Services"
+    - "Business Support"
+    - "Office Administrative"
+    - "Answering Service"
+    - "Call Center"
+    - "Administrative Services"
+
+    # 813312 - Environment & Conservation (Tier 1)
+    - "Environmental"
+    - "Conservation"
+    - "Wildlife"
+    - "Sustainability"
+    - "Environmental Organization"
+
+    # 611710/624310 - Education & Vocational Services (Tier 2-3)
+    - "Educational Services"
+    - "Educational Support"
+    - "Training"
+    - "Vocational"
+    - "Rehabilitation Services"
+    - "Career Services"
+
+    # 621999/621511/621512/621111 - Healthcare & Medical (Tier 2-5)
+    - "Healthcare"
+    - "Health Services"
     - "Medical Laboratory"
     - "Diagnostic Imaging"
     - "Lab Services"
@@ -181,56 +220,107 @@ territory:
     - "Physician"
     - "Medical Practice"
     - "Ambulatory"
-    # Business Services
-    - "Business Services"
-    - "Business Support"
-    - "Office Administrative"
-    - "Staffing"
-    - "Employment Agency"
-    - "Recruiting"
-    - "Temp Agency"
-    - "Answering Service"
-    - "Call Center"
-    # Investment & Financial Services
+    - "Health System"
+    - "Hospital"
+    - "Medical"
+
+    # 238170 - Siding & Specialty Contractors (Tier 2)
+    - "Siding Contractor"
+    - "Roofing"
+    - "Painting Contractor"
+    - "Flooring"
+    - "Specialty Trade"
+    - "General Contractor"
+    - "Construction"
+    - "Builder"
+
+    # 213112 - Oil & Gas Support (Tier 3)
+    - "Oil"
+    - "Gas"
+    - "Petroleum"
+    - "Drilling"
+    - "Pipeline"
+    - "Oilfield Services"
+
+    # 524210 - Insurance (Tier 3)
+    - "Insurance"
+    - "Insurance Agency"
+    - "Insurance Brokerage"
+    - "Underwriting"
+    - "Claims"
+    - "Insurer"
+
+    # 721110 - Hotels & Motels (Tier 3)
+    - "Hotel"
+    - "Motel"
+    - "Lodging"
+    - "Hospitality"
+    - "Resort"
+    - "Boutique Hotel"
+    - "Hotel Chain"
+    - "Bed and Breakfast"
+
+    # 541330 - Engineering Services (Tier 3)
+    - "Engineering"
+    - "Engineering Services"
+    - "Infrastructure"
+    - "Civil Engineering"
+
+    # 523940/525910 - Investment & Portfolio Management (Tier 4-5)
     - "Investment Fund"
     - "Portfolio Management"
     - "Asset Management"
     - "Investment Advice"
     - "Wealth Management"
     - "Financial Advisory"
-    # Amusement & Entertainment
+    - "Open-End Fund"
+
+    # 813319/813211 - Social Advocacy & Foundations (Tier 4-5)
+    - "Nonprofit"
+    - "Non-profit"
+    - "Foundation"
+    - "Charity"
+    - "NGO"
+    - "Social Advocacy"
+    - "Grantmaking"
+
+    # 713110 - Amusement & Theme Parks (Tier 5)
     - "Amusement Park"
     - "Theme Park"
     - "Entertainment Venue"
     - "Attractions"
-    # Education & Training
-    - "Educational Services"
-    - "Training"
-    - "Vocational"
-    - "Rehabilitation Services"
-    - "Career Services"
-    # Environmental & Conservation
-    - "Environmental"
-    - "Conservation"
-    - "Wildlife"
-    - "Sustainability"
-    # Professional & Trade Organizations
-    - "Professional Organization"
-    - "Trade Association"
-    - "Business Association"
-    - "Membership Organization"
-    # Community Services
+
+    # 722513 - Limited-Service Restaurants (Tier 5)
+    - "Restaurant"
+    - "QSR"
+    - "Fast Food"
+    - "Quick Service"
+    - "Limited Service"
+    - "Fast Casual"
+    - "Franchise"
+    - "Food Service"
+
+    # 221118 - Electric Power Generation (Tier 5)
+    - "Energy"
+    - "Electric Power"
+    - "Power Generation"
+    - "Utilities"
+    - "Renewable"
+    - "Solar"
+    - "Wind Energy"
+
+    # 561311 - Employment Agencies (Tier 5)
+    - "Staffing"
+    - "Employment Agency"
+    - "Employment Placement"
+    - "Recruiting"
+    - "Temp Agency"
+
+    # 624210 - Community Food Services (Tier 5)
     - "Community Food"
     - "Food Bank"
     - "Social Services"
-    - "Social Advocacy"
     - "Community Services"
-    # Specialty Contractors
-    - "Siding Contractor"
-    - "Roofing"
-    - "Painting Contractor"
-    - "Flooring"
-    - "Specialty Trade"
 
   # STRICT FILTERING: Require territory match (not just industry)
   # Set to false to allow industry-only matches (may include international)
