@@ -27,13 +27,17 @@ jobs:
           restore-keys: |
             trigger-events-db-
 
-      - name: Run scraper
-        env:
-          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
-          APOLLO_API_KEY: ${{ secrets.APOLLO_API_KEY }}
+      - name: Install dependencies
         run: |
-          pip install requests pyyaml
+          pip install --upgrade pip
+          pip install "requests>=2.28.0" "PyYAML>=6.0"
+          pip list | grep -E "requests|PyYAML"
+
+          # Verify imports work
+          python3 -c "import requests; import yaml; print('Dependencies OK')"
+
+      - name: Setup config
+        run: |
           cp config.example.yaml config.yaml
 
           # Show database status
@@ -43,7 +47,11 @@ jobs:
             echo "No existing database - first run"
           fi
 
-          # Configure email using Python (handles special chars safely)
+      - name: Configure email
+        env:
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
+        run: |
           python3 -c "
           import yaml
           import os
@@ -66,7 +74,32 @@ jobs:
               yaml.dump(config, f, default_flow_style=False)
           "
 
+      - name: Verify module loads
+        run: |
+          python3 -c "from src.main import TriggerEventMonitor; print('Module OK')"
+
+      - name: Run scraper
+        env:
+          APOLLO_API_KEY: ${{ secrets.APOLLO_API_KEY }}
+        run: |
           python -m src.main
+
+      - name: Show database status
+        if: always()
+        run: |
+          if [ -f trigger_events.db ]; then
+            echo "Database size: $(stat -c%s trigger_events.db) bytes"
+            python3 -c "
+          import sqlite3
+          conn = sqlite3.connect('trigger_events.db')
+          cursor = conn.cursor()
+          cursor.execute('SELECT COUNT(*) FROM events')
+          print(f'Total events in database: {cursor.fetchone()[0]}')
+          cursor.execute('SELECT COUNT(*) FROM seen_urls')
+          print(f'Total URLs seen: {cursor.fetchone()[0]}')
+          conn.close()
+          "
+          fi
 
       - uses: actions/upload-artifact@v4
         if: always()
