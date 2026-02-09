@@ -585,7 +585,14 @@ sources:
       url: "https://www.globenewswire.com/RssFeed/orgclass/1/feedTitle/GlobeNewswire%20-%20News%20Releases"
       enabled: true
 
-    # EIN Presswire - disabled (404)
+    - name: "EIN Presswire"
+      url: "https://www.einpresswire.com/rss/news-releases"
+      enabled: true
+
+    - name: "EIN Presswire - Healthcare"
+      url: "https://health.einnews.com/rss/healthcare_news"
+      enabled: true
+
     # Financewire - disabled (malformed XML)
     # FINSMES - disabled (403 blocked)
 
