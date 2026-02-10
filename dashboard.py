@@ -3,15 +3,15 @@
 Sales Trigger Events Dashboard
 
 Interactive Streamlit dashboard for managing and reviewing trigger event alerts.
+Reads from Supabase for online access.
 
 Usage:
     streamlit run dashboard.py
 """
 
-import sqlite3
+import os
 import pandas as pd
 from datetime import datetime, timedelta
-from pathlib import Path
 
 import streamlit as st
 
@@ -22,9 +22,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
-# Database path
-DB_PATH = "trigger_events.db"
 
 # Lead status options
 LEAD_STATUSES = [
@@ -48,9 +45,23 @@ STATUS_COLORS = {
 }
 
 
-def get_connection():
-    """Get database connection."""
-    return sqlite3.connect(DB_PATH)
+@st.cache_resource
+def get_supabase_client():
+    """Get Supabase client."""
+    try:
+        from supabase import create_client
+    except ImportError:
+        st.error("Supabase not installed. Run: pip install supabase")
+        return None
+
+    # Try Streamlit secrets first, then environment variables
+    url = st.secrets.get("SUPABASE_URL") if hasattr(st, 'secrets') and "SUPABASE_URL" in st.secrets else os.environ.get("SUPABASE_URL")
+    key = st.secrets.get("SUPABASE_KEY") if hasattr(st, 'secrets') and "SUPABASE_KEY" in st.secrets else os.environ.get("SUPABASE_KEY")
+
+    if not url or not key:
+        return None
+
+    return create_client(url, key)
 
 
 def load_events(
@@ -59,134 +70,145 @@ def load_events(
     days: int = 30,
     search: str = None
 ) -> pd.DataFrame:
-    """Load events from database with filters."""
-    conn = get_connection()
+    """Load events from Supabase with filters."""
+    client = get_supabase_client()
+    if not client:
+        return pd.DataFrame()
 
-    query = """
-        SELECT
-            id,
-            title,
-            event_type,
-            source,
-            url,
-            published_date,
-            discovered_date,
-            company_name,
-            company_location,
-            description,
-            person_name,
-            person_title,
-            matched_keywords,
-            matched_regions,
-            relevance_score,
-            COALESCE(lead_status, 'new') as lead_status,
-            notes
-        FROM events
-        WHERE discovered_date > ?
-    """
+    try:
+        # Start query
+        query = client.table('events').select('*')
 
-    params = [(datetime.now() - timedelta(days=days)).isoformat()]
+        # Date filter
+        cutoff_date = (datetime.now() - timedelta(days=days)).isoformat()
+        query = query.gte('discovered_at', cutoff_date)
 
-    if event_types:
-        placeholders = ','.join(['?' for _ in event_types])
-        query += f" AND event_type IN ({placeholders})"
-        params.extend(event_types)
+        # Execute query
+        response = query.order('discovered_at', desc=True).limit(500).execute()
 
-    if lead_statuses:
-        placeholders = ','.join(['?' for _ in lead_statuses])
-        query += f" AND COALESCE(lead_status, 'new') IN ({placeholders})"
-        params.extend(lead_statuses)
+        if not response.data:
+            return pd.DataFrame()
 
-    if search:
-        query += " AND (title LIKE ? OR company_name LIKE ? OR description LIKE ?)"
-        search_pattern = f"%{search}%"
-        params.extend([search_pattern, search_pattern, search_pattern])
+        df = pd.DataFrame(response.data)
 
-    query += " ORDER BY published_date DESC"
+        # Apply filters in pandas (more flexible)
+        if event_types:
+            df = df[df['event_type'].isin(event_types)]
 
-    df = pd.read_sql_query(query, conn, params=params)
-    conn.close()
+        if lead_statuses:
+            df['lead_status'] = df['lead_status'].fillna('new')
+            df = df[df['lead_status'].isin(lead_statuses)]
 
-    return df
+        if search:
+            search_lower = search.lower()
+            mask = (
+                df['title'].str.lower().str.contains(search_lower, na=False) |
+                df['company_name'].str.lower().str.contains(search_lower, na=False) |
+                df['description'].str.lower().str.contains(search_lower, na=False)
+            )
+            df = df[mask]
+
+        # Rename columns to match expected format
+        df = df.rename(columns={
+            'source_url': 'url',
+            'discovered_at': 'discovered_date'
+        })
+
+        # Add missing columns with defaults
+        for col in ['source', 'company_location', 'person_name', 'person_title',
+                    'matched_keywords', 'matched_regions', 'relevance_score']:
+            if col not in df.columns:
+                df[col] = '' if col != 'relevance_score' else 50
+
+        return df
+
+    except Exception as e:
+        st.error(f"Error loading events: {e}")
+        return pd.DataFrame()
 
 
 def update_lead_status(event_id: str, status: str, notes: str = None):
-    """Update lead status for an event."""
-    conn = get_connection()
-    cursor = conn.cursor()
+    """Update lead status for an event in Supabase."""
+    client = get_supabase_client()
+    if not client:
+        return False
 
-    if notes is not None:
-        cursor.execute(
-            "UPDATE events SET lead_status = ?, notes = ? WHERE id = ?",
-            (status, notes, event_id)
-        )
-    else:
-        cursor.execute(
-            "UPDATE events SET lead_status = ? WHERE id = ?",
-            (status, event_id)
-        )
+    try:
+        data = {'lead_status': status}
+        if notes is not None:
+            data['notes'] = notes
 
-    conn.commit()
-    conn.close()
+        client.table('events').update(data).eq('id', event_id).execute()
+        return True
+    except Exception as e:
+        st.error(f"Error updating status: {e}")
+        return False
 
 
 def get_stats() -> dict:
-    """Get dashboard statistics."""
-    conn = get_connection()
-    cursor = conn.cursor()
+    """Get dashboard statistics from Supabase."""
+    client = get_supabase_client()
+    if not client:
+        return {"total": 0, "by_type": {}, "by_status": {}, "last_24h": 0, "last_7d": 0}
 
-    # Total events
-    cursor.execute("SELECT COUNT(*) FROM events")
-    total = cursor.fetchone()[0]
+    try:
+        # Get all events
+        response = client.table('events').select('event_type, lead_status, discovered_at').execute()
 
-    # Events by type
-    cursor.execute("""
-        SELECT event_type, COUNT(*)
-        FROM events
-        GROUP BY event_type
-    """)
-    by_type = dict(cursor.fetchall())
+        if not response.data:
+            return {"total": 0, "by_type": {}, "by_status": {}, "last_24h": 0, "last_7d": 0}
 
-    # Events by status
-    cursor.execute("""
-        SELECT COALESCE(lead_status, 'new'), COUNT(*)
-        FROM events
-        GROUP BY COALESCE(lead_status, 'new')
-    """)
-    by_status = dict(cursor.fetchall())
+        df = pd.DataFrame(response.data)
 
-    # Last 24 hours
-    cursor.execute("""
-        SELECT COUNT(*) FROM events
-        WHERE discovered_date > ?
-    """, ((datetime.now() - timedelta(hours=24)).isoformat(),))
-    last_24h = cursor.fetchone()[0]
+        total = len(df)
 
-    # Last 7 days
-    cursor.execute("""
-        SELECT COUNT(*) FROM events
-        WHERE discovered_date > ?
-    """, ((datetime.now() - timedelta(days=7)).isoformat(),))
-    last_7d = cursor.fetchone()[0]
+        # Events by type
+        by_type = df['event_type'].value_counts().to_dict()
 
-    conn.close()
+        # Events by status
+        df['lead_status'] = df['lead_status'].fillna('new')
+        by_status = df['lead_status'].value_counts().to_dict()
 
-    return {
-        "total": total,
-        "by_type": by_type,
-        "by_status": by_status,
-        "last_24h": last_24h,
-        "last_7d": last_7d
-    }
+        # Time-based stats
+        df['discovered_at'] = pd.to_datetime(df['discovered_at'])
+        now = datetime.now()
+
+        last_24h = len(df[df['discovered_at'] > (now - timedelta(hours=24))])
+        last_7d = len(df[df['discovered_at'] > (now - timedelta(days=7))])
+
+        return {
+            "total": total,
+            "by_type": by_type,
+            "by_status": by_status,
+            "last_24h": last_24h,
+            "last_7d": last_7d
+        }
+
+    except Exception as e:
+        st.error(f"Error getting stats: {e}")
+        return {"total": 0, "by_type": {}, "by_status": {}, "last_24h": 0, "last_7d": 0}
 
 
 def main():
     st.title("🎯 Sales Trigger Events Dashboard")
 
-    # Check if database exists
-    if not Path(DB_PATH).exists():
-        st.warning(f"Database not found at {DB_PATH}")
-        st.info("Run the scraper first to generate events: `python -m src.main`")
+    # Check Supabase connection
+    client = get_supabase_client()
+    if not client:
+        st.warning("Supabase not configured")
+        st.info("""
+        **To connect to Supabase:**
+
+        1. Set environment variables:
+           - `SUPABASE_URL` - Your Supabase project URL
+           - `SUPABASE_KEY` - Your Supabase anon key
+
+        2. Or add to `.streamlit/secrets.toml`:
+           ```
+           SUPABASE_URL = "https://your-project.supabase.co"
+           SUPABASE_KEY = "your-anon-key"
+           ```
+        """)
         return
 
     # Sidebar filters
@@ -211,78 +233,6 @@ def main():
 
     # Search
     search = st.sidebar.text_input("Search", placeholder="Company, title, or keyword...")
-
-    # CSV Upload section
-    st.sidebar.divider()
-    st.sidebar.header("Import Leads")
-    uploaded_file = st.sidebar.file_uploader("Upload CSV", type=['csv'])
-
-    if uploaded_file is not None:
-        try:
-            import_df = pd.read_csv(uploaded_file)
-            st.sidebar.success(f"Loaded {len(import_df)} rows")
-
-            # Show column mapping
-            st.sidebar.write("**Map columns:**")
-            cols = import_df.columns.tolist()
-
-            title_col = st.sidebar.selectbox("Title/Event", cols, index=0)
-            company_col = st.sidebar.selectbox("Company Name", cols, index=min(1, len(cols)-1))
-
-            # Optional columns
-            url_col = st.sidebar.selectbox("URL (optional)", ["None"] + cols)
-            location_col = st.sidebar.selectbox("Location (optional)", ["None"] + cols)
-            desc_col = st.sidebar.selectbox("Description (optional)", ["None"] + cols)
-            event_type_col = st.sidebar.selectbox("Event Type (optional)", ["None"] + cols)
-
-            if st.sidebar.button("Import Leads"):
-                conn = get_connection()
-                cursor = conn.cursor()
-                imported = 0
-
-                for _, row in import_df.iterrows():
-                    title = str(row[title_col]) if pd.notna(row[title_col]) else ""
-                    company = str(row[company_col]) if pd.notna(row[company_col]) else ""
-
-                    if not title and not company:
-                        continue
-
-                    # Generate ID and URL
-                    import hashlib
-                    url = str(row[url_col]) if url_col != "None" and pd.notna(row.get(url_col)) else f"https://import.local/{hashlib.md5(title.encode()).hexdigest()[:8]}"
-                    lead_id = hashlib.md5(f"{url}:{title}".encode()).hexdigest()
-
-                    # Get optional fields
-                    location = str(row[location_col]) if location_col != "None" and pd.notna(row.get(location_col)) else None
-                    description = str(row[desc_col]) if desc_col != "None" and pd.notna(row.get(desc_col)) else None
-                    event_type = str(row[event_type_col]).lower() if event_type_col != "None" and pd.notna(row.get(event_type_col)) else "stable_target"
-
-                    # Normalize event type
-                    if event_type not in ["cfo_hire", "executive_hire", "merger_acquisition", "funding", "stable_target", "other"]:
-                        event_type = "stable_target"
-
-                    now = datetime.now().isoformat()
-
-                    try:
-                        cursor.execute('''
-                            INSERT OR IGNORE INTO events (
-                                id, title, event_type, source, url, published_date, discovered_date,
-                                company_name, company_location, description, lead_status
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        ''', (lead_id, title or company, event_type, "csv_import", url, now, now,
-                              company, location, description, "new"))
-                        if cursor.rowcount > 0:
-                            imported += 1
-                    except Exception as e:
-                        pass
-
-                conn.commit()
-                conn.close()
-                st.sidebar.success(f"Imported {imported} leads!")
-                st.rerun()
-
-        except Exception as e:
-            st.sidebar.error(f"Error reading CSV: {e}")
 
     # Stats section
     stats = get_stats()
@@ -320,57 +270,60 @@ def main():
     with tab1:
         # Card view for detailed review
         for idx, row in df.iterrows():
-            with st.expander(
-                f"{STATUS_COLORS.get(row['lead_status'], '🔵')} "
-                f"[{row['event_type'].upper()}] {row['title'][:80]}..."
-            ):
+            status = row.get('lead_status', 'new') or 'new'
+            title = str(row.get('title', ''))[:80]
+            event_type = str(row.get('event_type', 'other')).upper()
+
+            with st.expander(f"{STATUS_COLORS.get(status, '🔵')} [{event_type}] {title}..."):
                 col1, col2 = st.columns([3, 1])
 
                 with col1:
-                    st.markdown(f"**Company:** {row['company_name'] or 'Unknown'}")
-                    st.markdown(f"**Source:** {row['source']}")
-                    st.markdown(f"**Published:** {row['published_date']}")
-                    st.markdown(f"**Relevance:** {row['relevance_score']:.0f}%")
+                    st.markdown(f"**Company:** {row.get('company_name') or 'Unknown'}")
+                    st.markdown(f"**Source:** {row.get('source', 'N/A')}")
+                    st.markdown(f"**Published:** {row.get('published_date', 'N/A')}")
 
-                    if row['description']:
+                    relevance = row.get('relevance_score', 50)
+                    if relevance:
+                        st.markdown(f"**Relevance:** {relevance:.0f}%")
+
+                    desc = row.get('description', '')
+                    if desc:
                         st.markdown("**Description:**")
-                        st.text(row['description'][:300] + "..." if len(str(row['description'])) > 300 else row['description'])
+                        st.text(desc[:300] + "..." if len(str(desc)) > 300 else desc)
 
-                    st.markdown(f"[🔗 View Article]({row['url']})")
+                    url = row.get('url', '')
+                    if url:
+                        st.markdown(f"[🔗 View Article]({url})")
 
                 with col2:
                     # Status update
-                    current_status = row['lead_status'] or 'new'
+                    current_status = status
                     new_status = st.selectbox(
                         "Status",
                         LEAD_STATUSES,
-                        index=LEAD_STATUSES.index(current_status),
+                        index=LEAD_STATUSES.index(current_status) if current_status in LEAD_STATUSES else 0,
                         key=f"status_{row['id']}"
                     )
 
                     notes = st.text_area(
                         "Notes",
-                        value=row['notes'] or "",
+                        value=row.get('notes') or "",
                         key=f"notes_{row['id']}",
                         height=100
                     )
 
                     if st.button("Save", key=f"save_{row['id']}"):
-                        update_lead_status(row['id'], new_status, notes)
-                        st.success("Saved!")
-                        st.rerun()
+                        if update_lead_status(row['id'], new_status, notes):
+                            st.success("Saved!")
+                            st.rerun()
 
     with tab2:
         # Table view for quick scanning
-        display_df = df[[
-            'event_type', 'company_name', 'title', 'published_date',
-            'relevance_score', 'lead_status', 'source'
-        ]].copy()
+        display_cols = ['event_type', 'company_name', 'title', 'published_date', 'lead_status']
+        available_cols = [c for c in display_cols if c in df.columns]
 
-        display_df.columns = [
-            'Type', 'Company', 'Title', 'Published',
-            'Relevance', 'Status', 'Source'
-        ]
+        display_df = df[available_cols].copy()
+        display_df.columns = [c.replace('_', ' ').title() for c in available_cols]
 
         st.dataframe(
             display_df,
@@ -393,24 +346,31 @@ def main():
 
         with col1:
             st.subheader("Events by Type")
-            type_counts = df['event_type'].value_counts()
-            st.bar_chart(type_counts)
+            if 'event_type' in df.columns:
+                type_counts = df['event_type'].value_counts()
+                st.bar_chart(type_counts)
 
         with col2:
             st.subheader("Events by Status")
-            status_counts = df['lead_status'].value_counts()
-            st.bar_chart(status_counts)
+            if 'lead_status' in df.columns:
+                status_counts = df['lead_status'].value_counts()
+                st.bar_chart(status_counts)
 
         # Events over time
         st.subheader("Events Over Time")
-        df['date'] = pd.to_datetime(df['published_date']).dt.date
-        daily_counts = df.groupby('date').size()
-        st.line_chart(daily_counts)
+        if 'published_date' in df.columns:
+            try:
+                df['date'] = pd.to_datetime(df['published_date']).dt.date
+                daily_counts = df.groupby('date').size()
+                st.line_chart(daily_counts)
+            except:
+                st.info("Unable to parse dates for timeline")
 
         # Top companies
         st.subheader("Top Companies")
-        company_counts = df['company_name'].value_counts().head(10)
-        st.bar_chart(company_counts)
+        if 'company_name' in df.columns:
+            company_counts = df['company_name'].value_counts().head(10)
+            st.bar_chart(company_counts)
 
     # Bulk actions
     st.sidebar.divider()
@@ -422,19 +382,17 @@ def main():
     )
 
     if bulk_status and st.sidebar.button("Apply to All"):
-        conn = get_connection()
-        cursor = conn.cursor()
-
-        for event_id in df['id'].tolist():
-            cursor.execute(
-                "UPDATE events SET lead_status = ? WHERE id = ?",
-                (bulk_status, event_id)
-            )
-
-        conn.commit()
-        conn.close()
-        st.sidebar.success(f"Updated {len(df)} events!")
-        st.rerun()
+        client = get_supabase_client()
+        if client:
+            updated = 0
+            for event_id in df['id'].tolist():
+                try:
+                    client.table('events').update({'lead_status': bulk_status}).eq('id', event_id).execute()
+                    updated += 1
+                except:
+                    pass
+            st.sidebar.success(f"Updated {updated} events!")
+            st.rerun()
 
 
 if __name__ == "__main__":
