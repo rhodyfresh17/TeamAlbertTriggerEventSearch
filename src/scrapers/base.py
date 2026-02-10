@@ -342,3 +342,127 @@ class BaseScraper(ABC):
     def delay_request(self):
         """Add delay between requests to be respectful."""
         time.sleep(self.request_delay)
+
+    def detect_stable_target_potential(self, text: str) -> tuple[bool, List[str]]:
+        """
+        Detect if an article mentions a company that fits our criteria
+        even without a specific trigger event. Returns (is_potential, reasons).
+
+        Looks for positive company signals like:
+        - Growth, expansion, new locations
+        - Awards, recognition
+        - New products/services/contracts
+        - Partnership announcements
+        - Leadership mentions
+        - Industry feature articles
+        """
+        text_lower = text.lower()
+        reasons = []
+
+        # Positive company signals that indicate a company worth tracking
+        growth_signals = [
+            ('expands', 'Company expansion mentioned'),
+            ('expansion', 'Company expansion mentioned'),
+            ('growth', 'Company growth mentioned'),
+            ('growing', 'Company growth mentioned'),
+            ('new location', 'New location/facility announced'),
+            ('new facility', 'New facility announced'),
+            ('opens new', 'New opening announced'),
+            ('grand opening', 'New opening announced'),
+            ('relocating', 'Company relocation mentioned'),
+            ('headquarters', 'Headquarters mentioned'),
+        ]
+
+        award_signals = [
+            ('award', 'Company received award/recognition'),
+            ('winner', 'Company received award/recognition'),
+            ('recognized', 'Company recognized'),
+            ('named top', 'Company named as top performer'),
+            ('best of', 'Company named as top performer'),
+            ('excellence', 'Company excellence recognized'),
+            ('certification', 'Company certification mentioned'),
+            ('certified', 'Company certification mentioned'),
+        ]
+
+        business_signals = [
+            ('new contract', 'New contract announced'),
+            ('wins contract', 'Contract win announced'),
+            ('awarded contract', 'Contract award announced'),
+            ('partnership', 'Partnership announced'),
+            ('partners with', 'Partnership announced'),
+            ('strategic alliance', 'Strategic alliance announced'),
+            ('collaboration', 'Business collaboration mentioned'),
+            ('new product', 'New product launched'),
+            ('launches', 'New launch announced'),
+            ('introduces', 'New introduction announced'),
+            ('unveils', 'New unveiling announced'),
+            ('new service', 'New service announced'),
+        ]
+
+        leadership_signals = [
+            ('ceo', 'CEO/leadership mentioned'),
+            ('chief executive', 'Leadership mentioned'),
+            ('founder', 'Founder mentioned'),
+            ('president', 'President mentioned'),
+            ('leadership', 'Leadership mentioned'),
+            ('executive team', 'Executive team mentioned'),
+        ]
+
+        industry_signals = [
+            ('industry leader', 'Company positioned as industry leader'),
+            ('market leader', 'Company positioned as market leader'),
+            ('leading provider', 'Company positioned as leading provider'),
+            ('top provider', 'Company positioned as top provider'),
+            ('fastest growing', 'Fast growth company'),
+            ('inc. 5000', 'Inc. 5000 company'),
+            ('inc 5000', 'Inc. 5000 company'),
+        ]
+
+        all_signals = growth_signals + award_signals + business_signals + leadership_signals + industry_signals
+
+        for keyword, reason in all_signals:
+            if keyword in text_lower and reason not in reasons:
+                reasons.append(reason)
+
+        # Must have at least one positive signal
+        if not reasons:
+            return False, []
+
+        return True, reasons
+
+    def generate_stable_target_reasoning(
+        self,
+        company_name: Optional[str],
+        matched_regions: List[str],
+        matched_industries: List[str],
+        positive_signals: List[str],
+        is_target_size: bool
+    ) -> str:
+        """Generate a reasoning explanation for why this company is recommended."""
+        parts = []
+
+        if company_name:
+            parts.append(f"Company: {company_name}")
+
+        if matched_regions:
+            parts.append(f"Territory match: {', '.join(matched_regions[:3])}")
+
+        if matched_industries:
+            parts.append(f"Industry match: {', '.join(matched_industries[:3])}")
+
+        if is_target_size:
+            parts.append("Appears to be mid-market/private company")
+
+        if positive_signals:
+            parts.append(f"Signals: {'; '.join(positive_signals[:4])}")
+
+        return " | ".join(parts) if parts else "Matches territory and industry criteria"
+
+    def get_matched_industries(self, text: str) -> List[str]:
+        """Get list of matched industry keywords."""
+        text_lower = text.lower()
+        matched = []
+        for industry in self.industries:
+            if industry in text_lower:
+                matched.append(industry)
+        return matched[:5]  # Limit to top 5

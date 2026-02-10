@@ -114,10 +114,24 @@ class RSSScraper(BaseScraper):
         # Combine title and summary for analysis
         full_text = f"{title} {summary}"
 
-        # Detect event type
+        # Detect event type (trigger events like M&A, CFO hire, funding)
         event_type = self.detect_event_type(full_text)
+
+        # Track if this is a stable target recommendation
+        is_stable_target = False
+        stable_target_signals = []
+        recommendation_reasoning = None
+
+        # If no trigger event, check if this could be a "stable target" recommendation
         if not event_type:
-            return None
+            # Check for stable target potential (companies that match criteria without trigger)
+            is_potential, signals = self.detect_stable_target_potential(full_text)
+            if is_potential:
+                is_stable_target = True
+                stable_target_signals = signals
+                event_type = EventType.STABLE_TARGET
+            else:
+                return None
 
         # Check territory match
         in_territory, matched_regions = self.matches_territory(full_text)
@@ -133,6 +147,7 @@ class RSSScraper(BaseScraper):
 
         # Check industry match
         matches_target_industry, matches_excluded = self.matches_industry(full_text)
+        matched_industries = self.get_matched_industries(full_text)
 
         # Skip if matches excluded industry (but allow if dateline is in territory)
         if matches_excluded and not dateline_in_territory:
@@ -153,11 +168,37 @@ class RSSScraper(BaseScraper):
         is_pe_backed = self._is_pe_backed(full_text)
         is_ma_event = event_type == EventType.MERGER_ACQUISITION
 
-        # STRICT FILTERING: Require territory match OR target company
+        # STABLE TARGETS: Require BOTH territory AND industry match (stricter filtering)
+        if is_stable_target:
+            territory_match = in_territory or dateline_in_territory or matches_company
+            industry_match = matches_target_industry
+
+            # Stable targets must match both territory AND industry (or be a target company)
+            if not (territory_match and industry_match) and not matches_company:
+                return None
+
+            # Must be able to identify a company name for stable targets
+            extracted_company = company_name or self.extract_company_name(full_text)
+            if not extracted_company:
+                return None
+
+            # Check if it appears to be the right company size
+            is_target_size = self.is_target_company_size(full_text)
+
+            # Generate recommendation reasoning
+            recommendation_reasoning = self.generate_stable_target_reasoning(
+                extracted_company,
+                matched_regions,
+                matched_industries,
+                stable_target_signals,
+                is_target_size
+            )
+
+        # TRIGGER EVENTS: Require territory match OR target company
         # Exceptions:
         # 1. PE-backed acquisitions don't require territory match
         # 2. Dateline in territory = include regardless of industry
-        if self.require_territory_match:
+        elif self.require_territory_match:
             if dateline_in_territory:
                 # Dateline is in our territory - include regardless of industry
                 pass
@@ -182,15 +223,25 @@ class RSSScraper(BaseScraper):
         # Parse published date
         published = self._parse_date(item)
 
-        # Extract additional info
-        extracted_company = company_name or self.extract_company_name(full_text)
+        # Extract additional info (only for non-stable targets, already done above for stable)
+        if not is_stable_target:
+            extracted_company = company_name or self.extract_company_name(full_text)
         person_name, person_title = self.extract_person_info(full_text)
 
         # Determine source
         source = self._determine_source(feed_name)
 
-        # Get matched keywords
-        matched_keywords = self._get_matched_keywords(full_text, event_type)
+        # Get matched keywords (for stable targets, use the signals)
+        if is_stable_target:
+            matched_keywords = stable_target_signals[:5]
+        else:
+            matched_keywords = self._get_matched_keywords(full_text, event_type)
+
+        # Build description with reasoning for stable targets
+        if is_stable_target and recommendation_reasoning:
+            description = f"📋 RECOMMENDATION: {recommendation_reasoning}\n\n{summary[:400] if summary else ''}"
+        else:
+            description = summary[:500] if summary else None
 
         return TriggerEvent(
             id=self.generate_event_id(link, title),
@@ -201,7 +252,7 @@ class RSSScraper(BaseScraper):
             url=link,
             published_date=published,
             company_name=extracted_company,
-            description=summary[:500] if summary else None,
+            description=description,
             person_name=person_name,
             person_title=person_title,
             matched_keywords=matched_keywords,
