@@ -101,6 +101,19 @@ jobs:
           "
           fi
 
+      - name: Sync to Google Sheets
+        if: success()
+        env:
+          GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+        run: |
+          if [ -n "$GOOGLE_SHEET_ID" ] && [ -n "$GOOGLE_SHEETS_CREDENTIALS" ]; then
+            pip install google-api-python-client google-auth
+            python3 sheets_sync.py --spreadsheet-id "$GOOGLE_SHEET_ID"
+          else
+            echo "Google Sheets not configured - skipping sync"
+          fi
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
