@@ -35,9 +35,9 @@ def get_events_from_db(db_path='trigger_events.db'):
 
     cursor.execute('''
         SELECT id, title, company_name, event_type, description,
-               source_url, published_date, discovered_at, lead_status, notes
+               url, published_date, discovered_date, lead_status, notes
         FROM events
-        ORDER BY discovered_at DESC
+        ORDER BY discovered_date DESC
     ''')
 
     events = [dict(row) for row in cursor.fetchall()]
@@ -69,9 +69,9 @@ def sync_to_supabase():
                 'company_name': event.get('company_name', ''),
                 'event_type': event.get('event_type', ''),
                 'description': (event.get('description', '') or '')[:2000],
-                'source_url': event.get('source_url', ''),
+                'source_url': event.get('url', ''),
                 'published_date': event.get('published_date', ''),
-                'discovered_at': event.get('discovered_at', datetime.now().isoformat()),
+                'discovered_at': event.get('discovered_date', datetime.now().isoformat()),
                 'lead_status': event.get('lead_status', ''),
                 'notes': event.get('notes', '')
             }
