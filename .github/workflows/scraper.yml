@@ -104,12 +104,29 @@ jobs:
       - name: Sync to Google Sheets
         if: success()
         env:
-          GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
-          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          GOOGLE_SCRIPT_URL: ${{ secrets.GOOGLE_SCRIPT_URL }}
         run: |
-          if [ -n "$GOOGLE_SHEET_ID" ] && [ -n "$GOOGLE_SHEETS_CREDENTIALS" ]; then
-            pip install google-api-python-client google-auth
-            python3 sheets_sync.py --spreadsheet-id "$GOOGLE_SHEET_ID"
+          if [ -n "$GOOGLE_SCRIPT_URL" ]; then
+            python3 -c "
+          import sqlite3
+          import json
+          import urllib.request
+
+          conn = sqlite3.connect('trigger_events.db')
+          conn.row_factory = sqlite3.Row
+          cursor = conn.cursor()
+          cursor.execute('SELECT * FROM events ORDER BY discovered_at DESC')
+          events = [dict(row) for row in cursor.fetchall()]
+          conn.close()
+
+          if events:
+              data = json.dumps({'events': events}).encode('utf-8')
+              req = urllib.request.Request('$GOOGLE_SCRIPT_URL', data=data, headers={'Content-Type': 'application/json'})
+              resp = urllib.request.urlopen(req)
+              print(f'Synced {len(events)} events to Google Sheets')
+          else:
+              print('No events to sync')
+          "
           else
             echo "Google Sheets not configured - skipping sync"
           fi
