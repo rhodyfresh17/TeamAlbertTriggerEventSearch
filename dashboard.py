@@ -23,6 +23,46 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Event type configurations with colors
+EVENT_TYPES = {
+    "merger_acquisition": {
+        "label": "Mergers & Acquisitions",
+        "color": "#1E90FF",  # Blue
+        "icon": "🔵",
+        "bg_color": "#E6F3FF"
+    },
+    "cfo_hire": {
+        "label": "CFO Hires",
+        "color": "#28A745",  # Green
+        "icon": "🟢",
+        "bg_color": "#E8F5E9"
+    },
+    "funding": {
+        "label": "PE/VC Funding",
+        "color": "#FFD700",  # Gold
+        "icon": "🟡",
+        "bg_color": "#FFF8E1"
+    },
+    "stable_target": {
+        "label": "Stable Targets",
+        "color": "#FF8C00",  # Orange
+        "icon": "🟠",
+        "bg_color": "#FFF3E0"
+    },
+    "executive_hire": {
+        "label": "Executive Hires",
+        "color": "#9370DB",  # Purple
+        "icon": "🟣",
+        "bg_color": "#F3E5F5"
+    },
+    "other": {
+        "label": "Other Events",
+        "color": "#6C757D",  # Gray
+        "icon": "⚪",
+        "bg_color": "#F5F5F5"
+    }
+}
+
 # Lead status options
 LEAD_STATUSES = [
     "new",
@@ -34,14 +74,14 @@ LEAD_STATUSES = [
     "closed_lost"
 ]
 
-STATUS_COLORS = {
-    "new": "🔵",
-    "reviewing": "🟡",
-    "contacted": "🟠",
-    "interested": "🟢",
-    "not_relevant": "⚫",
+STATUS_ICONS = {
+    "new": "🆕",
+    "reviewing": "👀",
+    "contacted": "📞",
+    "interested": "⭐",
+    "not_relevant": "❌",
     "closed_won": "✅",
-    "closed_lost": "❌"
+    "closed_lost": "🚫"
 }
 
 
@@ -54,7 +94,6 @@ def get_supabase_client():
         st.error("Supabase not installed. Run: pip install supabase")
         return None
 
-    # Try Streamlit secrets first, then environment variables
     url = st.secrets.get("SUPABASE_URL") if hasattr(st, 'secrets') and "SUPABASE_URL" in st.secrets else os.environ.get("SUPABASE_URL")
     key = st.secrets.get("SUPABASE_KEY") if hasattr(st, 'secrets') and "SUPABASE_KEY" in st.secrets else os.environ.get("SUPABASE_KEY")
 
@@ -64,40 +103,22 @@ def get_supabase_client():
     return create_client(url, key)
 
 
-def load_events(
-    event_types: list = None,
-    lead_statuses: list = None,
-    days: int = 30,
-    search: str = None
-) -> pd.DataFrame:
-    """Load events from Supabase with filters."""
+def load_events(days: int = 30, search: str = None) -> pd.DataFrame:
+    """Load all events from Supabase."""
     client = get_supabase_client()
     if not client:
         return pd.DataFrame()
 
     try:
-        # Start query
         query = client.table('events').select('*')
-
-        # Date filter
         cutoff_date = (datetime.now() - timedelta(days=days)).isoformat()
         query = query.gte('discovered_at', cutoff_date)
-
-        # Execute query
-        response = query.order('discovered_at', desc=True).limit(500).execute()
+        response = query.order('discovered_at', desc=True).limit(1000).execute()
 
         if not response.data:
             return pd.DataFrame()
 
         df = pd.DataFrame(response.data)
-
-        # Apply filters in pandas (more flexible)
-        if event_types:
-            df = df[df['event_type'].isin(event_types)]
-
-        if lead_statuses:
-            df['lead_status'] = df['lead_status'].fillna('new')
-            df = df[df['lead_status'].isin(lead_statuses)]
 
         if search:
             search_lower = search.lower()
@@ -108,17 +129,12 @@ def load_events(
             )
             df = df[mask]
 
-        # Rename columns to match expected format
         df = df.rename(columns={
             'source_url': 'url',
             'discovered_at': 'discovered_date'
         })
 
-        # Add missing columns with defaults
-        for col in ['source', 'company_location', 'person_name', 'person_title',
-                    'matched_keywords', 'matched_regions', 'relevance_score']:
-            if col not in df.columns:
-                df[col] = '' if col != 'relevance_score' else 50
+        df['lead_status'] = df['lead_status'].fillna('new')
 
         return df
 
@@ -145,52 +161,120 @@ def update_lead_status(event_id: str, status: str, notes: str = None):
         return False
 
 
-def get_stats() -> dict:
-    """Get dashboard statistics from Supabase."""
-    client = get_supabase_client()
-    if not client:
-        return {"total": 0, "by_type": {}, "by_status": {}, "last_24h": 0, "last_7d": 0}
+def render_event_card(row, event_config):
+    """Render a single event card with color styling."""
+    status = row.get('lead_status', 'new') or 'new'
+    title = str(row.get('title', ''))[:100]
+    company = row.get('company_name') or 'Unknown Company'
 
-    try:
-        # Get all events
-        response = client.table('events').select('event_type, lead_status, discovered_at').execute()
+    # Card with colored left border
+    st.markdown(f"""
+        <div style="
+            border-left: 4px solid {event_config['color']};
+            background-color: {event_config['bg_color']};
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 10px;
+        ">
+            <div style="font-weight: bold; font-size: 16px; color: #333;">
+                {STATUS_ICONS.get(status, '🔵')} {title}
+            </div>
+            <div style="color: #666; margin-top: 5px;">
+                🏢 {company}
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
 
-        if not response.data:
-            return {"total": 0, "by_type": {}, "by_status": {}, "last_24h": 0, "last_7d": 0}
+    with st.expander("View Details & Update Status"):
+        col1, col2 = st.columns([3, 1])
 
-        df = pd.DataFrame(response.data)
+        with col1:
+            st.markdown(f"**Company:** {company}")
 
-        total = len(df)
+            published = row.get('published_date', 'N/A')
+            if published and published != 'N/A':
+                st.markdown(f"**Published:** {published}")
 
-        # Events by type
-        by_type = df['event_type'].value_counts().to_dict()
+            desc = row.get('description', '')
+            if desc:
+                st.markdown("**Description:**")
+                st.text(str(desc)[:400] + "..." if len(str(desc)) > 400 else str(desc))
 
-        # Events by status
-        df['lead_status'] = df['lead_status'].fillna('new')
-        by_status = df['lead_status'].value_counts().to_dict()
+            url = row.get('url', '')
+            if url:
+                st.markdown(f"[🔗 View Source Article]({url})")
 
-        # Time-based stats
-        df['discovered_at'] = pd.to_datetime(df['discovered_at'])
-        now = datetime.now()
+        with col2:
+            current_status = status
+            new_status = st.selectbox(
+                "Status",
+                LEAD_STATUSES,
+                index=LEAD_STATUSES.index(current_status) if current_status in LEAD_STATUSES else 0,
+                key=f"status_{row['id']}"
+            )
 
-        last_24h = len(df[df['discovered_at'] > (now - timedelta(hours=24))])
-        last_7d = len(df[df['discovered_at'] > (now - timedelta(days=7))])
+            notes = st.text_area(
+                "Notes",
+                value=row.get('notes') or "",
+                key=f"notes_{row['id']}",
+                height=80
+            )
 
-        return {
-            "total": total,
-            "by_type": by_type,
-            "by_status": by_status,
-            "last_24h": last_24h,
-            "last_7d": last_7d
-        }
+            if st.button("💾 Save", key=f"save_{row['id']}"):
+                if update_lead_status(row['id'], new_status, notes):
+                    st.success("Saved!")
+                    st.rerun()
 
-    except Exception as e:
-        st.error(f"Error getting stats: {e}")
-        return {"total": 0, "by_type": {}, "by_status": {}, "last_24h": 0, "last_7d": 0}
+
+def render_event_section(df, event_type, event_config, lead_filter):
+    """Render a section for a specific event type."""
+    # Filter by event type
+    type_df = df[df['event_type'] == event_type]
+
+    # Apply lead status filter
+    if lead_filter:
+        type_df = type_df[type_df['lead_status'].isin(lead_filter)]
+
+    # Header with color
+    st.markdown(f"""
+        <h2 style="
+            color: {event_config['color']};
+            border-bottom: 3px solid {event_config['color']};
+            padding-bottom: 10px;
+            margin-top: 20px;
+        ">
+            {event_config['icon']} {event_config['label']} ({len(type_df)})
+        </h2>
+    """, unsafe_allow_html=True)
+
+    if type_df.empty:
+        st.info(f"No {event_config['label'].lower()} found matching your filters.")
+        return
+
+    # Render each event card
+    for idx, row in type_df.iterrows():
+        render_event_card(row, event_config)
+
+
+def get_stats(df) -> dict:
+    """Get dashboard statistics."""
+    if df.empty:
+        return {"total": 0, "by_type": {}, "new": 0}
+
+    return {
+        "total": len(df),
+        "by_type": df['event_type'].value_counts().to_dict(),
+        "new": len(df[df['lead_status'] == 'new'])
+    }
 
 
 def main():
-    st.title("🎯 Sales Trigger Events Dashboard")
+    # Header
+    st.markdown("""
+        <h1 style="text-align: center; color: #333;">
+            🎯 Sales Trigger Events Dashboard
+        </h1>
+    """, unsafe_allow_html=True)
 
     # Check Supabase connection
     client = get_supabase_client()
@@ -199,131 +283,96 @@ def main():
         st.info("""
         **To connect to Supabase:**
 
-        1. Set environment variables:
-           - `SUPABASE_URL` - Your Supabase project URL
-           - `SUPABASE_KEY` - Your Supabase anon key
-
-        2. Or add to `.streamlit/secrets.toml`:
-           ```
-           SUPABASE_URL = "https://your-project.supabase.co"
-           SUPABASE_KEY = "your-anon-key"
-           ```
+        Add to Streamlit secrets:
+        ```
+        SUPABASE_URL = "https://your-project.supabase.co"
+        SUPABASE_KEY = "your-anon-key"
+        ```
         """)
         return
 
     # Sidebar filters
-    st.sidebar.header("Filters")
+    st.sidebar.header("🔍 Filters")
 
-    # Date range
     days = st.sidebar.slider("Days to show", 1, 90, 30)
 
-    # Event type filter
-    event_types = st.sidebar.multiselect(
-        "Event Types",
-        ["cfo_hire", "executive_hire", "merger_acquisition", "funding", "stable_target", "other"],
-        default=["cfo_hire", "executive_hire", "merger_acquisition", "funding", "stable_target"]
-    )
-
-    # Lead status filter
-    lead_statuses = st.sidebar.multiselect(
+    lead_filter = st.sidebar.multiselect(
         "Lead Status",
         LEAD_STATUSES,
         default=["new", "reviewing", "contacted", "interested"]
     )
 
-    # Search
-    search = st.sidebar.text_input("Search", placeholder="Company, title, or keyword...")
+    search = st.sidebar.text_input("🔎 Search", placeholder="Company or keyword...")
 
-    # Stats section
-    stats = get_stats()
+    # Load all events
+    df = load_events(days=days, search=search if search else None)
+
+    if df.empty:
+        st.info("No events found. Run the scraper to populate data.")
+        return
+
+    # Stats row
+    stats = get_stats(df)
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("Total Events", stats["total"])
+        st.metric("📊 Total Events", stats["total"])
     with col2:
-        st.metric("Last 24 Hours", stats["last_24h"])
+        st.metric("🆕 New Leads", stats["new"])
     with col3:
-        st.metric("Last 7 Days", stats["last_7d"])
+        ma_count = stats["by_type"].get("merger_acquisition", 0)
+        st.metric("🔵 M&A", ma_count)
     with col4:
-        new_count = stats["by_status"].get("new", 0)
-        st.metric("New Leads", new_count)
+        cfo_count = stats["by_type"].get("cfo_hire", 0)
+        st.metric("🟢 CFO Hires", cfo_count)
 
     st.divider()
 
-    # Load events
-    df = load_events(
-        event_types=event_types if event_types else None,
-        lead_statuses=lead_statuses if lead_statuses else None,
-        days=days,
-        search=search if search else None
-    )
+    # Create tabs for each event type
+    tab_ma, tab_cfo, tab_funding, tab_stable, tab_exec, tab_other, tab_all = st.tabs([
+        "🔵 M&A",
+        "🟢 CFO Hires",
+        "🟡 PE/VC Funding",
+        "🟠 Stable Targets",
+        "🟣 Exec Hires",
+        "⚪ Other",
+        "📋 All Events"
+    ])
 
-    if df.empty:
-        st.info("No events found matching your filters.")
-        return
+    with tab_ma:
+        render_event_section(df, "merger_acquisition", EVENT_TYPES["merger_acquisition"], lead_filter)
 
-    st.subheader(f"📋 Events ({len(df)} results)")
+    with tab_cfo:
+        render_event_section(df, "cfo_hire", EVENT_TYPES["cfo_hire"], lead_filter)
 
-    # Tabs for different views
-    tab1, tab2, tab3 = st.tabs(["Card View", "Table View", "Analytics"])
+    with tab_funding:
+        render_event_section(df, "funding", EVENT_TYPES["funding"], lead_filter)
 
-    with tab1:
-        # Card view for detailed review
-        for idx, row in df.iterrows():
-            status = row.get('lead_status', 'new') or 'new'
-            title = str(row.get('title', ''))[:80]
-            event_type = str(row.get('event_type', 'other')).upper()
+    with tab_stable:
+        render_event_section(df, "stable_target", EVENT_TYPES["stable_target"], lead_filter)
 
-            with st.expander(f"{STATUS_COLORS.get(status, '🔵')} [{event_type}] {title}..."):
-                col1, col2 = st.columns([3, 1])
+    with tab_exec:
+        render_event_section(df, "executive_hire", EVENT_TYPES["executive_hire"], lead_filter)
 
-                with col1:
-                    st.markdown(f"**Company:** {row.get('company_name') or 'Unknown'}")
-                    st.markdown(f"**Source:** {row.get('source', 'N/A')}")
-                    st.markdown(f"**Published:** {row.get('published_date', 'N/A')}")
+    with tab_other:
+        render_event_section(df, "other", EVENT_TYPES["other"], lead_filter)
 
-                    relevance = row.get('relevance_score', 50)
-                    if relevance:
-                        st.markdown(f"**Relevance:** {relevance:.0f}%")
+    with tab_all:
+        st.markdown("""
+            <h2 style="border-bottom: 2px solid #333; padding-bottom: 10px;">
+                📋 All Events
+            </h2>
+        """, unsafe_allow_html=True)
 
-                    desc = row.get('description', '')
-                    if desc:
-                        st.markdown("**Description:**")
-                        st.text(desc[:300] + "..." if len(str(desc)) > 300 else desc)
+        # Apply lead filter
+        filtered_df = df[df['lead_status'].isin(lead_filter)] if lead_filter else df
 
-                    url = row.get('url', '')
-                    if url:
-                        st.markdown(f"[🔗 View Article]({url})")
-
-                with col2:
-                    # Status update
-                    current_status = status
-                    new_status = st.selectbox(
-                        "Status",
-                        LEAD_STATUSES,
-                        index=LEAD_STATUSES.index(current_status) if current_status in LEAD_STATUSES else 0,
-                        key=f"status_{row['id']}"
-                    )
-
-                    notes = st.text_area(
-                        "Notes",
-                        value=row.get('notes') or "",
-                        key=f"notes_{row['id']}",
-                        height=100
-                    )
-
-                    if st.button("Save", key=f"save_{row['id']}"):
-                        if update_lead_status(row['id'], new_status, notes):
-                            st.success("Saved!")
-                            st.rerun()
-
-    with tab2:
-        # Table view for quick scanning
+        # Table view
         display_cols = ['event_type', 'company_name', 'title', 'published_date', 'lead_status']
-        available_cols = [c for c in display_cols if c in df.columns]
+        available_cols = [c for c in display_cols if c in filtered_df.columns]
 
-        display_df = df[available_cols].copy()
-        display_df.columns = [c.replace('_', ' ').title() for c in available_cols]
+        display_df = filtered_df[available_cols].copy()
+        display_df.columns = ['Type', 'Company', 'Title', 'Published', 'Status']
 
         st.dataframe(
             display_df,
@@ -331,61 +380,30 @@ def main():
             hide_index=True
         )
 
-        # Export button
+        # Export
         csv = df.to_csv(index=False)
         st.download_button(
-            label="📥 Export to CSV",
+            label="📥 Export All to CSV",
             data=csv,
             file_name=f"trigger_events_{datetime.now().strftime('%Y%m%d')}.csv",
             mime="text/csv"
         )
 
-    with tab3:
-        # Analytics
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.subheader("Events by Type")
-            if 'event_type' in df.columns:
-                type_counts = df['event_type'].value_counts()
-                st.bar_chart(type_counts)
-
-        with col2:
-            st.subheader("Events by Status")
-            if 'lead_status' in df.columns:
-                status_counts = df['lead_status'].value_counts()
-                st.bar_chart(status_counts)
-
-        # Events over time
-        st.subheader("Events Over Time")
-        if 'published_date' in df.columns:
-            try:
-                df['date'] = pd.to_datetime(df['published_date']).dt.date
-                daily_counts = df.groupby('date').size()
-                st.line_chart(daily_counts)
-            except:
-                st.info("Unable to parse dates for timeline")
-
-        # Top companies
-        st.subheader("Top Companies")
-        if 'company_name' in df.columns:
-            company_counts = df['company_name'].value_counts().head(10)
-            st.bar_chart(company_counts)
-
-    # Bulk actions
+    # Sidebar bulk actions
     st.sidebar.divider()
-    st.sidebar.header("Bulk Actions")
+    st.sidebar.header("⚡ Bulk Actions")
 
     bulk_status = st.sidebar.selectbox(
-        "Mark all visible as:",
+        "Mark visible as:",
         [""] + LEAD_STATUSES
     )
 
-    if bulk_status and st.sidebar.button("Apply to All"):
+    if bulk_status and st.sidebar.button("Apply to All Visible"):
         client = get_supabase_client()
-        if client:
+        if client and lead_filter:
+            visible_df = df[df['lead_status'].isin(lead_filter)]
             updated = 0
-            for event_id in df['id'].tolist():
+            for event_id in visible_df['id'].tolist():
                 try:
                     client.table('events').update({'lead_status': bulk_status}).eq('id', event_id).execute()
                     updated += 1
