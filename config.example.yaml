@@ -194,7 +194,10 @@ territory:
       priority: 5
     - code: "221118"
       name: "Other Electric Power Generation"
-      priority: 5
+      priority: 2
+    - code: "518210"
+      name: "Data Processing, Hosting, and Related Services (Data Centers)"
+      priority: 2
     - code: "561311"
       name: "Employment Placement Agencies"
       priority: 5
@@ -342,14 +345,52 @@ territory:
     - "Franchise"
     - "Food Service"
 
-    # 221118 - Electric Power Generation (Tier 5)
+    # Energy, Renewables & Data Centers (Tier 2 - HIGH PRIORITY)
+    # Data Centers
+    - "Data Center"
+    - "Data Centre"
+    - "Datacenter"
+    - "Colocation"
+    - "Colo Facility"
+    - "Server Farm"
+    - "Cloud Infrastructure"
+    - "Hyperscale"
+    - "Edge Computing"
+    - "Edge Data Center"
+    # Energy & Utilities
     - "Energy"
     - "Electric Power"
     - "Power Generation"
     - "Utilities"
+    - "Utility Company"
+    - "Power Plant"
+    - "Electric Utility"
+    - "Energy Company"
+    - "Power Provider"
+    # Renewables & Clean Energy
     - "Renewable"
+    - "Renewable Energy"
     - "Solar"
+    - "Solar Power"
+    - "Solar Energy"
     - "Wind Energy"
+    - "Wind Power"
+    - "Wind Farm"
+    - "Clean Energy"
+    - "Green Energy"
+    - "Sustainable Energy"
+    - "Battery Storage"
+    - "Energy Storage"
+    - "Grid Storage"
+    - "EV Charging"
+    - "Electric Vehicle Infrastructure"
+    - "Geothermal"
+    - "Hydroelectric"
+    - "Hydrogen"
+    - "Carbon Capture"
+    - "Net Zero"
+    - "Microgrid"
+    - "Smart Grid"
 
     # 561311 - Employment Agencies (Tier 5)
     - "Staffing"
@@ -872,6 +913,19 @@ sources:
 
     - name: "Solar Power World"
       url: "https://www.solarpowerworldonline.com/feed/"
+      enabled: true
+
+    # Data Center sources (HIGH PRIORITY)
+    - name: "Data Center Dynamics"
+      url: "https://www.datacenterdynamics.com/en/rss/"
+      enabled: true
+
+    - name: "Data Center Knowledge"
+      url: "https://www.datacenterknowledge.com/rss.xml"
+      enabled: true
+
+    - name: "Data Center Frontier"
+      url: "https://www.datacenterfrontier.com/feed/"
       enabled: true
 
     # Hospitality sources
