@@ -101,37 +101,17 @@ jobs:
           "
           fi
 
-      - name: Sync to Google Sheets
+      - name: Sync to Supabase
         if: success()
         env:
-          GOOGLE_SCRIPT_URL: ${{ secrets.GOOGLE_SCRIPT_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
-          if [ -n "$GOOGLE_SCRIPT_URL" ]; then
-            # Export events as JSON
-            python3 -c "
-          import sqlite3
-          import json
-
-          conn = sqlite3.connect('trigger_events.db')
-          conn.row_factory = sqlite3.Row
-          cursor = conn.cursor()
-          cursor.execute('SELECT * FROM events ORDER BY discovered_at DESC LIMIT 100')
-          events = [dict(row) for row in cursor.fetchall()]
-          conn.close()
-
-          print(json.dumps({'events': events}))
-          " > /tmp/events.json
-
-            # Send to Google Sheets via curl
-            curl -L -X POST "$GOOGLE_SCRIPT_URL" \
-              -H "Content-Type: application/json" \
-              -d @/tmp/events.json \
-              --max-time 30 \
-              -w "\nHTTP Status: %{http_code}\n"
-
-            echo "Attempted to sync $(cat /tmp/events.json | python3 -c 'import sys,json; print(len(json.load(sys.stdin).get(\"events\",[])))'') events"
+          if [ -n "$SUPABASE_URL" ] && [ -n "$SUPABASE_KEY" ]; then
+            pip install supabase
+            python3 supabase_sync.py
           else
-            echo "Google Sheets not configured - skipping sync"
+            echo "Supabase not configured - skipping sync"
           fi
 
       - uses: actions/upload-artifact@v4
