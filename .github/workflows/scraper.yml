@@ -101,6 +101,19 @@ jobs:
           "
           fi
 
+      - name: Sync to Supabase
+        if: success()
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          if [ -n "$SUPABASE_URL" ] && [ -n "$SUPABASE_KEY" ]; then
+            pip install supabase
+            python3 supabase_sync.py
+          else
+            echo "Supabase not configured - skipping sync"
+          fi
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
