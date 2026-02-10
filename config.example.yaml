@@ -40,9 +40,11 @@ territory:
     - "Labrador"
 
   # Major cities in territory (for more precise matching)
+  # NOTE: These are used to match PR datelines like "ARLINGTON, Va., Feb. 10"
   cities:
     - "New York City"
     - "NYC"
+    - "New York"
     - "Boston"
     - "Philadelphia"
     - "Toronto"
@@ -60,6 +62,46 @@ territory:
     - "Durham"
     - "Halifax"
     - "Quebec City"
+    # Virginia cities
+    - "Arlington"
+    - "Alexandria"
+    - "Norfolk"
+    - "Virginia Beach"
+    - "Fairfax"
+    - "Tysons"
+    - "McLean"
+    - "Reston"
+    # Maryland cities
+    - "Bethesda"
+    - "Rockville"
+    - "Silver Spring"
+    - "Annapolis"
+    # DC area
+    - "Washington"
+    - "Washington DC"
+    # New Jersey cities
+    - "Jersey City"
+    - "Trenton"
+    - "Princeton"
+    - "Hoboken"
+    # Pennsylvania cities
+    - "Allentown"
+    - "Harrisburg"
+    - "Lancaster"
+    # Massachusetts cities
+    - "Cambridge"
+    - "Worcester"
+    - "Springfield"
+    # Connecticut cities
+    - "Stamford"
+    - "New Haven"
+    - "Bridgeport"
+    # North Carolina cities
+    - "Greensboro"
+    - "Winston-Salem"
+    # Ohio cities
+    - "Cincinnati"
+    - "Akron"
 
   # Target NAICS codes (ranked by priority - best to worst)
   naics_codes:

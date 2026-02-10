@@ -122,11 +122,20 @@ class RSSScraper(BaseScraper):
         # Check territory match
         in_territory, matched_regions = self.matches_territory(full_text)
 
+        # Check if dateline specifically matches territory (high confidence)
+        dateline_city, dateline_state = self.extract_dateline_location(full_text)
+        dateline_in_territory = False
+        if dateline_city or dateline_state:
+            if dateline_city and dateline_city in self.cities:
+                dateline_in_territory = True
+            if dateline_state and dateline_state in self.regions:
+                dateline_in_territory = True
+
         # Check industry match
         matches_target_industry, matches_excluded = self.matches_industry(full_text)
 
-        # Skip if matches excluded industry
-        if matches_excluded:
+        # Skip if matches excluded industry (but allow if dateline is in territory)
+        if matches_excluded and not dateline_in_territory:
             return None
 
         # Skip public companies (we target mid-market private)
@@ -145,9 +154,14 @@ class RSSScraper(BaseScraper):
         is_ma_event = event_type == EventType.MERGER_ACQUISITION
 
         # STRICT FILTERING: Require territory match OR target company
-        # Exception: PE-backed acquisitions don't require territory match
+        # Exceptions:
+        # 1. PE-backed acquisitions don't require territory match
+        # 2. Dateline in territory = include regardless of industry
         if self.require_territory_match:
-            if is_pe_backed and is_ma_event:
+            if dateline_in_territory:
+                # Dateline is in our territory - include regardless of industry
+                pass
+            elif is_pe_backed and is_ma_event:
                 # PE-backed M&A - include regardless of territory
                 pass
             elif not (in_territory or matches_company):

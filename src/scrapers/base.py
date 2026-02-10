@@ -11,6 +11,29 @@ import requests
 
 from ..models import TriggerEvent, EventType, EventSource
 
+# State abbreviation mapping for dateline parsing
+STATE_ABBREVS = {
+    'al': 'alabama', 'ak': 'alaska', 'az': 'arizona', 'ar': 'arkansas',
+    'ca': 'california', 'co': 'colorado', 'ct': 'connecticut', 'de': 'delaware',
+    'fl': 'florida', 'ga': 'georgia', 'hi': 'hawaii', 'id': 'idaho',
+    'il': 'illinois', 'in': 'indiana', 'ia': 'iowa', 'ks': 'kansas',
+    'ky': 'kentucky', 'la': 'louisiana', 'me': 'maine', 'md': 'maryland',
+    'ma': 'massachusetts', 'mass': 'massachusetts', 'mi': 'michigan',
+    'mn': 'minnesota', 'ms': 'mississippi', 'mo': 'missouri', 'mt': 'montana',
+    'ne': 'nebraska', 'nv': 'nevada', 'nh': 'new hampshire', 'nj': 'new jersey',
+    'nm': 'new mexico', 'ny': 'new york', 'nc': 'north carolina',
+    'nd': 'north dakota', 'oh': 'ohio', 'ok': 'oklahoma', 'or': 'oregon',
+    'pa': 'pennsylvania', 'ri': 'rhode island', 'sc': 'south carolina',
+    'sd': 'south dakota', 'tn': 'tennessee', 'tx': 'texas', 'ut': 'utah',
+    'vt': 'vermont', 'va': 'virginia', 'wa': 'washington', 'wv': 'west virginia',
+    'wi': 'wisconsin', 'wy': 'wyoming', 'dc': 'washington dc',
+    # Canadian provinces
+    'on': 'ontario', 'ont': 'ontario', 'qc': 'quebec', 'que': 'quebec',
+    'bc': 'british columbia', 'ab': 'alberta', 'mb': 'manitoba',
+    'sk': 'saskatchewan', 'ns': 'nova scotia', 'nb': 'new brunswick',
+    'nl': 'newfoundland', 'pe': 'prince edward island',
+}
+
 
 class BaseScraper(ABC):
     """Base class for all scrapers."""
@@ -128,6 +151,37 @@ class BaseScraper(ABC):
                 return True
         return False
 
+    def extract_dateline_location(self, text: str) -> tuple[Optional[str], Optional[str]]:
+        """
+        Extract city and state from PR newswire-style dateline.
+        Examples:
+            "ARLINGTON, Va., Feb. 10, 2026 /PRNewswire/" -> ("arlington", "virginia")
+            "BOSTON, Feb. 10, 2026 /PRNewswire/" -> ("boston", None)
+            "NEW YORK, NY, Feb. 10, 2026" -> ("new york", "new york")
+        """
+        # Pattern for dateline: CITY, State., Date or CITY, State, Date
+        # Matches: ARLINGTON, Va., | BOSTON, Mass., | NEW YORK, NY,
+        dateline_pattern = r'^([A-Z][A-Z\s]+),\s*([A-Za-z]{2,4})\.?,?\s*(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)'
+
+        match = re.search(dateline_pattern, text.strip())
+        if match:
+            city = match.group(1).strip().lower()
+            state_abbrev = match.group(2).strip().lower().rstrip('.')
+
+            # Convert state abbreviation to full name
+            state = STATE_ABBREVS.get(state_abbrev, state_abbrev)
+
+            return city, state
+
+        # Try simpler pattern: CITY, Date (no state)
+        simple_pattern = r'^([A-Z][A-Z\s]+),\s*(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)'
+        match = re.search(simple_pattern, text.strip())
+        if match:
+            city = match.group(1).strip().lower()
+            return city, None
+
+        return None, None
+
     def matches_territory(self, text: str) -> tuple[bool, List[str]]:
         """Check if text mentions locations in our territory."""
         text_lower = text.lower()
@@ -137,12 +191,27 @@ class BaseScraper(ABC):
         if self.is_excluded_location(text):
             return False, []
 
-        # Check regions
+        # Check dateline location first (e.g., "ARLINGTON, Va., Feb. 10, 2026")
+        dateline_city, dateline_state = self.extract_dateline_location(text)
+        if dateline_city or dateline_state:
+            # Check if dateline city matches our cities
+            if dateline_city and dateline_city in self.cities:
+                matched.append(dateline_city)
+
+            # Check if dateline state matches our regions
+            if dateline_state and dateline_state in self.regions:
+                matched.append(dateline_state)
+
+            # If dateline matched, return early with high confidence
+            if matched:
+                return True, matched
+
+        # Check regions in full text
         for region in self.regions:
             if region in text_lower:
                 matched.append(region)
 
-        # Check cities
+        # Check cities in full text
         for city in self.cities:
             if city in text_lower:
                 matched.append(city)
