@@ -72,12 +72,13 @@ class FileAlertHandler(AlertHandler):
                         by_type[event.event_type] = []
                     by_type[event.event_type].append(event)
 
-                # Priority order: CFO hires first, then funding, then M&A
+                # Priority order for display
                 type_order = [
                     EventType.CFO_HIRE,
                     EventType.FUNDING,
                     EventType.EXECUTIVE_HIRE,
                     EventType.MERGER_ACQUISITION,
+                    EventType.STABLE_TARGET,
                     EventType.OTHER,
                 ]
 
@@ -85,7 +86,18 @@ class FileAlertHandler(AlertHandler):
                     if event_type not in by_type:
                         continue
                     type_events = by_type[event_type]
-                    f.write(f"\n## {event_type.value.upper().replace('_', ' ')} ({len(type_events)} events)\n")
+
+                    # Custom labels
+                    type_labels = {
+                        EventType.CFO_HIRE: "CFO HIRES",
+                        EventType.FUNDING: "PE/VC FUNDING",
+                        EventType.EXECUTIVE_HIRE: "EXECUTIVE HIRES",
+                        EventType.MERGER_ACQUISITION: "MERGERS & ACQUISITIONS",
+                        EventType.STABLE_TARGET: "TARGET RECOMMENDATIONS",
+                        EventType.OTHER: "OTHER EVENTS",
+                    }
+                    label = type_labels.get(event_type, event_type.value.upper().replace('_', ' '))
+                    f.write(f"\n## {label} ({len(type_events)} events)\n")
                     f.write(f"{'-'*40}\n\n")
 
                     for event in sorted(type_events, key=lambda e: e.relevance_score, reverse=True):
@@ -148,9 +160,10 @@ class EmailAlertHandler(AlertHandler):
                 body {{ font-family: Arial, sans-serif; }}
                 .event {{ border: 1px solid #ddd; padding: 15px; margin: 10px 0; border-radius: 5px; }}
                 .cfo-hire {{ border-left: 4px solid #28a745; }}
-                .executive-hire {{ border-left: 4px solid #17a2b8; }}
-                .merger-acquisition {{ border-left: 4px solid #dc3545; }}
+                .executive-hire {{ border-left: 4px solid #9370DB; }}
+                .merger-acquisition {{ border-left: 4px solid #1E90FF; }}
                 .funding {{ border-left: 4px solid #ffc107; }}
+                .stable-target {{ border-left: 4px solid #FF8C00; }}
                 .event-title {{ font-size: 16px; font-weight: bold; margin-bottom: 10px; }}
                 .event-meta {{ color: #666; font-size: 12px; }}
                 .event-company {{ color: #333; font-weight: bold; }}
@@ -170,12 +183,13 @@ class EmailAlertHandler(AlertHandler):
                 by_type[event.event_type] = []
             by_type[event.event_type].append(event)
 
-        # Priority order: CFO hires first, then funding, then M&A
+        # Priority order for display
         type_order = [
             EventType.CFO_HIRE,
             EventType.FUNDING,
             EventType.EXECUTIVE_HIRE,
             EventType.MERGER_ACQUISITION,
+            EventType.STABLE_TARGET,
             EventType.OTHER,
         ]
 
@@ -183,7 +197,18 @@ class EmailAlertHandler(AlertHandler):
             if event_type not in by_type:
                 continue
             type_events = by_type[event_type]
-            html += f"<h2>{event_type.value.replace('_', ' ').title()} ({len(type_events)})</h2>"
+
+            # Custom labels for event types
+            type_labels = {
+                EventType.CFO_HIRE: "CFO Hires",
+                EventType.FUNDING: "PE/VC Funding",
+                EventType.EXECUTIVE_HIRE: "Executive Hires",
+                EventType.MERGER_ACQUISITION: "Mergers & Acquisitions",
+                EventType.STABLE_TARGET: "Target Recommendations",
+                EventType.OTHER: "Other Events",
+            }
+            label = type_labels.get(event_type, event_type.value.replace('_', ' ').title())
+            html += f"<h2>{label} ({len(type_events)})</h2>"
 
             # Sort by most recent first
             for event in sorted(type_events, key=lambda e: e.published_date, reverse=True):
