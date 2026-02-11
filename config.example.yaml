@@ -975,6 +975,10 @@ sources:
       url: "https://nonprofitquarterly.org/feed/"
       enabled: true
 
+    - name: "ProPublica - Nonprofits"
+      url: "https://www.propublica.org/feeds/propublica/main"
+      enabled: true
+
     # Restaurant Business Magazine - disabled (malformed XML)
 
     - name: "QSR Magazine"
