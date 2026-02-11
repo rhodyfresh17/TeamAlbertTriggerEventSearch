@@ -114,29 +114,8 @@ class RSSScraper(BaseScraper):
         # Combine title and summary for analysis
         full_text = f"{title} {summary}"
 
-        # Detect event type (trigger events like M&A, CFO hire, funding)
-        event_type = self.detect_event_type(full_text)
-
-        # Track if this is a stable target recommendation
-        is_stable_target = False
-        stable_target_signals = []
-        recommendation_reasoning = None
-
-        # If no trigger event, check if this could be a "stable target" recommendation
-        if not event_type:
-            # Check for stable target potential (companies that match criteria without trigger)
-            is_potential, signals = self.detect_stable_target_potential(full_text)
-            if is_potential:
-                is_stable_target = True
-                stable_target_signals = signals
-                event_type = EventType.STABLE_TARGET
-            else:
-                return None
-
-        # Check territory match
-        in_territory, matched_regions = self.matches_territory(full_text)
-
-        # Check if dateline specifically matches territory (high confidence)
+        # STEP 1: Check if dateline is in our territory (HIGHEST PRIORITY)
+        # If PR is from our territory, we want to see it - period.
         dateline_city, dateline_state = self.extract_dateline_location(full_text)
         dateline_in_territory = False
         if dateline_city or dateline_state:
@@ -145,72 +124,72 @@ class RSSScraper(BaseScraper):
             if dateline_state and dateline_state in self.regions:
                 dateline_in_territory = True
 
-        # Check industry match
-        matches_target_industry, matches_excluded = self.matches_industry(full_text)
-        matched_industries = self.get_matched_industries(full_text)
-
-        # Skip if matches excluded industry (but allow if dateline is in territory)
-        if matches_excluded and not dateline_in_territory:
-            return None
-
-        # Skip public companies (we target mid-market private)
-        if self.is_public_company(full_text):
-            return None
+        # Check territory match in body text
+        in_territory, matched_regions = self.matches_territory(full_text)
 
         # Check target company
         matches_company, company_name = self.matches_target_company(full_text)
 
-        # Check for excluded international locations
-        if self.is_excluded_location(full_text):
-            return None
+        # STEP 2: Detect event type (trigger events like M&A, CFO hire, funding)
+        event_type = self.detect_event_type(full_text)
 
-        # Check if this is a PE-backed acquisition (bypass territory filter)
-        is_pe_backed = self._is_pe_backed(full_text)
-        is_ma_event = event_type == EventType.MERGER_ACQUISITION
+        # Track recommendation reasoning for stable targets
+        recommendation_reasoning = None
 
-        # STABLE TARGETS: Require BOTH territory AND industry match (stricter filtering)
-        if is_stable_target:
-            territory_match = in_territory or dateline_in_territory or matches_company
-            industry_match = matches_target_industry
-
-            # Stable targets must match both territory AND industry (or be a target company)
-            if not (territory_match and industry_match) and not matches_company:
-                return None
-
-            # Must be able to identify a company name for stable targets
-            extracted_company = company_name or self.extract_company_name(full_text)
-            if not extracted_company:
-                return None
-
-            # Check if it appears to be the right company size
-            is_target_size = self.is_target_company_size(full_text)
-
-            # Generate recommendation reasoning
-            recommendation_reasoning = self.generate_stable_target_reasoning(
-                extracted_company,
-                matched_regions,
-                matched_industries,
-                stable_target_signals,
-                is_target_size
-            )
-
-        # TRIGGER EVENTS: Require territory match OR target company
-        # Exceptions:
-        # 1. PE-backed acquisitions don't require territory match
-        # 2. Dateline in territory = include regardless of industry
-        elif self.require_territory_match:
-            if dateline_in_territory:
-                # Dateline is in our territory - include regardless of industry
-                pass
-            elif is_pe_backed and is_ma_event:
-                # PE-backed M&A - include regardless of territory
-                pass
-            elif not (in_territory or matches_company):
-                return None
+        # STEP 3: If dateline is in territory, ALWAYS include (as appropriate event type)
+        if dateline_in_territory:
+            # If no specific trigger event detected, mark as stable target
+            if not event_type:
+                event_type = EventType.STABLE_TARGET
+                # Generate simple reasoning
+                extracted_company = company_name or self.extract_company_name(full_text)
+                matched_industries = self.get_matched_industries(full_text)
+                location_info = dateline_city or dateline_state or "territory"
+                recommendation_reasoning = f"PR from {location_info.title()}"
+                if extracted_company:
+                    recommendation_reasoning = f"Company: {extracted_company} | {recommendation_reasoning}"
+                if matched_industries:
+                    recommendation_reasoning += f" | Industry: {', '.join(matched_industries[:2])}"
         else:
-            # Fallback to looser filtering if disabled
-            if not (in_territory or matches_target_industry or matches_company):
+            # NOT in territory by dateline - apply stricter filtering
+
+            # Skip excluded international locations
+            if self.is_excluded_location(full_text):
                 return None
+
+            # Check industry match
+            matches_target_industry, matches_excluded = self.matches_industry(full_text)
+
+            # Skip if matches excluded industry
+            if matches_excluded:
+                return None
+
+            # Skip public companies (we target mid-market private)
+            if self.is_public_company(full_text):
+                return None
+
+            # If no trigger event, skip (not in territory, no trigger = not relevant)
+            if not event_type:
+                # Exception: PE-backed M&A or target company
+                is_pe_backed = self._is_pe_backed(full_text)
+                if not (matches_company or (is_pe_backed and in_territory)):
+                    return None
+                # If we get here, it's a PE-backed deal or target company mention
+                event_type = EventType.STABLE_TARGET
+
+            # Must match territory OR be a target company OR be PE-backed M&A
+            is_pe_backed = self._is_pe_backed(full_text)
+            is_ma_event = event_type == EventType.MERGER_ACQUISITION
+
+            if self.require_territory_match:
+                if is_pe_backed and is_ma_event:
+                    pass  # PE-backed M&A - include regardless of territory
+                elif not (in_territory or matches_company):
+                    return None
+
+        # Get industry match info (may not be set for dateline-in-territory)
+        matched_industries = self.get_matched_industries(full_text)
+        matches_target_industry = len(matched_industries) > 0
 
         # Calculate relevance
         relevance = self.calculate_relevance_score(
@@ -220,24 +199,25 @@ class RSSScraper(BaseScraper):
             matches_company
         )
 
+        # Boost relevance for dateline matches
+        if dateline_in_territory:
+            relevance = min(relevance + 20, 100)
+
         # Parse published date
         published = self._parse_date(item)
 
-        # Extract additional info (only for non-stable targets, already done above for stable)
-        if not is_stable_target:
-            extracted_company = company_name or self.extract_company_name(full_text)
+        # Extract company name if not already done
+        extracted_company = company_name or self.extract_company_name(full_text)
         person_name, person_title = self.extract_person_info(full_text)
 
         # Determine source
         source = self._determine_source(feed_name)
 
-        # Get matched keywords (for stable targets, use the signals)
-        if is_stable_target:
-            matched_keywords = stable_target_signals[:5]
-        else:
-            matched_keywords = self._get_matched_keywords(full_text, event_type)
+        # Get matched keywords
+        matched_keywords = self._get_matched_keywords(full_text, event_type)
 
-        # Build description with reasoning for stable targets
+        # Build description with reasoning for territory-matched stable targets
+        is_stable_target = (event_type == EventType.STABLE_TARGET)
         if is_stable_target and recommendation_reasoning:
             description = f"📋 RECOMMENDATION: {recommendation_reasoning}\n\n{summary[:400] if summary else ''}"
         else:
