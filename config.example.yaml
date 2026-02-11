@@ -928,6 +928,15 @@ sources:
       url: "https://www.constructiondive.com/feeds/news/"
       enabled: true
 
+    # Facilities Management sources
+    - name: "Facilitate Magazine"
+      url: "https://www.facilitatemagazine.com/feed/"
+      enabled: true
+
+    - name: "Facilities Net"
+      url: "https://www.facilitiesnet.com/rss/fn-ede.xml"
+      enabled: true
+
     # ENR (Engineering News-Record) - disabled (404)
 
     # Energy/Utilities sources
