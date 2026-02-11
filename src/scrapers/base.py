@@ -154,33 +154,64 @@ class BaseScraper(ABC):
     def extract_dateline_location(self, text: str) -> tuple[Optional[str], Optional[str]]:
         """
         Extract city and state from PR newswire-style dateline.
-        Examples:
-            "ARLINGTON, Va., Feb. 10, 2026 /PRNewswire/" -> ("arlington", "virginia")
-            "BOSTON, Feb. 10, 2026 /PRNewswire/" -> ("boston", None)
-            "NEW YORK, NY, Feb. 10, 2026" -> ("new york", "new york")
+        For backwards compatibility, returns first location found.
+        Use extract_dateline_locations() for multiple locations.
         """
-        # Pattern for dateline: CITY, State., Date or CITY, State, Date
-        # Matches: ARLINGTON, Va., | BOSTON, Mass., | NEW YORK, NY,
-        dateline_pattern = r'^([A-Z][A-Z\s]+),\s*([A-Za-z]{2,4})\.?,?\s*(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)'
-
-        match = re.search(dateline_pattern, text.strip())
-        if match:
-            city = match.group(1).strip().lower()
-            state_abbrev = match.group(2).strip().lower().rstrip('.')
-
-            # Convert state abbreviation to full name
-            state = STATE_ABBREVS.get(state_abbrev, state_abbrev)
-
-            return city, state
-
-        # Try simpler pattern: CITY, Date (no state)
-        simple_pattern = r'^([A-Z][A-Z\s]+),\s*(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)'
-        match = re.search(simple_pattern, text.strip())
-        if match:
-            city = match.group(1).strip().lower()
-            return city, None
-
+        locations = self.extract_dateline_locations(text)
+        if locations:
+            return locations[0]
         return None, None
+
+    def extract_dateline_locations(self, text: str) -> List[tuple[Optional[str], Optional[str]]]:
+        """
+        Extract ALL cities and states from PR newswire-style dateline.
+        Handles multiple locations like "NEW YORK and ARLINGTON, Va."
+
+        Examples:
+            "ARLINGTON, Va., Feb. 10" -> [("arlington", "virginia")]
+            "NEW YORK and BOSTON, Feb. 10" -> [("new york", None), ("boston", None)]
+            "NEW YORK and ARLINGTON, Va., Feb. 10" -> [("new york", None), ("arlington", "virginia")]
+            "CHICAGO, IL and RICHMOND, Va., Feb. 10" -> [("chicago", "illinois"), ("richmond", "virginia")]
+        """
+        locations = []
+        text_stripped = text.strip()
+
+        # First, extract the dateline portion (before the date)
+        # Match everything before a month abbreviation
+        dateline_match = re.match(r'^(.+?)(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)', text_stripped)
+        if not dateline_match:
+            return locations
+
+        dateline_portion = dateline_match.group(1).strip()
+
+        # Split by " and " or " AND " to get individual location segments
+        # Also handle "&" and "/"
+        segments = re.split(r'\s+and\s+|\s+AND\s+|\s*&\s*|\s*/\s*', dateline_portion)
+
+        for segment in segments:
+            segment = segment.strip().rstrip(',').rstrip('-').strip()
+            if not segment:
+                continue
+
+            # Pattern: CITY, State (e.g., "ARLINGTON, Va." or "CHICAGO, IL" or "CHARLOTTE, N.C.")
+            # Handle state abbreviations with periods like "N.C.", "N.Y.", "D.C."
+            city_state_pattern = r'^([A-Z][A-Z\s]+),\s*([A-Za-z]\.?[A-Za-z]?\.?)$'
+            match = re.match(city_state_pattern, segment)
+            if match:
+                city = match.group(1).strip().lower()
+                state_abbrev = match.group(2).strip().lower().replace('.', '')
+                state = STATE_ABBREVS.get(state_abbrev, state_abbrev)
+                locations.append((city, state))
+                continue
+
+            # Pattern: Just CITY (e.g., "NEW YORK" or "BOSTON")
+            # Must be all caps to be a dateline city
+            if segment.isupper() or (segment.replace(' ', '').isupper()):
+                city = segment.lower()
+                # Check if it might be a state abbreviation at the end
+                locations.append((city, None))
+
+        return locations
 
     def matches_territory(self, text: str) -> tuple[bool, List[str]]:
         """Check if text mentions locations in our territory."""
