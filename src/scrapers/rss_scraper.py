@@ -114,15 +114,22 @@ class RSSScraper(BaseScraper):
         # Combine title and summary for analysis
         full_text = f"{title} {summary}"
 
-        # STEP 1: Check if dateline is in our territory (HIGHEST PRIORITY)
+        # STEP 1: Check if ANY dateline location is in our territory (HIGHEST PRIORITY)
         # If PR is from our territory, we want to see it - period.
-        dateline_city, dateline_state = self.extract_dateline_location(full_text)
+        # Handles multiple locations like "NEW YORK and ARLINGTON, Va."
+        dateline_locations = self.extract_dateline_locations(full_text)
         dateline_in_territory = False
-        if dateline_city or dateline_state:
+        dateline_matched_location = None
+
+        for dateline_city, dateline_state in dateline_locations:
             if dateline_city and dateline_city in self.cities:
                 dateline_in_territory = True
+                dateline_matched_location = dateline_city
+                break
             if dateline_state and dateline_state in self.regions:
                 dateline_in_territory = True
+                dateline_matched_location = dateline_state
+                break
 
         # Check territory match in body text
         in_territory, matched_regions = self.matches_territory(full_text)
@@ -144,7 +151,7 @@ class RSSScraper(BaseScraper):
                 # Generate simple reasoning
                 extracted_company = company_name or self.extract_company_name(full_text)
                 matched_industries = self.get_matched_industries(full_text)
-                location_info = dateline_city or dateline_state or "territory"
+                location_info = dateline_matched_location or "territory"
                 recommendation_reasoning = f"PR from {location_info.title()}"
                 if extracted_company:
                     recommendation_reasoning = f"Company: {extracted_company} | {recommendation_reasoning}"
