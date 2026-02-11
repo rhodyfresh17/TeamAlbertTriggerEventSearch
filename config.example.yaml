@@ -680,7 +680,25 @@ territory:
 # Keywords to search for trigger events
 keywords:
   executive_hires:
-    # Executive titles
+    # C-Suite Executive titles
+    - "CEO"
+    - "Chief Executive Officer"
+    - "COO"
+    - "Chief Operating Officer"
+    - "CTO"
+    - "Chief Technology Officer"
+    - "CIO"
+    - "Chief Information Officer"
+    - "CMO"
+    - "Chief Marketing Officer"
+    - "CRO"
+    - "Chief Revenue Officer"
+    - "CHRO"
+    - "Chief Human Resources Officer"
+    - "General Manager"
+    - "Managing Director"
+    - "President"
+    # Finance Executive titles
     - "CFO"
     - "Chief Financial Officer"
     - "VP Finance"
@@ -703,6 +721,10 @@ keywords:
     - "Senior Financial Analyst"
     - "Accountant"
     # Hire indicators
+    - "named CEO"
+    - "appointed CEO"
+    - "joins as CEO"
+    - "new CEO"
     - "named CFO"
     - "appointed CFO"
     - "joins as CFO"
@@ -711,6 +733,10 @@ keywords:
     - "named Controller"
     - "appointed Controller"
     - "hiring accountant"
+    - "appoints"
+    - "appointed"
+    - "named as"
+    - "promoted to"
 
   mergers_acquisitions:
     - "acquisition"
