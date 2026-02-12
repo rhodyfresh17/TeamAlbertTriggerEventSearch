@@ -855,17 +855,15 @@ sources:
     #   url: "https://www.prnewswire.com/rss/news-releases-list.rss"
     #   enabled: false
 
-    # PR.com - Alternative press release source (open access)
-    - name: "PR.com - Business"
-      url: "https://www.pr.com/rss/business"
+    # PR.com - disabled (404 - site no longer provides RSS feeds)
+
+    # PRWeb - alternative press release source
+    - name: "PRWeb - General Business"
+      url: "https://www.prweb.com/rss/general-business-latest-news.xml"
       enabled: true
 
-    - name: "PR.com - Finance"
-      url: "https://www.pr.com/rss/finance"
-      enabled: true
-
-    - name: "PR.com - Technology"
-      url: "https://www.pr.com/rss/technology"
+    - name: "PRWeb - Business Technology"
+      url: "https://www.prweb.com/rss/business-technology-latest-news.xml"
       enabled: true
 
     # Newswire.com feeds
@@ -877,91 +875,7 @@ sources:
       url: "https://www.globenewswire.com/RssFeed/orgclass/1/feedTitle/GlobeNewswire%20-%20News%20Releases"
       enabled: true
 
-    - name: "EIN Presswire"
-      url: "https://www.einpresswire.com/rss/news-releases"
-      enabled: true
-
-    - name: "EIN Presswire - Healthcare"
-      url: "https://health.einnews.com/rss/healthcare_news"
-      enabled: true
-
-    # EIN News - State-specific feeds (East Coast territory)
-    - name: "EIN News - New York"
-      url: "https://newyork.einnews.com/rss"
-      enabled: true
-
-    - name: "EIN News - Massachusetts"
-      url: "https://massachusetts.einnews.com/rss"
-      enabled: true
-
-    - name: "EIN News - New Jersey"
-      url: "https://newjersey.einnews.com/rss"
-      enabled: true
-
-    - name: "EIN News - Pennsylvania"
-      url: "https://pennsylvania.einnews.com/rss"
-      enabled: true
-
-    - name: "EIN News - Virginia"
-      url: "https://virginia.einnews.com/rss"
-      enabled: true
-
-    - name: "EIN News - Maryland"
-      url: "https://maryland.einnews.com/rss"
-      enabled: true
-
-    - name: "EIN News - Connecticut"
-      url: "https://connecticut.einnews.com/rss"
-      enabled: true
-
-    - name: "EIN News - North Carolina"
-      url: "https://northcarolina.einnews.com/rss"
-      enabled: true
-
-    - name: "EIN News - South Carolina"
-      url: "https://southcarolina.einnews.com/rss"
-      enabled: true
-
-    - name: "EIN News - Ohio"
-      url: "https://ohio.einnews.com/rss"
-      enabled: true
-
-    - name: "EIN News - Delaware"
-      url: "https://delaware.einnews.com/rss"
-      enabled: true
-
-    - name: "EIN News - Rhode Island"
-      url: "https://rhodeisland.einnews.com/rss"
-      enabled: true
-
-    - name: "EIN News - New Hampshire"
-      url: "https://newhampshire.einnews.com/rss"
-      enabled: true
-
-    - name: "EIN News - Vermont"
-      url: "https://vermont.einnews.com/rss"
-      enabled: true
-
-    - name: "EIN News - Maine"
-      url: "https://maine.einnews.com/rss"
-      enabled: true
-
-    - name: "EIN News - West Virginia"
-      url: "https://westvirginia.einnews.com/rss"
-      enabled: true
-
-    - name: "EIN News - Washington DC"
-      url: "https://dc.einnews.com/rss"
-      enabled: true
-
-    # EIN News - Canadian provinces
-    - name: "EIN News - Ontario"
-      url: "https://ontario.einnews.com/rss"
-      enabled: true
-
-    - name: "EIN News - Quebec"
-      url: "https://quebec.einnews.com/rss"
-      enabled: true
+    # EIN Presswire / EIN News - disabled (404 - feeds no longer available)
 
     # Financewire - disabled (malformed XML)
     # FINSMES - disabled (403 blocked)
@@ -987,9 +901,7 @@ sources:
 
     # Franchise Times - disabled (429 rate limited)
 
-    - name: "Franchise Wire"
-      url: "https://www.franchisewire.com/feed/"
-      enabled: true
+    # Franchise Wire - disabled (empty/invalid response)
 
     # Funding/Startup sources
     - name: "Crunchbase News"
@@ -1026,13 +938,8 @@ sources:
       enabled: true
 
     # Facilities Management sources
-    - name: "Facilitate Magazine"
-      url: "https://www.facilitatemagazine.com/feed/"
-      enabled: true
-
-    - name: "Facilities Net"
-      url: "https://www.facilitiesnet.com/rss/fn-ede.xml"
-      enabled: true
+    # Facilitate Magazine - disabled (403 blocked)
+    # Facilities Net - disabled (malformed XML)
 
     # ENR (Engineering News-Record) - disabled (404)
 
@@ -1056,9 +963,7 @@ sources:
       url: "https://www.datacenterknowledge.com/rss.xml"
       enabled: true
 
-    - name: "Data Center Frontier"
-      url: "https://www.datacenterfrontier.com/feed/"
-      enabled: true
+    # Data Center Frontier - disabled (404)
 
     # Hospitality sources
     - name: "Hotel Management"
@@ -1129,9 +1034,7 @@ sources:
     # Travel Weekly - disabled (404)
 
     # Airlines & Aviation sources
-    - name: "Simple Flying"
-      url: "https://simpleflying.com/feed/"
-      enabled: true
+    # Simple Flying - disabled (connection issues)
 
     # FlightGlobal - disabled (404)
     # Aero-News Network - disabled (403)
