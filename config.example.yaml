@@ -877,6 +877,44 @@ sources:
 
     # EIN Presswire / EIN News - disabled (404 - feeds no longer available)
 
+    # Regional Business Journals (East Coast territory)
+    - name: "Boston Business Journal"
+      url: "https://feeds.bizjournals.com/bizj_boston"
+      enabled: true
+
+    - name: "Philadelphia Business Journal"
+      url: "https://feeds.bizjournals.com/bizj_philadelphia"
+      enabled: true
+
+    - name: "Washington Business Journal"
+      url: "https://feeds.bizjournals.com/bizj_washington"
+      enabled: true
+
+    - name: "Baltimore Business Journal"
+      url: "https://feeds.bizjournals.com/bizj_baltimore"
+      enabled: true
+
+    - name: "Albany Business Review"
+      url: "https://feeds.bizjournals.com/bizj_albany"
+      enabled: true
+
+    - name: "Triangle Business Journal"
+      url: "https://feeds.bizjournals.com/bizj_triangle"
+      enabled: true
+
+    - name: "Pittsburgh Business Times"
+      url: "https://feeds.bizjournals.com/bizj_pittsburgh"
+      enabled: true
+
+    # Canadian Business News
+    - name: "CBC Business"
+      url: "https://rss.cbc.ca/lineup/business.xml"
+      enabled: true
+
+    - name: "Financial Post"
+      url: "https://financialpost.com/feed"
+      enabled: true
+
     # Financewire - disabled (malformed XML)
     # FINSMES - disabled (403 blocked)
 
