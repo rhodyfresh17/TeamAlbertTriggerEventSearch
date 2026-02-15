@@ -6,7 +6,7 @@ Monitor news sources for sales trigger events (CFO hires, M&A, acquisitions, fun
 
 ## Features
 
-- **35+ news sources**: Regional business journals, industry publications, PR wires, funding news, and Google News
+- **25+ news sources**: Industry publications, PR wires, funding news, and Google News
 - **6 job boards**: Indeed, ZipRecruiter, SimplyHired, Google Jobs, Ladders ($100K+), CFO.com
 - **Interactive dashboard**: Streamlit dashboard for reviewing and managing leads
 - **Lead tracking**: Track leads through stages (new → reviewing → contacted → closed)
@@ -75,7 +75,7 @@ python3 -m streamlit run dashboard.py
 
 ## How It Works
 
-1. **Scrapes** 35+ RSS feeds and 6 job boards for trigger events
+1. **Scrapes** 25+ RSS feeds and 6 job boards for trigger events
 2. **Filters** by date (last 7 days), territory, and industry
 3. **Verifies** companies via Apollo.io API:
    - Skips public companies (NYSE/NASDAQ)
@@ -212,12 +212,11 @@ The scraper runs automatically every 4 hours. Set these secrets:
 | Ladders | Executive jobs $100K+ |
 | CFO.com | CFO-specific hiring news |
 
-### News & PR (35+ sources)
+### News & PR (25+ sources)
 | Category | Sources |
 |----------|---------|
-| PR Wires | Business Wire, Globe Newswire, Newswire.com, PRWeb |
-| Regional (US) | Boston, Philadelphia, Washington, Baltimore, Albany, Triangle (NC), Pittsburgh Business Journals |
-| Regional (Canada) | CBC Business, Financial Post |
+| PR Wires | Business Wire, Globe Newswire, Newswire.com, 1888 Press Release |
+| Canadian | CBC Business, Financial Post |
 | Funding/M&A | Crunchbase News, PEHub |
 | Healthcare | Fierce Healthcare |
 | Nonprofit | Nonprofit Times, Nonprofit Quarterly, ProPublica |

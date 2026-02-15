@@ -856,14 +856,11 @@ sources:
     #   enabled: false
 
     # PR.com - disabled (404 - site no longer provides RSS feeds)
+    # PRWeb - disabled (404 - RSS feed URLs not found)
 
-    # PRWeb - alternative press release source
-    - name: "PRWeb - General Business"
-      url: "https://www.prweb.com/rss/general-business-latest-news.xml"
-      enabled: true
-
-    - name: "PRWeb - Business Technology"
-      url: "https://www.prweb.com/rss/business-technology-latest-news.xml"
+    # Alternative press release sources
+    - name: "1888 Press Release"
+      url: "https://www.1888pressrelease.com/rss/today.xml"
       enabled: true
 
     # Newswire.com feeds
@@ -876,35 +873,7 @@ sources:
       enabled: true
 
     # EIN Presswire / EIN News - disabled (404 - feeds no longer available)
-
-    # Regional Business Journals (East Coast territory)
-    - name: "Boston Business Journal"
-      url: "https://feeds.bizjournals.com/bizj_boston"
-      enabled: true
-
-    - name: "Philadelphia Business Journal"
-      url: "https://feeds.bizjournals.com/bizj_philadelphia"
-      enabled: true
-
-    - name: "Washington Business Journal"
-      url: "https://feeds.bizjournals.com/bizj_washington"
-      enabled: true
-
-    - name: "Baltimore Business Journal"
-      url: "https://feeds.bizjournals.com/bizj_baltimore"
-      enabled: true
-
-    - name: "Albany Business Review"
-      url: "https://feeds.bizjournals.com/bizj_albany"
-      enabled: true
-
-    - name: "Triangle Business Journal"
-      url: "https://feeds.bizjournals.com/bizj_triangle"
-      enabled: true
-
-    - name: "Pittsburgh Business Times"
-      url: "https://feeds.bizjournals.com/bizj_pittsburgh"
-      enabled: true
+    # Regional Business Journals - disabled (403 - blocks automated access)
 
     # Canadian Business News
     - name: "CBC Business"
