@@ -215,7 +215,8 @@ The scraper runs automatically every 4 hours. Set these secrets:
 ### News & PR (25+ sources)
 | Category | Sources |
 |----------|---------|
-| PR Wires | Business Wire, Globe Newswire, Newswire.com, 1888 Press Release |
+| PR Wires | Business Wire, PR Newswire, Globe Newswire, Newswire.com, 1888 Press Release |
+| Business News | Reuters Business, Business Insider |
 | Canadian | CBC Business, Financial Post |
 | Funding/M&A | Crunchbase News, PEHub |
 | Healthcare | Fierce Healthcare |
