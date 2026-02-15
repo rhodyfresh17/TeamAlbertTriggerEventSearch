@@ -850,13 +850,19 @@ sources:
       url: "https://feed.businesswire.com/rss/home/?rss=G1QFDERJXkJeEFpRWQ=="
       enabled: true
 
-    # PR Newswire - disabled (403 blocked - requires paid API access)
-    # - name: "PR Newswire - Business"
-    #   url: "https://www.prnewswire.com/rss/news-releases-list.rss"
-    #   enabled: false
+    # PR Newswire
+    - name: "PR Newswire"
+      url: "https://www.prnewswire.com/rss/news-releases-list.rss"
+      enabled: true
 
-    # PR.com - disabled (404 - site no longer provides RSS feeds)
-    # PRWeb - disabled (404 - RSS feed URLs not found)
+    # Major news sources
+    - name: "Reuters Business"
+      url: "https://feeds.reuters.com/reuters/businessNews"
+      enabled: true
+
+    - name: "Business Insider"
+      url: "https://feeds.businessinsider.com/custom/all"
+      enabled: true
 
     # Alternative press release sources
     - name: "1888 Press Release"
