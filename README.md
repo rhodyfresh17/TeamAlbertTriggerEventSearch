@@ -6,7 +6,7 @@ Monitor news sources for sales trigger events (CFO hires, M&A, acquisitions, fun
 
 ## Features
 
-- **22+ news sources**: Industry-specific publications, PR wires, funding news, and Google News
+- **35+ news sources**: Regional business journals, industry publications, PR wires, funding news, and Google News
 - **6 job boards**: Indeed, ZipRecruiter, SimplyHired, Google Jobs, Ladders ($100K+), CFO.com
 - **Interactive dashboard**: Streamlit dashboard for reviewing and managing leads
 - **Lead tracking**: Track leads through stages (new → reviewing → contacted → closed)
@@ -16,7 +16,7 @@ Monitor news sources for sales trigger events (CFO hires, M&A, acquisitions, fun
 - **Industry targeting**: Healthcare, Nonprofit, Hospitality, Restaurant/Franchise, Construction, Field Services, Energy, Oil & Gas, Insurance, Casino/Gaming, Transportation/Logistics, Travel/Hotels, Airlines/Aviation, Child Services, Medical Labs, Business Services, and more
 - **Smart filtering**: Skips public companies, verifies 20-2000 employees, $20M-$500M revenue
 - **Multiple alert channels**: Email, Slack, File, Desktop notifications
-- **Automated runs**: GitHub Actions runs every hour
+- **Automated runs**: GitHub Actions runs every 4 hours
 
 ## Quick Start
 
@@ -75,7 +75,7 @@ python3 -m streamlit run dashboard.py
 
 ## How It Works
 
-1. **Scrapes** 22+ RSS feeds and 6 job boards for trigger events
+1. **Scrapes** 35+ RSS feeds and 6 job boards for trigger events
 2. **Filters** by date (last 7 days), territory, and industry
 3. **Verifies** companies via Apollo.io API:
    - Skips public companies (NYSE/NASDAQ)
@@ -192,7 +192,7 @@ alerts:
 
 ## GitHub Actions Setup
 
-The scraper runs automatically every hour. Set these secrets:
+The scraper runs automatically every 4 hours. Set these secrets:
 
 | Secret | Description |
 |--------|-------------|
@@ -212,22 +212,24 @@ The scraper runs automatically every hour. Set these secrets:
 | Ladders | Executive jobs $100K+ |
 | CFO.com | CFO-specific hiring news |
 
-### News & PR (22+ sources)
+### News & PR (35+ sources)
 | Category | Sources |
 |----------|---------|
-| PR Wires | Business Wire, PR Newswire, Globe Newswire |
+| PR Wires | Business Wire, Globe Newswire, Newswire.com, PRWeb |
+| Regional (US) | Boston, Philadelphia, Washington, Baltimore, Albany, Triangle (NC), Pittsburgh Business Journals |
+| Regional (Canada) | CBC Business, Financial Post |
 | Funding/M&A | Crunchbase News, PEHub |
 | Healthcare | Fierce Healthcare |
-| Nonprofit | Nonprofit Times, Nonprofit Quarterly |
-| Restaurant | QSR Magazine, Franchise Wire |
+| Nonprofit | Nonprofit Times, Nonprofit Quarterly, ProPublica |
+| Restaurant | QSR Magazine |
 | Insurance | Insurance Journal |
 | Construction | Construction Dive |
-| Energy | Utility Dive, Solar Power World, WebWire Oil & Energy |
+| Energy | Utility Dive, Solar Power World |
+| Data Centers | Data Center Dynamics, Data Center Knowledge |
 | Hospitality | Hotel Management, Hotel Dive |
 | Casino/Gaming | CDC Gaming Reports, SBC Americas |
 | Transport | Supply Chain Brain, FreightWaves |
 | Travel | Skift |
-| Aviation | Simple Flying |
 | Search | Google News (aggregated) |
 
 ## Relevance Scoring
