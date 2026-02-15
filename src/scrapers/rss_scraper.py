@@ -1,10 +1,12 @@
 """RSS feed scraper for business news and PR wires."""
 
 import re
+import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from email.utils import parsedate_to_datetime
+from requests.exceptions import Timeout, ReadTimeout, ConnectTimeout
 
 from .base import BaseScraper
 from ..models import TriggerEvent, EventType, EventSource
@@ -65,9 +67,10 @@ class RSSScraper(BaseScraper):
 
         return events
 
-    def _scrape_feed(self, url: str, feed_name: str) -> List[TriggerEvent]:
-        """Scrape a single RSS feed."""
+    def _scrape_feed(self, url: str, feed_name: str, retry_count: int = 0) -> List[TriggerEvent]:
+        """Scrape a single RSS feed with retry on timeout."""
         events = []
+        max_retries = 1  # Retry once on timeout
 
         try:
             response = self.session.get(url, timeout=self.timeout)
@@ -89,6 +92,14 @@ class RSSScraper(BaseScraper):
                 event = self._process_entry(item, feed_name)
                 if event:
                     events.append(event)
+
+        except (Timeout, ReadTimeout, ConnectTimeout) as e:
+            if retry_count < max_retries:
+                print(f"Timeout on {feed_name}, waiting 60s and retrying...")
+                time.sleep(60)
+                return self._scrape_feed(url, feed_name, retry_count + 1)
+            else:
+                print(f"Error parsing feed {feed_name}: {e} (after retry)")
 
         except Exception as e:
             print(f"Error parsing feed {feed_name}: {e}")
