@@ -850,20 +850,23 @@ sources:
       url: "https://feed.businesswire.com/rss/home/?rss=G1QFDERJXkJeEFpRWQ=="
       enabled: true
 
-    # PR Newswire - disabled (403 blocked - requires paid API access)
-    # - name: "PR Newswire - Business"
-    #   url: "https://www.prnewswire.com/rss/news-releases-list.rss"
-    #   enabled: false
-
-    # PR.com - disabled (404 - site no longer provides RSS feeds)
-
-    # PRWeb - alternative press release source
-    - name: "PRWeb - General Business"
-      url: "https://www.prweb.com/rss/general-business-latest-news.xml"
+    # PR Newswire
+    - name: "PR Newswire"
+      url: "https://www.prnewswire.com/rss/news-releases-list.rss"
       enabled: true
 
-    - name: "PRWeb - Business Technology"
-      url: "https://www.prweb.com/rss/business-technology-latest-news.xml"
+    # Major news sources
+    - name: "Reuters Business"
+      url: "https://feeds.reuters.com/reuters/businessNews"
+      enabled: true
+
+    - name: "Business Insider"
+      url: "https://feeds.businessinsider.com/custom/all"
+      enabled: true
+
+    # Alternative press release sources
+    - name: "1888 Press Release"
+      url: "https://www.1888pressrelease.com/rss/today.xml"
       enabled: true
 
     # Newswire.com feeds
@@ -876,35 +879,7 @@ sources:
       enabled: true
 
     # EIN Presswire / EIN News - disabled (404 - feeds no longer available)
-
-    # Regional Business Journals (East Coast territory)
-    - name: "Boston Business Journal"
-      url: "https://feeds.bizjournals.com/bizj_boston"
-      enabled: true
-
-    - name: "Philadelphia Business Journal"
-      url: "https://feeds.bizjournals.com/bizj_philadelphia"
-      enabled: true
-
-    - name: "Washington Business Journal"
-      url: "https://feeds.bizjournals.com/bizj_washington"
-      enabled: true
-
-    - name: "Baltimore Business Journal"
-      url: "https://feeds.bizjournals.com/bizj_baltimore"
-      enabled: true
-
-    - name: "Albany Business Review"
-      url: "https://feeds.bizjournals.com/bizj_albany"
-      enabled: true
-
-    - name: "Triangle Business Journal"
-      url: "https://feeds.bizjournals.com/bizj_triangle"
-      enabled: true
-
-    - name: "Pittsburgh Business Times"
-      url: "https://feeds.bizjournals.com/bizj_pittsburgh"
-      enabled: true
+    # Regional Business Journals - disabled (403 - blocks automated access)
 
     # Canadian Business News
     - name: "CBC Business"
