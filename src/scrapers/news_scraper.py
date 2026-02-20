@@ -121,6 +121,17 @@ class GoogleNewsScraper(BaseScraper):
         ]
         queries.extend(expansion_queries)
 
+        # Product/service/market launches (companies investing in growth)
+        launch_queries = [
+            ('"launches new product" OR "new product launch"', EventType.OTHER, False),
+            ('"launches new service" OR "new service offering"', EventType.OTHER, False),
+            ('"enters new market" OR "market expansion"', EventType.OTHER, False),
+            ('"new business line" OR "new division"', EventType.OTHER, False),
+            ('"pleased to announce the launch"', EventType.OTHER, False),
+            ('"expands into" OR "expanding into"', EventType.OTHER, False),
+        ]
+        queries.extend(launch_queries)
+
         # TechCrunch funding coverage
         techcrunch_queries = [
             ('site:techcrunch.com "series A"', EventType.FUNDING, True),
