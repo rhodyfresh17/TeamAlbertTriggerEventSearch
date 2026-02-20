@@ -93,6 +93,42 @@ class GoogleNewsScraper(BaseScraper):
         ]
         queries.extend(crunchbase_queries)
 
+        # Private equity portfolio company moves
+        pe_queries = [
+            ('"private equity" "portfolio company" CFO', EventType.CFO_HIRE, True),
+            ('"PE-backed" CFO appointed', EventType.CFO_HIRE, True),
+            ('"platform company" CFO', EventType.CFO_HIRE, True),
+            ('"add-on acquisition"', EventType.MERGER_ACQUISITION, True),
+            ('"bolt-on acquisition"', EventType.MERGER_ACQUISITION, True),
+        ]
+        queries.extend(pe_queries)
+
+        # Companies in transition (interim/fractional = opportunity)
+        transition_queries = [
+            ('"interim CFO"', EventType.CFO_HIRE, False),
+            ('"fractional CFO"', EventType.CFO_HIRE, False),
+            ('"acting CFO"', EventType.CFO_HIRE, False),
+            ('"CFO transition"', EventType.CFO_HIRE, False),
+            ('"CFO search"', EventType.CFO_HIRE, False),
+        ]
+        queries.extend(transition_queries)
+
+        # Expansion signals (companies growing = need services)
+        expansion_queries = [
+            ('"new headquarters" OR "relocating headquarters"', EventType.OTHER, False),
+            ('"office expansion" OR "expanding operations"', EventType.OTHER, False),
+            ('"opened new office"', EventType.OTHER, False),
+        ]
+        queries.extend(expansion_queries)
+
+        # TechCrunch funding coverage
+        techcrunch_queries = [
+            ('site:techcrunch.com "series A"', EventType.FUNDING, True),
+            ('site:techcrunch.com "series B"', EventType.FUNDING, True),
+            ('site:techcrunch.com "raises" million', EventType.FUNDING, True),
+        ]
+        queries.extend(techcrunch_queries)
+
         return queries
 
     def _scrape_query(

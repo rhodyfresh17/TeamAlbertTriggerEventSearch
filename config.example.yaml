@@ -1109,18 +1109,26 @@ job_search:
 
   # Job titles to search for (indicates company needs financial leadership)
   titles:
-    # Executive level
+    # Executive level - Finance
     - "CFO"
     - "Chief Financial Officer"
     - "VP Finance"
     - "Vice President Finance"
     - "Head of Finance"
+    # Executive level - Operations (signals company scaling)
+    - "COO"
+    - "Chief Operating Officer"
+    - "VP Operations"
+    - "Vice President Operations"
+    - "Chief Revenue Officer"
+    - "CRO"
     # Director level
     - "Controller"
     - "Finance Director"
     - "Director of Finance"
     - "Director of Accounting"
     - "Accounting Director"
+    - "Director of Operations"
     # Manager level
     - "Accounting Manager"
     - "Finance Manager"
