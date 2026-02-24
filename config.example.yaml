@@ -928,15 +928,29 @@ sources:
 
     # Franchise Wire - disabled (empty/invalid response)
 
-    # Funding/Startup sources
+    # Funding/Startup/PE/VC sources
     - name: "Crunchbase News"
       url: "https://news.crunchbase.com/feed/"
       enabled: true
 
-    # VC News Daily - disabled (404)
+    - name: "VC News Daily"
+      url: "http://feeds.feedburner.com/vcnewsdaily"
+      enabled: true
 
     - name: "PEHub"
       url: "https://www.pehub.com/feed/"
+      enabled: true
+
+    - name: "Buyouts Insider"
+      url: "https://www.buyoutsinsider.com/feed/"
+      enabled: true
+
+    - name: "NVCA"
+      url: "https://nvca.org/feed/"
+      enabled: true
+
+    - name: "Private Equity Insights"
+      url: "https://pe-insights.com/feed/"
       enabled: true
 
     # PE News - disabled (401 requires auth)
