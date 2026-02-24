@@ -221,15 +221,23 @@ class RSSScraper(BaseScraper):
         if dateline_in_territory:
             relevance = min(relevance + 20, 100)
 
+        # Determine source
+        source = self._determine_source(feed_name)
+
+        # Boost relevance for PR wire sources (direct company announcements)
+        if source == EventSource.PR_NEWSWIRE:
+            relevance = min(relevance + 15, 100)
+        elif source == EventSource.BUSINESS_WIRE:
+            relevance = min(relevance + 10, 100)
+        elif source == EventSource.GLOBE_NEWSWIRE:
+            relevance = min(relevance + 10, 100)
+
         # Parse published date
         published = self._parse_date(item)
 
         # Extract company name if not already done
         extracted_company = company_name or self.extract_company_name(full_text)
         person_name, person_title = self.extract_person_info(full_text)
-
-        # Determine source
-        source = self._determine_source(feed_name)
 
         # Get matched keywords
         matched_keywords = self._get_matched_keywords(full_text, event_type)

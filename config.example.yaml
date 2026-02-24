@@ -850,9 +850,21 @@ sources:
       url: "https://feed.businesswire.com/rss/home/?rss=G1QFDERJXkJeEFpRWQ=="
       enabled: true
 
-    # PR Newswire
+    # PR Newswire - category-specific feeds for better coverage
     - name: "PR Newswire"
       url: "https://www.prnewswire.com/rss/news-releases-list.rss"
+      enabled: true
+
+    - name: "PR Newswire - General Business"
+      url: "https://www.prnewswire.com/rss/general-business-latest-news.rss"
+      enabled: true
+
+    - name: "PR Newswire - Financial Services"
+      url: "https://www.prnewswire.com/rss/financial-services-latest-news.rss"
+      enabled: true
+
+    - name: "PR Newswire - Heavy Industry"
+      url: "https://www.prnewswire.com/rss/heavy-industry-and-manufacturing-latest-news.rss"
       enabled: true
 
     # Major news sources
