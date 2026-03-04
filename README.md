@@ -65,13 +65,10 @@ python3 -m streamlit run dashboard.py
 
 | Status | Icon | Description |
 |--------|------|-------------|
-| new | `blue` | Unreviewed event |
-| reviewing | `yellow` | Currently evaluating |
-| contacted | `orange` | Reached out to company |
-| interested | `green` | Positive response received |
-| not_relevant | `gray` | Not a fit for territory |
-| closed_won | `check` | Converted to client |
-| closed_lost | `x` | Did not convert |
+| NEW | 🆕 | Unreviewed event |
+| REVIEWED - ON REP TAL | 🟠 | On rep's target account list |
+| REVIEWED - NetSuite Customer | 💼 | Already a NetSuite customer |
+| REVIEWED - Out of Alignment | ❌ | Not a fit for territory/criteria |
 
 ## How It Works
 

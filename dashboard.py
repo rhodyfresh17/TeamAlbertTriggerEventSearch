@@ -65,23 +65,17 @@ EVENT_TYPES = {
 
 # Lead status options
 LEAD_STATUSES = [
-    "new",
-    "reviewing",
-    "contacted",
-    "interested",
-    "not_relevant",
-    "closed_won",
-    "closed_lost"
+    "NEW",
+    "REVIEWED - ON REP TAL",
+    "REVIEWED - NetSuite Customer",
+    "REVIEWED - Out of Alignment"
 ]
 
 STATUS_ICONS = {
-    "new": "🆕",
-    "reviewing": "👀",
-    "contacted": "📞",
-    "interested": "⭐",
-    "not_relevant": "❌",
-    "closed_won": "✅",
-    "closed_lost": "🚫"
+    "NEW": "🆕",
+    "REVIEWED - ON REP TAL": "🟠",
+    "REVIEWED - NetSuite Customer": "💼",
+    "REVIEWED - Out of Alignment": "❌"
 }
 
 
@@ -134,7 +128,7 @@ def load_events(days: int = 30, search: str = None) -> pd.DataFrame:
             'discovered_at': 'discovered_date'
         })
 
-        df['lead_status'] = df['lead_status'].fillna('new')
+        df['lead_status'] = df['lead_status'].fillna('NEW')
 
         return df
 
@@ -264,7 +258,7 @@ def get_stats(df) -> dict:
     return {
         "total": len(df),
         "by_type": df['event_type'].value_counts().to_dict(),
-        "new": len(df[df['lead_status'] == 'new'])
+        "new": len(df[df['lead_status'] == 'NEW'])
     }
 
 
@@ -299,10 +293,15 @@ def main():
     lead_filter = st.sidebar.multiselect(
         "Lead Status",
         LEAD_STATUSES,
-        default=["new", "reviewing", "contacted", "interested"]
+        default=["NEW"]
     )
 
-    search = st.sidebar.text_input("🔎 Search", placeholder="Company or keyword...")
+    # Prominent search bar in main content area
+    search = st.text_input(
+        "🔍 Search Events",
+        placeholder="Search by company name, title, or keyword...",
+        help="Filter events by company name, title, or description"
+    )
 
     # Load all events
     df = load_events(days=days, search=search if search else None)
