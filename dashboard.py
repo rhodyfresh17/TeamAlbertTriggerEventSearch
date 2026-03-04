@@ -73,7 +73,7 @@ LEAD_STATUSES = [
 
 STATUS_ICONS = {
     "NEW": "🆕",
-    "REVIEWED - ON REP TAL": "✅",
+    "REVIEWED - ON REP TAL": "🟠",
     "REVIEWED - NetSuite Customer": "💼",
     "REVIEWED - Out of Alignment": "❌"
 }

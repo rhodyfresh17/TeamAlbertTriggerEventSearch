@@ -66,7 +66,7 @@ python3 -m streamlit run dashboard.py
 | Status | Icon | Description |
 |--------|------|-------------|
 | NEW | 🆕 | Unreviewed event |
-| REVIEWED - ON REP TAL | ✅ | On rep's target account list |
+| REVIEWED - ON REP TAL | 🟠 | On rep's target account list |
 | REVIEWED - NetSuite Customer | 💼 | Already a NetSuite customer |
 | REVIEWED - Out of Alignment | ❌ | Not a fit for territory/criteria |
 
