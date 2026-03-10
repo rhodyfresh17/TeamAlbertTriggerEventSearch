@@ -10,13 +10,13 @@ import sqlite3
 from datetime import datetime
 
 try:
-    from supabase import create_client, Client
+    from supabase import create_client
     SUPABASE_AVAILABLE = True
 except ImportError:
     SUPABASE_AVAILABLE = False
 
 
-def get_supabase_client() -> Client:
+def get_supabase_client():
     """Initialize Supabase client."""
     url = os.environ.get('SUPABASE_URL')
     key = os.environ.get('SUPABASE_KEY')
