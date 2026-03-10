@@ -27,6 +27,15 @@ from .alerts import AlertManager
 from .scrapers import RSSScraper, GoogleNewsScraper, JobScraper
 from .enrichment import CompanyEnricher
 
+# Import Supabase sync for cloud dashboard
+try:
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from supabase_sync import sync_to_supabase
+    SUPABASE_SYNC_AVAILABLE = True
+except ImportError:
+    SUPABASE_SYNC_AVAILABLE = False
+
 
 class TriggerEventMonitor:
     """Main orchestrator for trigger event monitoring."""
@@ -118,6 +127,16 @@ class TriggerEventMonitor:
             self._print_event_summary(new_events)
         else:
             print("\nNo new events this cycle.")
+
+        # Sync to Supabase for cloud dashboard
+        if SUPABASE_SYNC_AVAILABLE:
+            print("\nSyncing to Supabase for cloud dashboard...")
+            try:
+                sync_to_supabase()
+            except Exception as e:
+                print(f"Supabase sync failed (dashboard may be stale): {e}")
+        else:
+            print("\nNote: Supabase sync not available. Run 'pip install supabase' for cloud dashboard.")
 
         return new_events
 

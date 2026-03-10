@@ -62,6 +62,11 @@ def sync_to_supabase():
     synced = 0
     for event in events:
         try:
+            # Normalize lead_status (SQLite uses lowercase 'new', dashboard expects 'NEW')
+            lead_status = event.get('lead_status', '') or ''
+            if lead_status.lower() == 'new' or lead_status == '':
+                lead_status = 'NEW'
+
             # Clean up data for Supabase
             data = {
                 'id': str(event['id']),
@@ -72,7 +77,7 @@ def sync_to_supabase():
                 'source_url': event.get('url', ''),
                 'published_date': event.get('published_date', ''),
                 'discovered_at': event.get('discovered_date', datetime.now().isoformat()),
-                'lead_status': event.get('lead_status', ''),
+                'lead_status': lead_status,
                 'notes': event.get('notes', '')
             }
 
