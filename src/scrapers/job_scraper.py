@@ -56,9 +56,12 @@ class JobScraper(BaseScraper):
             'ladders': True,
             'cfo_com': True,
         })
+        self.source_statuses = []  # Track status of each job board
 
     def scrape(self) -> List[TriggerEvent]:
         """Scrape job sites for finance leadership positions."""
+        self.source_statuses = []  # Reset statuses
+
         if not self.enabled:
             return []
 
@@ -70,45 +73,147 @@ class JobScraper(BaseScraper):
         # Scrape each enabled job board
         if self.job_boards.get('indeed', True):
             print("    - Indeed", end="")
-            indeed_events = self._scrape_indeed()
-            events.extend(indeed_events)
-            results['Indeed'] = len(indeed_events)
-            print(f" ({len(indeed_events)} found)")
+            try:
+                indeed_events = self._scrape_indeed()
+                events.extend(indeed_events)
+                results['Indeed'] = len(indeed_events)
+                print(f" ({len(indeed_events)} found)")
+                self.source_statuses.append({
+                    'source_name': 'Indeed',
+                    'source_type': 'job_board',
+                    'status': 'success' if indeed_events else 'partial',
+                    'error_message': None if indeed_events else 'No results',
+                    'events_found': len(indeed_events)
+                })
+            except Exception as e:
+                print(f" (error: {e})")
+                self.source_statuses.append({
+                    'source_name': 'Indeed',
+                    'source_type': 'job_board',
+                    'status': 'error',
+                    'error_message': str(e)[:200],
+                    'events_found': 0
+                })
 
         if self.job_boards.get('ziprecruiter', True):
             print("    - ZipRecruiter", end="")
-            zr_events = self._scrape_ziprecruiter()
-            events.extend(zr_events)
-            results['ZipRecruiter'] = len(zr_events)
-            print(f" ({len(zr_events)} found)")
+            try:
+                zr_events = self._scrape_ziprecruiter()
+                events.extend(zr_events)
+                results['ZipRecruiter'] = len(zr_events)
+                print(f" ({len(zr_events)} found)")
+                self.source_statuses.append({
+                    'source_name': 'ZipRecruiter',
+                    'source_type': 'job_board',
+                    'status': 'success' if zr_events else 'partial',
+                    'error_message': None if zr_events else 'No results',
+                    'events_found': len(zr_events)
+                })
+            except Exception as e:
+                print(f" (error: {e})")
+                self.source_statuses.append({
+                    'source_name': 'ZipRecruiter',
+                    'source_type': 'job_board',
+                    'status': 'error',
+                    'error_message': str(e)[:200],
+                    'events_found': 0
+                })
 
         if self.job_boards.get('simplyhired', True):
             print("    - SimplyHired", end="")
-            sh_events = self._scrape_simplyhired()
-            events.extend(sh_events)
-            results['SimplyHired'] = len(sh_events)
-            print(f" ({len(sh_events)} found)")
+            try:
+                sh_events = self._scrape_simplyhired()
+                events.extend(sh_events)
+                results['SimplyHired'] = len(sh_events)
+                print(f" ({len(sh_events)} found)")
+                self.source_statuses.append({
+                    'source_name': 'SimplyHired',
+                    'source_type': 'job_board',
+                    'status': 'success' if sh_events else 'partial',
+                    'error_message': None if sh_events else 'No results',
+                    'events_found': len(sh_events)
+                })
+            except Exception as e:
+                print(f" (error: {e})")
+                self.source_statuses.append({
+                    'source_name': 'SimplyHired',
+                    'source_type': 'job_board',
+                    'status': 'error',
+                    'error_message': str(e)[:200],
+                    'events_found': 0
+                })
 
         if self.job_boards.get('google_jobs', True):
             print("    - Google Jobs", end="")
-            gj_events = self._scrape_google_jobs()
-            events.extend(gj_events)
-            results['Google'] = len(gj_events)
-            print(f" ({len(gj_events)} found)")
+            try:
+                gj_events = self._scrape_google_jobs()
+                events.extend(gj_events)
+                results['Google'] = len(gj_events)
+                print(f" ({len(gj_events)} found)")
+                self.source_statuses.append({
+                    'source_name': 'Google Jobs',
+                    'source_type': 'job_board',
+                    'status': 'success' if gj_events else 'partial',
+                    'error_message': None if gj_events else 'No results',
+                    'events_found': len(gj_events)
+                })
+            except Exception as e:
+                print(f" (error: {e})")
+                self.source_statuses.append({
+                    'source_name': 'Google Jobs',
+                    'source_type': 'job_board',
+                    'status': 'error',
+                    'error_message': str(e)[:200],
+                    'events_found': 0
+                })
 
         if self.job_boards.get('ladders', True):
             print("    - Ladders", end="")
-            lad_events = self._scrape_ladders()
-            events.extend(lad_events)
-            results['Ladders'] = len(lad_events)
-            print(f" ({len(lad_events)} found)")
+            try:
+                lad_events = self._scrape_ladders()
+                events.extend(lad_events)
+                results['Ladders'] = len(lad_events)
+                print(f" ({len(lad_events)} found)")
+                self.source_statuses.append({
+                    'source_name': 'Ladders',
+                    'source_type': 'job_board',
+                    'status': 'success' if lad_events else 'partial',
+                    'error_message': None if lad_events else 'No results',
+                    'events_found': len(lad_events)
+                })
+            except Exception as e:
+                print(f" (error: {e})")
+                self.source_statuses.append({
+                    'source_name': 'Ladders',
+                    'source_type': 'job_board',
+                    'status': 'error',
+                    'error_message': str(e)[:200],
+                    'events_found': 0
+                })
 
         if self.job_boards.get('cfo_com', True):
             print("    - CFO.com", end="")
-            cfo_events = self._scrape_cfo_com()
-            events.extend(cfo_events)
-            results['CFO.com'] = len(cfo_events)
-            print(f" ({len(cfo_events)} found)")
+            try:
+                cfo_events = self._scrape_cfo_com()
+                events.extend(cfo_events)
+                results['CFO.com'] = len(cfo_events)
+                print(f" ({len(cfo_events)} found)")
+                self.source_statuses.append({
+                    'source_name': 'CFO.com',
+                    'source_type': 'job_board',
+                    'status': 'success' if cfo_events else 'partial',
+                    'error_message': None if cfo_events else 'No results',
+                    'events_found': len(cfo_events)
+                })
+            except Exception as e:
+                print(f" (error: {e})")
+                self.source_statuses.append({
+                    'source_name': 'CFO.com',
+                    'source_type': 'job_board',
+                    'status': 'error',
+                    'error_message': str(e)[:200],
+                    'events_found': 0
+                })
 
         # Summary
         working = [k for k, v in results.items() if v > 0]

@@ -45,6 +45,27 @@ def get_events_from_db(db_path='trigger_events.db'):
     return events
 
 
+def get_source_statuses_from_db(db_path='trigger_events.db'):
+    """Get source statuses from local SQLite database."""
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute('''
+            SELECT source_name, source_type, last_check, status, error_message, events_found
+            FROM source_status
+            ORDER BY source_type, source_name
+        ''')
+        statuses = [dict(row) for row in cursor.fetchall()]
+    except sqlite3.OperationalError:
+        # Table doesn't exist yet
+        statuses = []
+
+    conn.close()
+    return statuses
+
+
 def sync_to_supabase():
     """Sync all events to Supabase."""
     if not SUPABASE_AVAILABLE:
@@ -87,6 +108,27 @@ def sync_to_supabase():
             print(f"Error syncing event {event.get('id')}: {e}")
 
     print(f"Synced {synced}/{len(events)} events to Supabase")
+
+    # Sync source statuses
+    statuses = get_source_statuses_from_db()
+    if statuses:
+        synced_statuses = 0
+        for status in statuses:
+            try:
+                data = {
+                    'source_name': status['source_name'],
+                    'source_type': status['source_type'],
+                    'last_check': status['last_check'],
+                    'status': status['status'],
+                    'error_message': status.get('error_message'),
+                    'events_found': status.get('events_found', 0)
+                }
+                client.table('source_status').upsert(data, on_conflict='source_name').execute()
+                synced_statuses += 1
+            except Exception as e:
+                print(f"Error syncing source status {status.get('source_name')}: {e}")
+        print(f"Synced {synced_statuses}/{len(statuses)} source statuses to Supabase")
+
     return True
 
 
