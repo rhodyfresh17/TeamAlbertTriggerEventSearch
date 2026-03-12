@@ -68,6 +68,18 @@ class DatabaseManager:
                 )
             ''')
 
+            # Source status table (for tracking scraper health)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS source_status (
+                    source_name TEXT PRIMARY KEY,
+                    source_type TEXT NOT NULL,
+                    last_check TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    error_message TEXT,
+                    events_found INTEGER DEFAULT 0
+                )
+            ''')
+
             # Create indexes
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_events_date
@@ -231,6 +243,53 @@ class DatabaseManager:
                 (cutoff.isoformat(),)
             )
             conn.commit()
+
+    def save_source_status(
+        self,
+        source_name: str,
+        source_type: str,
+        status: str,
+        error_message: str = None,
+        events_found: int = 0
+    ):
+        """Save the status of a scraper source."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT OR REPLACE INTO source_status
+                (source_name, source_type, last_check, status, error_message, events_found)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (
+                source_name,
+                source_type,
+                datetime.now().isoformat(),
+                status,
+                error_message,
+                events_found
+            ))
+            conn.commit()
+
+    def get_source_statuses(self) -> List[dict]:
+        """Get all source statuses."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT source_name, source_type, last_check, status, error_message, events_found
+                FROM source_status
+                ORDER BY source_type, source_name
+            ''')
+            rows = cursor.fetchall()
+            return [
+                {
+                    'source_name': row[0],
+                    'source_type': row[1],
+                    'last_check': row[2],
+                    'status': row[3],
+                    'error_message': row[4],
+                    'events_found': row[5]
+                }
+                for row in rows
+            ]
 
     def get_stats(self) -> dict:
         """Get database statistics."""

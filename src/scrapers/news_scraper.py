@@ -21,24 +21,50 @@ class GoogleNewsScraper(BaseScraper):
         google_config = config.get('sources', {}).get('google_news', {})
         self.enabled = google_config.get('enabled', True)
         self.base_url = google_config.get('base_url', self.BASE_URL)
+        self.source_statuses = []  # Track status
 
     def scrape(self) -> List[TriggerEvent]:
         """Scrape Google News for trigger events in territory."""
+        self.source_statuses = []  # Reset statuses
+
         if not self.enabled:
             return []
 
         events = []
+        errors = 0
+        total_queries = 0
 
         # Build search queries for different event types
         queries = self._build_search_queries()
 
         for query, event_type_hint, skip_territory_filter in queries:
+            total_queries += 1
             try:
                 feed_events = self._scrape_query(query, event_type_hint, skip_territory_filter)
                 events.extend(feed_events)
                 self.delay_request()
             except Exception as e:
+                errors += 1
                 print(f"Error scraping Google News for '{query}': {e}")
+
+        # Track Google News as a single source
+        if errors == 0:
+            status = 'success'
+            error_msg = None
+        elif errors < total_queries:
+            status = 'partial'
+            error_msg = f"{errors}/{total_queries} queries failed"
+        else:
+            status = 'error'
+            error_msg = "All queries failed"
+
+        self.source_statuses.append({
+            'source_name': 'Google News',
+            'source_type': 'google_news',
+            'status': status,
+            'error_message': error_msg,
+            'events_found': len(events)
+        })
 
         return events
 

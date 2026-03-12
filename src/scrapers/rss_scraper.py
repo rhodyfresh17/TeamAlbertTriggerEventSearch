@@ -43,10 +43,12 @@ class RSSScraper(BaseScraper):
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self.feeds = config.get('sources', {}).get('rss_feeds', [])
+        self.source_statuses = []  # Track status of each feed
 
     def scrape(self) -> List[TriggerEvent]:
         """Scrape all configured RSS feeds."""
         events = []
+        self.source_statuses = []  # Reset statuses
 
         for feed_config in self.feeds:
             if not feed_config.get('enabled', True):
@@ -58,19 +60,29 @@ class RSSScraper(BaseScraper):
             if not feed_url:
                 continue
 
-            try:
-                feed_events = self._scrape_feed(feed_url, feed_name)
-                events.extend(feed_events)
-                self.delay_request()
-            except Exception as e:
-                print(f"Error scraping {feed_name}: {e}")
+            feed_events, error_msg = self._scrape_feed(feed_url, feed_name)
+            events.extend(feed_events)
+
+            self.source_statuses.append({
+                'source_name': feed_name,
+                'source_type': 'rss_feed',
+                'status': 'error' if error_msg else 'success',
+                'error_message': error_msg,
+                'events_found': len(feed_events)
+            })
+
+            self.delay_request()
 
         return events
 
-    def _scrape_feed(self, url: str, feed_name: str, retry_count: int = 0) -> List[TriggerEvent]:
-        """Scrape a single RSS feed with retry on timeout."""
+    def _scrape_feed(self, url: str, feed_name: str, retry_count: int = 0) -> tuple:
+        """Scrape a single RSS feed with retry on timeout.
+
+        Returns: (events, error_message) - error_message is None on success
+        """
         events = []
         max_retries = 1  # Retry once on timeout
+        error_msg = None
 
         try:
             response = self.session.get(url, timeout=self.timeout)
@@ -99,12 +111,14 @@ class RSSScraper(BaseScraper):
                 time.sleep(60)
                 return self._scrape_feed(url, feed_name, retry_count + 1)
             else:
+                error_msg = f"Timeout: {e}"
                 print(f"Error parsing feed {feed_name}: {e} (after retry)")
 
         except Exception as e:
+            error_msg = str(e)[:200]
             print(f"Error parsing feed {feed_name}: {e}")
 
-        return events
+        return events, error_msg
 
     def _process_entry(self, item: ET.Element, feed_name: str) -> Optional[TriggerEvent]:
         """Process a single feed entry."""

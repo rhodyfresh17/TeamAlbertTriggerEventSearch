@@ -93,6 +93,17 @@ class TriggerEventMonitor:
                 events = scraper.scrape()
                 print(f"  Found {len(events)} potential events")
                 all_events.extend(events)
+
+                # Save source statuses
+                if hasattr(scraper, 'source_statuses'):
+                    for status in scraper.source_statuses:
+                        self.db.save_source_status(
+                            source_name=status['source_name'],
+                            source_type=status['source_type'],
+                            status=status['status'],
+                            error_message=status.get('error_message'),
+                            events_found=status.get('events_found', 0)
+                        )
             except Exception as e:
                 print(f"  Error: {e}")
 

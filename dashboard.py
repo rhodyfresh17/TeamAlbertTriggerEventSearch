@@ -97,6 +97,25 @@ def get_supabase_client():
     return create_client(url, key)
 
 
+def load_source_statuses() -> pd.DataFrame:
+    """Load source statuses from Supabase."""
+    client = get_supabase_client()
+    if not client:
+        return pd.DataFrame()
+
+    try:
+        response = client.table('source_status').select('*').order('source_type').order('source_name').execute()
+
+        if not response.data:
+            return pd.DataFrame()
+
+        return pd.DataFrame(response.data)
+
+    except Exception as e:
+        # Table might not exist yet
+        return pd.DataFrame()
+
+
 def load_events(days: int = 30, search: str = None) -> pd.DataFrame:
     """Load all events from Supabase."""
     client = get_supabase_client()
@@ -250,6 +269,90 @@ def render_event_section(df, event_type, event_config, lead_filter):
         render_event_card(row, event_config)
 
 
+def render_source_status_table(df: pd.DataFrame):
+    """Render the source status table with colored indicators."""
+    if df.empty:
+        st.info("No source status data available. Run the scraper to populate.")
+        return
+
+    # Group by source type
+    source_types = {
+        'rss_feed': 'RSS Feeds',
+        'google_news': 'Google News',
+        'job_board': 'Job Boards'
+    }
+
+    # Calculate summary stats
+    total_sources = len(df)
+    success_count = len(df[df['status'] == 'success'])
+    error_count = len(df[df['status'] == 'error'])
+    partial_count = len(df[df['status'] == 'partial'])
+
+    # Summary metrics
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Sources", total_sources)
+    with col2:
+        st.metric("Working", success_count, delta=None)
+    with col3:
+        st.metric("Partial", partial_count, delta=None)
+    with col4:
+        st.metric("Failed", error_count, delta=None if error_count == 0 else f"-{error_count}")
+
+    # Status indicator function
+    def get_status_indicator(status):
+        if status == 'success':
+            return '🟢'
+        elif status == 'partial':
+            return '🟡'
+        else:
+            return '🔴'
+
+    # Create tabs for each source type
+    type_list = sorted(df['source_type'].unique())
+    tab_names = [source_types.get(t, t.replace('_', ' ').title()) for t in type_list]
+    tabs = st.tabs(tab_names)
+
+    for tab, source_type in zip(tabs, type_list):
+        with tab:
+            type_df = df[df['source_type'] == source_type].copy()
+
+            # Format the data for display
+            display_data = []
+            for _, row in type_df.iterrows():
+                status_icon = get_status_indicator(row['status'])
+                last_check = row.get('last_check', '')
+                if last_check:
+                    try:
+                        dt = datetime.fromisoformat(last_check.replace('Z', '+00:00'))
+                        last_check = dt.strftime('%Y-%m-%d %H:%M')
+                    except:
+                        pass
+
+                display_data.append({
+                    'Status': status_icon,
+                    'Source': row['source_name'],
+                    'Events': row.get('events_found', 0),
+                    'Last Check': last_check,
+                    'Error': row.get('error_message', '') or ''
+                })
+
+            display_df = pd.DataFrame(display_data)
+
+            st.dataframe(
+                display_df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    'Status': st.column_config.TextColumn('Status', width='small'),
+                    'Source': st.column_config.TextColumn('Source', width='medium'),
+                    'Events': st.column_config.NumberColumn('Events', width='small'),
+                    'Last Check': st.column_config.TextColumn('Last Check', width='medium'),
+                    'Error': st.column_config.TextColumn('Error', width='large')
+                }
+            )
+
+
 def get_stats(df) -> dict:
     """Get dashboard statistics."""
     if df.empty:
@@ -324,6 +427,13 @@ def main():
     with col4:
         cfo_count = stats["by_type"].get("cfo_hire", 0)
         st.metric("🟢 CFO Hires", cfo_count)
+
+    st.divider()
+
+    # Source Status Section
+    with st.expander("📡 Source Health Status", expanded=False):
+        source_status_df = load_source_statuses()
+        render_source_status_table(source_status_df)
 
     st.divider()
 
