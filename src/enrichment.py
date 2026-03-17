@@ -2,9 +2,16 @@
 
 import os
 from typing import Dict, Any, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 
 import requests
+
+# Try to import performance cache
+try:
+    from .performance.cache import FileCache
+    CACHE_AVAILABLE = True
+except ImportError:
+    CACHE_AVAILABLE = False
 
 
 @dataclass
@@ -25,26 +32,62 @@ class CompanyInfo:
     is_public: bool = False  # Whether company is publicly traded
     stock_symbol: Optional[str] = None
 
+    def to_dict(self) -> dict:
+        """Convert to dictionary for caching."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'CompanyInfo':
+        """Create from dictionary."""
+        return cls(**data)
+
 
 class ApolloEnricher:
     """Enrich company data using Apollo.io API."""
 
     BASE_URL = "https://api.apollo.io/v1/organizations/enrich"
 
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        cache_dir: str = ".cache/apollo",
+        cache_ttl: float = 86400 * 7,  # 7 days default (company data changes slowly)
+    ):
         self.api_key = api_key or os.environ.get('APOLLO_API_KEY', '')
         self.enabled = bool(self.api_key)
+
+        # In-memory cache (existing behavior)
         self.cache: Dict[str, CompanyInfo] = {}
+
+        # Persistent file cache for cost savings
+        self._file_cache = None
+        self._cache_ttl = cache_ttl
+        if CACHE_AVAILABLE:
+            try:
+                self._file_cache = FileCache(
+                    cache_dir=cache_dir,
+                    default_ttl=cache_ttl
+                )
+            except Exception as e:
+                print(f"Warning: Could not initialize file cache: {e}")
 
     def enrich_company(self, company_name: str) -> Optional[CompanyInfo]:
         """Look up company information by name."""
         if not self.enabled:
             return None
 
-        # Check cache first
+        # Check in-memory cache first
         cache_key = company_name.lower().strip()
         if cache_key in self.cache:
             return self.cache[cache_key]
+
+        # Check persistent file cache (saves API calls)
+        if self._file_cache:
+            cached_data = self._file_cache.get(f"apollo:{cache_key}")
+            if cached_data:
+                info = CompanyInfo.from_dict(cached_data)
+                self.cache[cache_key] = info  # Populate memory cache
+                return info
 
         try:
             headers = {
@@ -96,13 +139,25 @@ class ApolloEnricher:
                 stock_symbol=stock_symbol
             )
 
-            # Cache the result
+            # Cache the result (memory and file)
             self.cache[cache_key] = info
+            if self._file_cache:
+                self._file_cache.set(f"apollo:{cache_key}", info.to_dict())
             return info
 
         except Exception as e:
             print(f"Error enriching company {company_name}: {e}")
             return None
+
+    def get_cache_stats(self) -> dict:
+        """Get cache statistics for monitoring."""
+        stats = {
+            'memory_cache_size': len(self.cache),
+            'file_cache': None
+        }
+        if self._file_cache:
+            stats['file_cache'] = self._file_cache.stats()
+        return stats
 
     def _format_revenue(self, revenue: Optional[str]) -> Optional[str]:
         """Format revenue string."""
