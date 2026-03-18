@@ -38,6 +38,9 @@ class RSSScraper(BaseScraper):
         'pr newswire': EventSource.PR_NEWSWIRE,
         'globe newswire': EventSource.GLOBE_NEWSWIRE,
         'globenewswire': EventSource.GLOBE_NEWSWIRE,
+        'wired': EventSource.OTHER,
+        'fox business': EventSource.OTHER,
+        'cnbc': EventSource.OTHER,
     }
 
     def __init__(self, config: Dict[str, Any]):
