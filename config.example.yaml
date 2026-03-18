@@ -1072,6 +1072,19 @@ sources:
 
     # Travel Weekly - disabled (404)
 
+    # Major Tech/Business News
+    - name: "Wired Business"
+      url: "https://www.wired.com/feed/category/business/latest/rss"
+      enabled: true
+
+    - name: "Fox Business"
+      url: "https://moxie.foxbusiness.com/google-publisher/latest.xml"
+      enabled: true
+
+    - name: "CNBC"
+      url: "https://www.cnbc.com/id/100003114/device/rss/rss.html"
+      enabled: true
+
     # Airlines & Aviation sources
     # Simple Flying - disabled (connection issues)
 
