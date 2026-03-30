@@ -120,20 +120,9 @@ st.markdown("""
         color: #991b1b;
     }
 
-    /* Event cards */
-    .event-card {
-        background: white;
-        border-radius: 12px;
-        padding: 1.25rem;
-        margin-bottom: 1rem;
-        box-shadow: 0 2px 12px rgba(0,0,0,0.06);
-        border: 1px solid rgba(0,0,0,0.06);
-        transition: all 0.2s ease;
-    }
-
-    .event-card:hover {
-        box-shadow: 0 8px 25px rgba(0,0,0,0.1);
-        transform: translateY(-1px);
+    /* Event card inner content (inside st.container) */
+    .event-card-inner {
+        padding: 0.25rem 0;
     }
 
     .event-card-header {
@@ -497,59 +486,60 @@ def render_event_card(row, event_config):
     status_cfg = STATUS_CONFIG.get(status, STATUS_CONFIG["NEW"])
     badge_class = event_config.get('badge_class', 'badge-other')
 
-    # Modern card
-    st.markdown(f"""
-        <div class="event-card">
-            <div class="event-card-header">
-                <span class="event-type-badge {badge_class}">{event_config['icon']} {event_config['label']}</span>
-                <span class="status-badge {status_cfg['class']}">{status_cfg['label']}</span>
+    # Unified card: header + expander in one container
+    with st.container(border=True):
+        st.markdown(f"""
+            <div class="event-card-inner">
+                <div class="event-card-header">
+                    <span class="event-type-badge {badge_class}">{event_config['icon']} {event_config['label']}</span>
+                    <span class="status-badge {status_cfg['class']}">{status_cfg['label']}</span>
+                </div>
+                <div class="event-title">{title}</div>
+                <div class="event-company">
+                    <span>🏢</span>
+                    <span>{company}</span>
+                </div>
+                <div class="event-meta">
+                    <span>📅 {date_display}</span>
+                </div>
             </div>
-            <div class="event-title">{title}</div>
-            <div class="event-company">
-                <span>🏢</span>
-                <span>{company}</span>
-            </div>
-            <div class="event-meta">
-                <span>📅 {date_display}</span>
-            </div>
-        </div>
-    """, unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
 
-    with st.expander("📝 Details & Actions"):
-        col1, col2 = st.columns([2, 1])
+        with st.expander("📝 Details & Actions"):
+            col1, col2 = st.columns([2, 1])
 
-        with col1:
-            desc = row.get('description', '')
-            if desc:
-                st.markdown("**Description**")
-                st.caption(str(desc)[:500] + "..." if len(str(desc)) > 500 else str(desc))
+            with col1:
+                desc = row.get('description', '')
+                if desc:
+                    st.markdown("**Description**")
+                    st.caption(str(desc)[:500] + "..." if len(str(desc)) > 500 else str(desc))
 
-            url = row.get('url', '')
-            if url:
-                st.link_button("🔗 View Source", url, use_container_width=False)
+                url = row.get('url', '')
+                if url:
+                    st.link_button("🔗 View Source", url, use_container_width=False)
 
-        with col2:
-            current_status = status
-            new_status = st.selectbox(
-                "Status",
-                LEAD_STATUSES,
-                index=LEAD_STATUSES.index(current_status) if current_status in LEAD_STATUSES else 0,
-                key=f"status_{row['id']}",
-                label_visibility="collapsed"
-            )
+            with col2:
+                current_status = status
+                new_status = st.selectbox(
+                    "Status",
+                    LEAD_STATUSES,
+                    index=LEAD_STATUSES.index(current_status) if current_status in LEAD_STATUSES else 0,
+                    key=f"status_{row['id']}",
+                    label_visibility="collapsed"
+                )
 
-            notes = st.text_area(
-                "Notes",
-                value=row.get('notes') or "",
-                key=f"notes_{row['id']}",
-                height=80,
-                placeholder="Add notes..."
-            )
+                notes = st.text_area(
+                    "Notes",
+                    value=row.get('notes') or "",
+                    key=f"notes_{row['id']}",
+                    height=80,
+                    placeholder="Add notes..."
+                )
 
-            if st.button("💾 Save Changes", key=f"save_{row['id']}", use_container_width=True):
-                if update_lead_status(row['id'], new_status, notes):
-                    st.success("✓ Saved!")
-                    st.rerun()
+                if st.button("💾 Save Changes", key=f"save_{row['id']}", use_container_width=True):
+                    if update_lead_status(row['id'], new_status, notes):
+                        st.success("✓ Saved!")
+                        st.rerun()
 
 
 def render_event_section(df, event_type, event_config, lead_filter):
