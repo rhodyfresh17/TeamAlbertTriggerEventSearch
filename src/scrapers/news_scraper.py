@@ -98,15 +98,41 @@ class GoogleNewsScraper(BaseScraper):
         # LinkedIn-sourced news (executive moves often announced there first)
         # Skip territory filter for LinkedIn - executives don't always mention location
         linkedin_queries = [
+            # CFO / finance hire announcements
             ('site:linkedin.com CFO appointed', EventType.CFO_HIRE, True),
             ('site:linkedin.com "excited to announce" CFO', EventType.CFO_HIRE, True),
             ('site:linkedin.com "new role" CFO finance', EventType.CFO_HIRE, True),
             ('site:linkedin.com "thrilled to join" CFO', EventType.CFO_HIRE, True),
             ('site:linkedin.com "joined as" CFO', EventType.CFO_HIRE, True),
             ('site:linkedin.com "Chief Financial Officer"', EventType.CFO_HIRE, True),
+            # Expanded LinkedIn phrases for CFO/finance hires
+            ('site:linkedin.com "started a new position" CFO', EventType.CFO_HIRE, True),
+            ('site:linkedin.com "started a new position" "Chief Financial Officer"', EventType.CFO_HIRE, True),
+            ('site:linkedin.com "happy to share" CFO', EventType.CFO_HIRE, True),
+            ('site:linkedin.com "proud to announce" CFO', EventType.CFO_HIRE, True),
+            ('site:linkedin.com "delighted to announce" CFO', EventType.CFO_HIRE, True),
+            ('site:linkedin.com "pleased to share" CFO finance', EventType.CFO_HIRE, True),
+            ('site:linkedin.com "new chapter" CFO', EventType.CFO_HIRE, True),
+            ('site:linkedin.com "I\'m happy to announce" finance', EventType.CFO_HIRE, True),
+            ('site:linkedin.com "VP of Finance" "joined"', EventType.CFO_HIRE, True),
+            ('site:linkedin.com "Head of Finance" "excited"', EventType.CFO_HIRE, True),
+            ('site:linkedin.com "Controller" "new role"', EventType.CFO_HIRE, True),
+            ('site:linkedin.com "Finance Director" "joined"', EventType.CFO_HIRE, True),
+            # LinkedIn posts and articles (pulse) for CFO hires
+            ('site:linkedin.com/posts "CFO" "appointed"', EventType.CFO_HIRE, True),
+            ('site:linkedin.com/posts "Chief Financial Officer"', EventType.CFO_HIRE, True),
+            ('site:linkedin.com/posts "excited to announce" CFO', EventType.CFO_HIRE, True),
+            ('site:linkedin.com/posts "VP Finance" "new role"', EventType.CFO_HIRE, True),
+            ('site:linkedin.com/pulse CFO appointed', EventType.CFO_HIRE, True),
+            ('site:linkedin.com/pulse "Chief Financial Officer"', EventType.CFO_HIRE, True),
+            # M&A on LinkedIn
             ('site:linkedin.com acquisition announced', EventType.MERGER_ACQUISITION, True),
             ('site:linkedin.com "pleased to announce" acquisition', EventType.MERGER_ACQUISITION, True),
+            ('site:linkedin.com/posts "acquisition" "pleased to announce"', EventType.MERGER_ACQUISITION, True),
+            ('site:linkedin.com/posts "acquired" "excited"', EventType.MERGER_ACQUISITION, True),
+            # Funding on LinkedIn
             ('site:linkedin.com funding round raised', EventType.FUNDING, True),
+            ('site:linkedin.com/posts "raised" "funding"', EventType.FUNDING, True),
         ]
         queries.extend(linkedin_queries)
 
