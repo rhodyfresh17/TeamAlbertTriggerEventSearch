@@ -1091,10 +1091,49 @@ sources:
     # FlightGlobal - disabled (404)
     # Aero-News Network - disabled (403)
 
+    # Google Alerts RSS feeds for LinkedIn CFO/finance hires
+    # To set up: Go to https://www.google.com/alerts, create alert with query,
+    # select "RSS feed" as delivery method, then paste the feed URL below.
+    # These catch LinkedIn announcements faster than periodic Google News scrapes.
+    #
+    # Example alerts to create:
+    #   site:linkedin.com "new CFO"
+    #   site:linkedin.com "appointed CFO"
+    #   site:linkedin.com "Chief Financial Officer" "excited to announce"
+    #   site:linkedin.com "VP Finance" "joined"
+    #   site:linkedin.com "Head of Finance" "new role"
+    #
+    # - name: "Google Alert - LinkedIn CFO"
+    #   url: "https://www.google.com/alerts/feeds/YOUR_ALERT_ID/YOUR_FEED_ID"
+    #   enabled: true
+    #
+    # - name: "Google Alert - LinkedIn CFO Appointed"
+    #   url: "https://www.google.com/alerts/feeds/YOUR_ALERT_ID/YOUR_FEED_ID"
+    #   enabled: true
+    #
+    # - name: "Google Alert - LinkedIn Chief Financial Officer"
+    #   url: "https://www.google.com/alerts/feeds/YOUR_ALERT_ID/YOUR_FEED_ID"
+    #   enabled: true
+    #
+    # - name: "Google Alert - LinkedIn VP Finance"
+    #   url: "https://www.google.com/alerts/feeds/YOUR_ALERT_ID/YOUR_FEED_ID"
+    #   enabled: true
+    #
+    # - name: "Google Alert - LinkedIn Head of Finance"
+    #   url: "https://www.google.com/alerts/feeds/YOUR_ALERT_ID/YOUR_FEED_ID"
+    #   enabled: true
+
   # Google News RSS (requires specific search queries)
   google_news:
     enabled: true
     base_url: "https://news.google.com/rss/search?q="
+
+  # Bing News API (complements Google News - surfaces different results)
+  # Free tier: 1,000 calls/month at https://www.microsoft.com/en-us/bing/apis/bing-news-search-api
+  bing_news:
+    enabled: false  # Set to true and add API key to enable
+    api_key: ""     # Your Bing Search API key
+    endpoint: "https://api.bing.microsoft.com/v7.0/news/search"
 
 # Alert configuration
 alerts:
