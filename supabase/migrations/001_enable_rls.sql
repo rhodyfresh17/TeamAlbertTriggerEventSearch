@@ -23,6 +23,7 @@ DROP POLICY IF EXISTS "service_role_all_events" ON public.events;
 DROP POLICY IF EXISTS "anon_read_source_status" ON public.source_status;
 DROP POLICY IF EXISTS "service_role_all_source_status" ON public.source_status;
 DROP POLICY IF EXISTS "anon_update_events_status" ON public.events;
+DROP POLICY IF EXISTS "anon_delete_events" ON public.events;
 
 -- ============================================
 -- 3. Events table policies
@@ -42,6 +43,13 @@ CREATE POLICY "anon_update_events_status"
   TO anon
   USING (true)
   WITH CHECK (true);
+
+-- Anon users (dashboard) can delete events (e.g. marking as "Not Relevant")
+CREATE POLICY "anon_delete_events"
+  ON public.events
+  FOR DELETE
+  TO anon
+  USING (true);
 
 -- Service role (sync job) has full access - bypasses RLS by default,
 -- but this explicit policy ensures it works even if bypass is disabled

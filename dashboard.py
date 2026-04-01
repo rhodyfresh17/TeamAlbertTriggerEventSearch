@@ -160,6 +160,7 @@ st.markdown("""
     .status-reviewed { background: #d1fae5; color: #065f46; }
     .status-customer { background: #fef3c7; color: #92400e; }
     .status-out { background: #fee2e2; color: #991b1b; }
+    .status-not-relevant { background: #f3f4f6; color: #6b7280; }
 
     .event-title {
         font-size: 1rem;
@@ -355,14 +356,16 @@ LEAD_STATUSES = [
     "NEW",
     "REVIEWED - ON REP TAL",
     "REVIEWED - NetSuite Customer",
-    "REVIEWED - Out of Alignment"
+    "REVIEWED - Out of Alignment",
+    "NOT RELEVANT"
 ]
 
 STATUS_CONFIG = {
     "NEW": {"icon": "🆕", "class": "status-new", "label": "New"},
     "REVIEWED - ON REP TAL": {"icon": "🟠", "class": "status-reviewed", "label": "On TAL"},
     "REVIEWED - NetSuite Customer": {"icon": "💼", "class": "status-customer", "label": "Customer"},
-    "REVIEWED - Out of Alignment": {"icon": "❌", "class": "status-out", "label": "Out"}
+    "REVIEWED - Out of Alignment": {"icon": "❌", "class": "status-out", "label": "Out"},
+    "NOT RELEVANT": {"icon": "🚫", "class": "status-not-relevant", "label": "Not Relevant"}
 }
 
 # Backwards compatibility
@@ -447,17 +450,19 @@ def load_events(days: int = 30, search: str = None) -> pd.DataFrame:
 
 
 def update_lead_status(event_id: str, status: str, notes: str = None):
-    """Update lead status for an event in Supabase."""
+    """Update lead status for an event in Supabase. Deletes if NOT RELEVANT."""
     client = get_supabase_client()
     if not client:
         return False
 
     try:
-        data = {'lead_status': status}
-        if notes is not None:
-            data['notes'] = notes
-
-        client.table('events').update(data).eq('id', event_id).execute()
+        if status == "NOT RELEVANT":
+            client.table('events').delete().eq('id', event_id).execute()
+        else:
+            data = {'lead_status': status}
+            if notes is not None:
+                data['notes'] = notes
+            client.table('events').update(data).eq('id', event_id).execute()
         return True
     except Exception as e:
         st.error(f"Error updating status: {e}")
@@ -538,7 +543,10 @@ def render_event_card(row, event_config):
 
                 if st.button("💾 Save Changes", key=f"save_{row['id']}", use_container_width=True):
                     if update_lead_status(row['id'], new_status, notes):
-                        st.success("✓ Saved!")
+                        if new_status == "NOT RELEVANT":
+                            st.success("✓ Event removed!")
+                        else:
+                            st.success("✓ Saved!")
                         st.rerun()
 
 
