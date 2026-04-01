@@ -717,14 +717,6 @@ def main():
 
     days = st.sidebar.slider("Time Range (days)", 1, 90, 30)
 
-    st.sidebar.markdown("**Lead Status**")
-    lead_filter = st.sidebar.multiselect(
-        "Filter by status",
-        LEAD_STATUSES,
-        default=["NEW"],
-        label_visibility="collapsed"
-    )
-
     # Modern search bar
     st.markdown('<div class="search-container">', unsafe_allow_html=True)
     search = st.text_input(
@@ -767,51 +759,98 @@ def main():
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Modern pill-style tabs
-    tab_ma, tab_cfo, tab_funding, tab_stable, tab_exec, tab_other, tab_all = st.tabs([
-        f"🔵 M&A ({ma_count})",
-        f"💼 CFO ({cfo_count})",
-        f"💰 Funding ({funding_count})",
-        f"🎯 Stable ({stats['by_type'].get('stable_target', 0)})",
-        f"👔 Exec ({stats['by_type'].get('executive_hire', 0)})",
-        f"📋 Other ({stats['by_type'].get('other', 0)})",
-        "📊 All"
-    ])
+    # Split data: new (unclassified) vs classified
+    new_df = df[df['lead_status'] == 'NEW']
+    classified_df = df[df['lead_status'] != 'NEW']
 
-    with tab_ma:
-        render_event_section(df, "merger_acquisition", EVENT_TYPES["merger_acquisition"], lead_filter)
+    # ── New Leads Section ──
+    new_count = len(new_df)
+    st.markdown(f"""
+        <div class="section-header">
+            <span style="font-size: 1.5rem;">🆕</span>
+            <h2>New Leads</h2>
+            <span class="section-count">{new_count}</span>
+        </div>
+    """, unsafe_allow_html=True)
 
-    with tab_cfo:
-        render_event_section(df, "cfo_hire", EVENT_TYPES["cfo_hire"], lead_filter)
+    if new_df.empty:
+        st.info("No new leads to review. Nice work!")
+    else:
+        new_ma = len(new_df[new_df['event_type'] == 'merger_acquisition'])
+        new_cfo = len(new_df[new_df['event_type'] == 'cfo_hire'])
+        new_funding = len(new_df[new_df['event_type'] == 'funding'])
+        new_stable = len(new_df[new_df['event_type'] == 'stable_target'])
+        new_exec = len(new_df[new_df['event_type'] == 'executive_hire'])
+        new_other = len(new_df[new_df['event_type'] == 'other'])
 
-    with tab_funding:
-        render_event_section(df, "funding", EVENT_TYPES["funding"], lead_filter)
+        tab_ma, tab_cfo, tab_funding, tab_stable, tab_exec, tab_other = st.tabs([
+            f"🔵 M&A ({new_ma})",
+            f"💼 CFO ({new_cfo})",
+            f"💰 Funding ({new_funding})",
+            f"🎯 Stable ({new_stable})",
+            f"👔 Exec ({new_exec})",
+            f"📋 Other ({new_other})"
+        ])
 
-    with tab_stable:
-        render_event_section(df, "stable_target", EVENT_TYPES["stable_target"], lead_filter)
+        with tab_ma:
+            render_event_section(new_df, "merger_acquisition", EVENT_TYPES["merger_acquisition"], None)
+        with tab_cfo:
+            render_event_section(new_df, "cfo_hire", EVENT_TYPES["cfo_hire"], None)
+        with tab_funding:
+            render_event_section(new_df, "funding", EVENT_TYPES["funding"], None)
+        with tab_stable:
+            render_event_section(new_df, "stable_target", EVENT_TYPES["stable_target"], None)
+        with tab_exec:
+            render_event_section(new_df, "executive_hire", EVENT_TYPES["executive_hire"], None)
+        with tab_other:
+            render_event_section(new_df, "other", EVENT_TYPES["other"], None)
 
-    with tab_exec:
-        render_event_section(df, "executive_hire", EVENT_TYPES["executive_hire"], lead_filter)
+    st.markdown("<br>", unsafe_allow_html=True)
 
-    with tab_other:
-        render_event_section(df, "other", EVENT_TYPES["other"], lead_filter)
+    # ── Classified Leads Section ──
+    classified_count = len(classified_df)
+    st.markdown(f"""
+        <div class="section-header">
+            <span style="font-size: 1.5rem;">📋</span>
+            <h2>Classified Leads</h2>
+            <span class="section-count">{classified_count}</span>
+        </div>
+    """, unsafe_allow_html=True)
 
-    with tab_all:
-        st.markdown("""
-            <div class="section-header">
-                <span style="font-size: 1.5rem;">📊</span>
-                <h2>All Events</h2>
-            </div>
-        """, unsafe_allow_html=True)
+    if classified_df.empty:
+        st.info("No classified leads yet. Review new leads above to classify them.")
+    else:
+        # Build tabs for each classification that has events
+        classified_statuses = [s for s in LEAD_STATUSES if s != "NEW" and s != "NOT RELEVANT"]
+        status_tabs = []
+        status_keys = []
+        for s in classified_statuses:
+            count = len(classified_df[classified_df['lead_status'] == s])
+            if count > 0:
+                cfg = STATUS_CONFIG.get(s, {"icon": "📋", "label": s})
+                status_tabs.append(f"{cfg['icon']} {cfg['label']} ({count})")
+                status_keys.append(s)
 
-        # Apply lead filter
-        filtered_df = df[df['lead_status'].isin(lead_filter)] if lead_filter else df
+        if not status_tabs:
+            st.info("No classified leads yet.")
+        else:
+            tabs = st.tabs(status_tabs)
+            for tab, status_key in zip(tabs, status_keys):
+                with tab:
+                    status_df = classified_df[classified_df['lead_status'] == status_key]
+                    for idx, row in status_df.iterrows():
+                        event_type = row.get('event_type', 'other')
+                        event_config = EVENT_TYPES.get(event_type, EVENT_TYPES['other'])
+                        render_event_card(row, event_config)
 
-        # Table view with modern styling
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── All Events Table ──
+    with st.expander("📊 All Events Table", expanded=False):
         display_cols = ['event_type', 'company_name', 'title', 'published_date', 'lead_status']
-        available_cols = [c for c in display_cols if c in filtered_df.columns]
+        available_cols = [c for c in display_cols if c in df.columns]
 
-        display_df = filtered_df[available_cols].copy()
+        display_df = df[available_cols].copy()
         display_df.columns = ['Type', 'Company', 'Title', 'Published', 'Status']
 
         st.dataframe(
@@ -827,7 +866,6 @@ def main():
             }
         )
 
-        # Export button with modern styling
         col1, col2, col3 = st.columns([1, 1, 2])
         with col1:
             csv = df.to_csv(index=False)
@@ -842,21 +880,24 @@ def main():
     # Sidebar bulk actions
     st.sidebar.markdown("---")
     st.sidebar.markdown("### ⚡ Bulk Actions")
+    st.sidebar.caption("Apply to all NEW leads:")
 
     bulk_status = st.sidebar.selectbox(
-        "Mark visible as:",
+        "Mark all new as:",
         ["Select status..."] + LEAD_STATUSES,
         label_visibility="collapsed"
     )
 
-    if bulk_status and bulk_status != "Select status..." and st.sidebar.button("✓ Apply to Visible", use_container_width=True):
+    if bulk_status and bulk_status != "Select status..." and st.sidebar.button("✓ Apply to All New", use_container_width=True):
         client = get_supabase_client()
-        if client and lead_filter:
-            visible_df = df[df['lead_status'].isin(lead_filter)]
+        if client:
             updated = 0
-            for event_id in visible_df['id'].tolist():
+            for event_id in new_df['id'].tolist():
                 try:
-                    client.table('events').update({'lead_status': bulk_status}).eq('id', event_id).execute()
+                    if bulk_status == "NOT RELEVANT":
+                        client.table('events').delete().eq('id', event_id).execute()
+                    else:
+                        client.table('events').update({'lead_status': bulk_status}).eq('id', event_id).execute()
                     updated += 1
                 except:
                     pass
