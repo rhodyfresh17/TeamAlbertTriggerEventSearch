@@ -160,6 +160,7 @@ st.markdown("""
     .status-reviewed { background: #d1fae5; color: #065f46; }
     .status-customer { background: #fef3c7; color: #92400e; }
     .status-out { background: #fee2e2; color: #991b1b; }
+    .status-not-relevant { background: #f3f4f6; color: #6b7280; }
 
     .event-title {
         font-size: 1rem;
@@ -355,14 +356,16 @@ LEAD_STATUSES = [
     "NEW",
     "REVIEWED - ON REP TAL",
     "REVIEWED - NetSuite Customer",
-    "REVIEWED - Out of Alignment"
+    "REVIEWED - Out of Alignment",
+    "NOT RELEVANT"
 ]
 
 STATUS_CONFIG = {
     "NEW": {"icon": "🆕", "class": "status-new", "label": "New"},
     "REVIEWED - ON REP TAL": {"icon": "🟠", "class": "status-reviewed", "label": "On TAL"},
     "REVIEWED - NetSuite Customer": {"icon": "💼", "class": "status-customer", "label": "Customer"},
-    "REVIEWED - Out of Alignment": {"icon": "❌", "class": "status-out", "label": "Out"}
+    "REVIEWED - Out of Alignment": {"icon": "❌", "class": "status-out", "label": "Out"},
+    "NOT RELEVANT": {"icon": "🚫", "class": "status-not-relevant", "label": "Not Relevant"}
 }
 
 # Backwards compatibility
