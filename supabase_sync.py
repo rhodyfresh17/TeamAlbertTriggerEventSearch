@@ -17,12 +17,16 @@ except ImportError:
 
 
 def get_supabase_client():
-    """Initialize Supabase client."""
+    """Initialize Supabase client with service role key for full write access."""
     url = os.environ.get('SUPABASE_URL')
-    key = os.environ.get('SUPABASE_KEY')
+    # Use service role key for sync (bypasses RLS), fall back to SUPABASE_KEY
+    key = os.environ.get('SUPABASE_SERVICE_ROLE_KEY') or os.environ.get('SUPABASE_KEY')
 
     if not url or not key:
-        raise ValueError("SUPABASE_URL and SUPABASE_KEY environment variables required")
+        raise ValueError(
+            "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_KEY) "
+            "environment variables required"
+        )
 
     return create_client(url, key)
 

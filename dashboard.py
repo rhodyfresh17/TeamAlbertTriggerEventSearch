@@ -699,7 +699,7 @@ def main():
         Add to Streamlit secrets:
         ```
         SUPABASE_URL = "https://your-project.supabase.co"
-        SUPABASE_KEY = "your-anon-key"
+        SUPABASE_KEY = "your-anon-key"  # Use the anon key (not service_role)
         ```
         """)
         return
