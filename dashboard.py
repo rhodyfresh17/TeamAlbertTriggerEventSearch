@@ -450,17 +450,19 @@ def load_events(days: int = 30, search: str = None) -> pd.DataFrame:
 
 
 def update_lead_status(event_id: str, status: str, notes: str = None):
-    """Update lead status for an event in Supabase."""
+    """Update lead status for an event in Supabase. Deletes if NOT RELEVANT."""
     client = get_supabase_client()
     if not client:
         return False
 
     try:
-        data = {'lead_status': status}
-        if notes is not None:
-            data['notes'] = notes
-
-        client.table('events').update(data).eq('id', event_id).execute()
+        if status == "NOT RELEVANT":
+            client.table('events').delete().eq('id', event_id).execute()
+        else:
+            data = {'lead_status': status}
+            if notes is not None:
+                data['notes'] = notes
+            client.table('events').update(data).eq('id', event_id).execute()
         return True
     except Exception as e:
         st.error(f"Error updating status: {e}")
@@ -541,7 +543,10 @@ def render_event_card(row, event_config):
 
                 if st.button("💾 Save Changes", key=f"save_{row['id']}", use_container_width=True):
                     if update_lead_status(row['id'], new_status, notes):
-                        st.success("✓ Saved!")
+                        if new_status == "NOT RELEVANT":
+                            st.success("✓ Event removed!")
+                        else:
+                            st.success("✓ Saved!")
                         st.rerun()
 
 
