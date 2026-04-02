@@ -903,7 +903,7 @@ sources:
       enabled: true
 
     # Financewire - disabled (malformed XML)
-    # FINSMES - disabled (403 blocked)
+    # FINSMES - moved to dedicated scraper (see finsmes section below)
 
     # Industry-specific sources
     - name: "Nonprofit Times"
@@ -1127,6 +1127,11 @@ sources:
   google_news:
     enabled: true
     base_url: "https://news.google.com/rss/search?q="
+
+  # FinSMEs - Startup funding and M&A news (dedicated scraper with browser headers)
+  finsmes:
+    enabled: true
+    url: "https://www.finsmes.com/feed"
 
   # Bing News API (complements Google News - surfaces different results)
   # Free tier: 1,000 calls/month at https://www.microsoft.com/en-us/bing/apis/bing-news-search-api

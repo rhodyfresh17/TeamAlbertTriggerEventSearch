@@ -24,7 +24,7 @@ import yaml
 from .models import TriggerEvent
 from .database import DatabaseManager
 from .alerts import AlertManager
-from .scrapers import RSSScraper, GoogleNewsScraper, JobScraper, BingNewsScraper
+from .scrapers import RSSScraper, GoogleNewsScraper, JobScraper, BingNewsScraper, FinSMEsScraper
 from .enrichment import CompanyEnricher
 
 # Import Supabase sync for cloud dashboard
@@ -55,6 +55,7 @@ class TriggerEventMonitor:
             GoogleNewsScraper(self.config),
             JobScraper(self.config),
             BingNewsScraper(self.config),
+            FinSMEsScraper(self.config),
         ]
 
         if self.enricher.enabled:
