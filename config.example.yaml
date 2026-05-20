@@ -821,6 +821,10 @@ sources:
       enabled: false  # 403 blocked
 
     # Crypto / FinTech sources (Financial Services vertical)
+    - name: "PYMNTS"
+      url: "https://www.pymnts.com/feed/"
+      enabled: true
+
     - name: "CoinDesk"
       url: "https://www.coindesk.com/arc/outboundfeeds/rss/"
       enabled: true
@@ -883,6 +887,11 @@ sources:
       url: "https://www.americascreditunions.org/feed"
       enabled: true
 
+    # Asset Management / Wealth / RIA additional
+    - name: "WealthBriefing Americas"
+      url: "https://www.wealthbriefing.com/html/rss/rss_WealthBriefingAmericas_latest.php"
+      enabled: true
+
     # Insurance sources
     - name: "Insurance Journal"
       url: "https://www.insurancejournal.com/feed/"
@@ -890,6 +899,10 @@ sources:
 
     - name: "Carrier Management"
       url: "https://www.carriermanagement.com/feed/"
+      enabled: true
+
+    - name: "Dig-In (Digital Insurance)"
+      url: "https://www.dig-in.com/feed"
       enabled: true
 
     # Canadian Business
