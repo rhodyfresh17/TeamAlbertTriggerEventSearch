@@ -3,18 +3,22 @@
 enrichment_scout.py — Multi-company enrichment for trigger events.
 
 For every event, this script:
-  1. Reads the title + description and asks Ollama to identify ALL companies
+  1. Reads the title + description and asks an LLM to identify ALL companies
      involved and their roles (Acquirer/Target, Investor/Portfolio Co., etc.)
   2. Searches Tavily for each company's firmographic data
-  3. Uses Ollama to extract: website URL, industry, employee size, HQ, LinkedIn
+  3. Uses an LLM to extract: website URL, industry, employee size, HQ, LinkedIn
   4. Writes the full list as a JSONB array to events.companies_data in Supabase
+
+LLM backend (auto-selected):
+  - If ANTHROPIC_API_KEY is set → uses claude-3-5-haiku (fast, cloud, works in CI)
+  - Otherwise → uses Ollama qwen2.5:14b (local)
 
 Company firmographics are cached per run so the same company in multiple events
 is only searched once.
 
 Prerequisites:
     pip install requests supabase python-dotenv
-    Ollama must be running locally with qwen2.5:14b
+    Ollama must be running locally (or ANTHROPIC_API_KEY set for cloud)
 
 Supabase migration (run once in SQL Editor before first use):
     ALTER TABLE events ADD COLUMN IF NOT EXISTS companies_data JSONB;
@@ -52,20 +56,20 @@ except ImportError:
     SUPABASE_AVAILABLE = False
 
 # ── Config ────────────────────────────────────────────────────────────────────
-TAVILY_API_KEY = os.environ.get(
-    'TAVILY_API_KEY',
-    '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'
+TAVILY_API_KEY    = os.environ.get('TAVILY_API_KEY',
+    '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')
+ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
+OLLAMA_URL        = os.environ.get('OLLAMA_URL',   'http://localhost:11434')
+OLLAMA_MODEL      = os.environ.get('OLLAMA_MODEL', 'qwen2.5:14b')
+CLAUDE_MODEL      = 'claude-3-5-haiku-20241022'
+
+RATE_LIMIT_SECONDS = 1.2
+
+MIGRATION_SQL = (
+    "Run in Supabase SQL Editor:\n"
+    "  ALTER TABLE events ADD COLUMN IF NOT EXISTS companies_data JSONB;\n"
+    "  ALTER TABLE events ADD COLUMN IF NOT EXISTS enriched_at    TIMESTAMPTZ;"
 )
-OLLAMA_URL   = os.environ.get('OLLAMA_URL',   'http://localhost:11434')
-OLLAMA_MODEL = os.environ.get('OLLAMA_MODEL', 'qwen2.5:14b')
-
-RATE_LIMIT_SECONDS = 1.2   # between Tavily calls
-MIGRATION_SQL = """\
-Run this in your Supabase SQL Editor (Project → SQL Editor):
-
-    ALTER TABLE events ADD COLUMN IF NOT EXISTS companies_data JSONB;
-    ALTER TABLE events ADD COLUMN IF NOT EXISTS enriched_at    TIMESTAMPTZ;
-"""
 
 logging.basicConfig(
     level=logging.INFO,
@@ -75,34 +79,58 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
-# ── Supabase ──────────────────────────────────────────────────────────────────
+# ── LLM abstraction (Anthropic API or Ollama) ─────────────────────────────────
 
-def get_supabase():
-    if not SUPABASE_AVAILABLE:
-        sys.exit("supabase package not installed. Run: pip install supabase")
-    url = os.environ.get('SUPABASE_URL')
-    key = os.environ.get('SUPABASE_SERVICE_ROLE_KEY') or os.environ.get('SUPABASE_KEY')
-    if not url or not key:
-        sys.exit("Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env")
-    return create_client(url, key)
+def _llm_backend():
+    return 'anthropic' if ANTHROPIC_API_KEY else 'ollama'
 
 
-def check_columns(client):
-    """Return which enrichment columns already exist."""
-    exists = {}
-    for col in ('companies_data', 'enriched_at'):
-        try:
-            client.table('events').select(col).limit(1).execute()
-            exists[col] = True
-        except Exception:
-            exists[col] = False
-    return exists
+def llm_json(prompt: str, max_tokens: int = 600) -> dict:
+    """
+    Send prompt to the active LLM, return parsed JSON dict.
+    Tries Anthropic claude-3-5-haiku if ANTHROPIC_API_KEY is set, else Ollama.
+    Returns {} on any failure.
+    """
+    if _llm_backend() == 'anthropic':
+        return _anthropic_json(prompt, max_tokens)
+    return _ollama_json(prompt, max_tokens)
 
 
-# ── Ollama helpers ────────────────────────────────────────────────────────────
+def _anthropic_json(prompt: str, max_tokens: int) -> dict:
+    system = (
+        "You are a precise data extraction assistant. "
+        "Always respond with valid JSON only — no markdown fences, no explanation."
+    )
+    try:
+        resp = requests.post(
+            'https://api.anthropic.com/v1/messages',
+            headers={
+                'x-api-key':         ANTHROPIC_API_KEY,
+                'anthropic-version': '2023-06-01',
+                'content-type':      'application/json',
+            },
+            json={
+                'model':      CLAUDE_MODEL,
+                'max_tokens': max_tokens,
+                'system':     system,
+                'messages':   [{'role': 'user', 'content': prompt}],
+            },
+            timeout=30
+        )
+        resp.raise_for_status()
+        text = resp.json()['content'][0]['text'].strip()
+        # Strip any accidental markdown fences
+        if text.startswith('```'):
+            text = text.split('```')[1]
+            if text.startswith('json'):
+                text = text[4:]
+        return json.loads(text)
+    except Exception as e:
+        log.warning(f'  Anthropic error: {e}')
+        return {}
 
-def ollama_json(prompt: str, max_tokens: int = 600) -> dict:
-    """Call Ollama and return parsed JSON. Returns {} on failure."""
+
+def _ollama_json(prompt: str, max_tokens: int) -> dict:
     try:
         resp = requests.post(
             f'{OLLAMA_URL}/api/generate',
@@ -122,48 +150,65 @@ def ollama_json(prompt: str, max_tokens: int = 600) -> dict:
         return {}
 
 
-# ── Step 1 — Extract companies from event text ────────────────────────────────
+# ── Supabase ──────────────────────────────────────────────────────────────────
+
+def get_supabase():
+    if not SUPABASE_AVAILABLE:
+        sys.exit("supabase package not installed. Run: pip install supabase")
+    url = os.environ.get('SUPABASE_URL')
+    key = os.environ.get('SUPABASE_SERVICE_ROLE_KEY') or os.environ.get('SUPABASE_KEY')
+    if not url or not key:
+        sys.exit("Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env")
+    return create_client(url, key)
+
+
+def check_columns(client):
+    exists = {}
+    for col in ('companies_data', 'enriched_at'):
+        try:
+            client.table('events').select(col).limit(1).execute()
+            exists[col] = True
+        except Exception:
+            exists[col] = False
+    return exists
+
+
+# ── Step 1 — Extract companies + roles from event text ───────────────────────
 
 EXTRACT_PROMPT = '''\
-You are a business analyst reading a news event. Identify every real company \
-(business entity) mentioned and its role in the story.
+You are a business analyst reading a news event. Identify every real, named \
+company (business entity) mentioned and its role in the story.
 
 Event type: {event_type}
 Title: {title}
 Description: {description}
 
-Return ONLY a JSON object with one key "companies" containing an array. \
-Each element has "name" (exact company name) and "role" (their role). \
-Use these role labels:
-  M&A:          "Acquirer", "Target", "Advisor"
-  Funding:      "Portfolio Company", "Lead Investor", "Investor"
-  CFO/Exec hire:"Hiring Company", "Previous Employer"
-  Other:        "Primary", "Partner", "Mentioned"
-
 Rules:
-- Only include real, named companies (not people, governments, or vague terms).
-- If only one company is relevant, still return an array of one.
+- Use the FULL official company name as it appears in the text (e.g. \
+"Bluespring Wealth Partners" not just "Bluespring"; "NextEra Energy" not "NextEra").
+- Only include real, named businesses — not people, government bodies, or vague terms.
+- Assign a specific role using these labels:
+    M&A events:           "Acquirer", "Target", "Advisor"
+    Funding events:       "Portfolio Company", "Lead Investor", "Investor"
+    CFO / exec hire:      "Hiring Company", "Previous Employer"
+    Other:                "Primary", "Partner", "Mentioned"
 - Maximum 5 companies.
-- If no companies can be identified, return {{"companies": []}}.
+- If no named companies can be identified, return {{"companies": []}}.
 
-Example output:
-{{"companies": [{{"name": "Acme Corp", "role": "Acquirer"}}, \
-{{"name": "Beta Inc", "role": "Target"}}]}}'''
+Return ONLY a JSON object with one key:
+{{"companies": [{{"name": "Full Company Name", "role": "Role"}}, ...]}}'''
 
 
 def extract_event_companies(event: dict) -> list:
-    """Ask Ollama to identify all companies and their roles in one event."""
     prompt = EXTRACT_PROMPT.format(
         event_type=event.get('event_type', ''),
-        title=event.get('title', '')[:200],
-        description=(event.get('description', '') or '')[:600],
+        title=event.get('title', '')[:220],
+        description=(event.get('description', '') or '')[:700],
     )
-    data = ollama_json(prompt, max_tokens=400)
-    companies = data.get('companies', [])
-
-    # Validate shape
+    data = llm_json(prompt, max_tokens=400)
+    raw = data.get('companies', [])
     valid = []
-    for c in companies:
+    for c in raw:
         name = (c.get('name') or '').strip()
         role = (c.get('role') or 'Mentioned').strip()
         if name and len(name) > 1 and name.lower() not in (
@@ -173,22 +218,20 @@ def extract_event_companies(event: dict) -> list:
     return valid[:5]
 
 
-# ── Step 2 — Search Tavily for one company ────────────────────────────────────
+# ── Step 2 — Tavily web search ────────────────────────────────────────────────
 
-def tavily_search(company_name: str) -> dict:
-    """Return Tavily search results for a company. Returns {} on failure."""
-    query = (
-        f'"{company_name}" company official website '
-        f'headquarters industry employees'
-    )
+def tavily_search(company_name: str, industry_hint: str = '') -> dict:
+    """Search Tavily. industry_hint steers results toward the right entity."""
+    hint = f' {industry_hint}' if industry_hint else ''
+    query = f'"{company_name}"{hint} company official website headquarters employees'
     try:
         resp = requests.post(
             'https://api.tavily.com/search',
             json={
-                'api_key':       TAVILY_API_KEY,
-                'query':         query,
-                'max_results':   5,
-                'search_depth':  'basic',
+                'api_key':        TAVILY_API_KEY,
+                'query':          query,
+                'max_results':    5,
+                'search_depth':   'basic',
                 'include_answer': True,
             },
             timeout=20
@@ -200,60 +243,61 @@ def tavily_search(company_name: str) -> dict:
         return {}
 
 
-# ── Step 3 — Extract firmographics from search results ────────────────────────
+# ── Step 3 — Extract firmographics from search results ───────────────────────
 
 FIRMOGRAPHIC_PROMPT = '''\
-Extract company firmographic data from the search results below.
+Extract firmographic data for a specific company from the search results below.
 
-Company: "{company_name}"
+Target company: "{company_name}"
+Industry context from the news event: "{industry_hint}"
 
 Search results:
 {results_text}
 
+Important: Only extract data that clearly matches "{company_name}" in the context \
+of "{industry_hint}". If the results describe a different company with a similar \
+name (wrong country, wrong industry), return null for those fields rather than \
+guessing.
+
 Return ONLY a JSON object (no markdown, no explanation) with these keys \
-(null if unknown):
+(null if unknown or ambiguous):
 {{
   "url":      "official website URL (https://...) or null",
-  "industry": "specific industry, e.g. 'Healthcare Technology', \
-'Commercial Banking', 'B2B SaaS', 'Insurance', 'Private Equity', \
-'Utilities' — be specific, not generic, or null",
+  "industry": "specific industry — be precise, e.g. 'Wealth Management', \
+'Healthcare IT', 'Commercial Banking', 'B2B SaaS', 'Private Equity', \
+'Utilities' — not generic like 'Technology' or 'Services' — or null",
   "size":     "one of: '1-50', '51-200', '201-500', '501-1000', \
 '1001-5000', '5000+', or null",
-  "hq":       "City, ST format e.g. 'Boston, MA' or 'Toronto, ON', or null",
+  "hq":       "City, ST abbreviation (e.g. 'Boston, MA' or 'Toronto, ON'), \
+US/Canada only unless clearly elsewhere — or null",
   "linkedin": "full https://www.linkedin.com/company/... URL or null"
 }}'''
 
 
-def enrich_one_company(company_name: str) -> dict:
-    """
-    Search Tavily + extract firmographics for one company name.
-    Returns a dict with keys: url, industry, size, hq, linkedin (all may be None).
-    """
+def enrich_one_company(company_name: str, industry_hint: str = '') -> dict:
     empty = {'url': None, 'industry': None, 'size': None,
              'hq': None, 'linkedin': None}
 
-    search = tavily_search(company_name)
+    search = tavily_search(company_name, industry_hint)
     if not search.get('results'):
         return empty
 
-    answer  = search.get('answer', '')
-    results = search.get('results', [])
-
     lines = []
-    if answer:
-        lines.append(f'Summary: {answer}\n')
-    for r in results[:5]:
+    if search.get('answer'):
+        lines.append(f"Summary: {search['answer']}\n")
+    for r in search.get('results', [])[:5]:
         lines.append(
             f"- {r.get('title','')}\n"
             f"  {r.get('url','')}\n"
-            f"  {(r.get('content','') or '')[:300]}\n"
+            f"  {(r.get('content','') or '')[:320]}\n"
         )
 
     prompt = FIRMOGRAPHIC_PROMPT.format(
         company_name=company_name,
+        industry_hint=industry_hint or 'unknown',
         results_text='\n'.join(lines).strip()
     )
-    data = ollama_json(prompt, max_tokens=400)
+    data = llm_json(prompt, max_tokens=400)
 
     return {
         'url':      data.get('url')      or None,
@@ -271,63 +315,61 @@ def enrich_events(
     re_enrich: bool = False,
     dry_run: bool = False,
 ):
-    client = get_supabase()
-    col_exists = check_columns(client)
+    client  = get_supabase()
+    col_ok  = check_columns(client)
+    backend = _llm_backend()
 
-    if not col_exists.get('companies_data'):
-        log.warning('companies_data column missing from Supabase.')
-        log.warning(MIGRATION_SQL)
+    if not col_ok.get('companies_data'):
+        log.warning(f'companies_data column missing. {MIGRATION_SQL}')
         if not dry_run:
             sys.exit(1)
+
+    log.info(f'LLM backend: {backend} '
+             f'({"claude-3-5-haiku" if backend == "anthropic" else OLLAMA_MODEL})')
 
     # ── Fetch events ──────────────────────────────────────────────────────
     query = client.table('events').select(
         'id, company_name, event_type, title, description'
     )
-    if not re_enrich and col_exists.get('enriched_at'):
+    if not re_enrich and col_ok.get('enriched_at'):
         query = query.is_('enriched_at', 'null')
 
     result = query.order('discovered_at', desc=True).execute()
     events = result.data or []
-
     if limit:
         events = events[:limit]
 
     if not events:
-        log.info('No unenriched events found — nothing to do.')
+        log.info('No unenriched events — nothing to do.')
         return
 
     tag = 'DRY RUN — ' if dry_run else ''
-    log.info(
-        f'{tag}Processing {len(events)} event(s) '
-        f'with Ollama ({OLLAMA_MODEL}) + Tavily'
-    )
+    log.info(f'{tag}Processing {len(events)} event(s)')
     print()
 
-    # Firmographic cache: company_name_lower → {url, industry, size, hq, linkedin}
     firm_cache: dict = {}
     tavily_calls = 0
-
     ok = fail = 0
 
     for idx, event in enumerate(events, 1):
         eid   = event['id']
         title = (event.get('title') or '')[:80]
+        etype = event.get('event_type', '')
         log.info(f'[{idx}/{len(events)}] {title}')
 
         # ── 1. Extract companies + roles ──────────────────────────────────
         companies = extract_event_companies(event)
 
         if not companies:
-            # Fall back to the stored company_name if Ollama found nothing
             fallback = (event.get('company_name') or '').strip()
-            if fallback and fallback.lower() not in ('unknown', 'unknown company', 'nan'):
+            if fallback and fallback.lower() not in (
+                'unknown', 'unknown company', 'nan'
+            ):
                 companies = [{'name': fallback, 'role': 'Primary'}]
 
         if not companies:
-            log.info('  No companies identified — skipping')
-            if not dry_run and col_exists.get('enriched_at'):
-                # Mark as processed so we don't retry forever
+            log.info('  No companies identified — marking processed')
+            if not dry_run and col_ok.get('enriched_at'):
                 try:
                     client.table('events').update(
                         {'enriched_at': datetime.utcnow().isoformat()}
@@ -341,16 +383,27 @@ def enrich_events(
         log.info(f'  Companies: {co_summary}')
 
         # ── 2. Enrich each company ────────────────────────────────────────
-        enriched_companies = []
+        enriched = []
         for co in companies:
-            name     = co['name']
-            role     = co['role']
+            name      = co['name']
+            role      = co['role']
             cache_key = name.lower().strip()
+
+            # Build an industry hint from the event type + role to disambiguate
+            hint_parts = []
+            if etype in ('MERGER_ACQUISITION', 'FUNDING'):
+                hint_parts.append('financial services private equity')
+            if etype == 'EXECUTIVE_HIRE':
+                hint_parts.append('B2B company')
+            # Add the role context too
+            if role in ('Acquirer', 'Target', 'Portfolio Company', 'Hiring Company'):
+                hint_parts.append('North America')
+            industry_hint = ' '.join(hint_parts)
 
             if cache_key not in firm_cache:
                 log.info(f'  → Searching: {name}')
                 if not dry_run:
-                    firm_cache[cache_key] = enrich_one_company(name)
+                    firm_cache[cache_key] = enrich_one_company(name, industry_hint)
                     tavily_calls += 1
                     time.sleep(RATE_LIMIT_SECONDS)
                 else:
@@ -366,7 +419,7 @@ def enrich_events(
             if found:
                 log.info(f'     {" | ".join(found)}')
 
-            enriched_companies.append({
+            enriched.append({
                 'name':     name,
                 'role':     role,
                 'url':      firm.get('url'),
@@ -378,20 +431,19 @@ def enrich_events(
 
         # ── 3. Write to Supabase ──────────────────────────────────────────
         if dry_run:
-            log.info(f'  Would write {len(enriched_companies)} company record(s)')
+            log.info(f'  Would write {len(enriched)} company record(s)')
             ok += 1
             continue
 
-        payload = {'companies_data': enriched_companies}
-        if col_exists.get('enriched_at'):
+        payload = {'companies_data': enriched}
+        if col_ok.get('enriched_at'):
             payload['enriched_at'] = datetime.utcnow().isoformat()
 
         try:
             client.table('events').update(payload).eq('id', eid).execute()
             ok += 1
         except Exception as e:
-            err = str(e)
-            if 'does not exist' in err:
+            if 'does not exist' in str(e):
                 log.error(f'  Write failed — missing column. {MIGRATION_SQL}')
             else:
                 log.error(f'  Supabase write failed: {e}')
@@ -400,8 +452,7 @@ def enrich_events(
     print()
     log.info(
         f'Done — enriched: {ok}, failed: {fail}, '
-        f'Tavily searches: {tavily_calls}, '
-        f'cache hits: {sum(1 for _ in firm_cache) - tavily_calls if tavily_calls else 0}'
+        f'Tavily searches: {tavily_calls}'
     )
 
 
