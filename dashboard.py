@@ -546,7 +546,36 @@ def render_metric_card(icon: str, value: int, label: str, color: str, gradient: 
     """, unsafe_allow_html=True)
 
 
+def check_password() -> bool:
+    """Returns True if the user entered the correct password."""
+    if st.session_state.get("authenticated"):
+        return True
+
+    st.markdown("""
+        <div class="main-header">
+            <h1>🎯 Sales Trigger Events</h1>
+            <p>Team Albert — NetSuite Sales Intelligence</p>
+        </div>
+    """, unsafe_allow_html=True)
+
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col2:
+        password = st.text_input("Team Password", type="password", placeholder="Enter password...")
+        if st.button("Sign In", use_container_width=True):
+            expected = st.secrets.get("DASHBOARD_PASSWORD", "")
+            if password == expected and expected:
+                st.session_state["authenticated"] = True
+                st.rerun()
+            else:
+                st.error("Incorrect password.")
+
+    return False
+
+
 def main():
+    if not check_password():
+        return
+
     # Modern gradient header
     st.markdown("""
         <div class="main-header">
