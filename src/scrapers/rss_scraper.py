@@ -171,12 +171,20 @@ class RSSScraper(BaseScraper):
         # Track recommendation reasoning for stable targets
         recommendation_reasoning = None
 
-        # STEP 3: If dateline is in territory, ALWAYS include (as appropriate event type)
+        # Always hard-block excluded industries and public companies
+        matches_target_industry, matches_excluded = self.matches_industry(full_text)
+        if matches_excluded:
+            return None
+        if self.is_public_company(full_text):
+            return None
+
+        # STEP 3: Apply territory + trigger filtering
         if dateline_in_territory:
-            # If no specific trigger event detected, mark as stable target
+            # Dateline is in territory — require a trigger event OR known target company
+            if not event_type and not matches_company:
+                return None
             if not event_type:
                 event_type = EventType.STABLE_TARGET
-                # Generate simple reasoning
                 extracted_company = company_name or self.extract_company_name(full_text)
                 matched_industries = self.get_matched_industries(full_text)
                 location_info = dateline_matched_location or "territory"
@@ -192,34 +200,19 @@ class RSSScraper(BaseScraper):
             if self.is_excluded_location(full_text):
                 return None
 
-            # Check industry match
-            matches_target_industry, matches_excluded = self.matches_industry(full_text)
-
-            # Skip if matches excluded industry
-            if matches_excluded:
-                return None
-
-            # Skip public companies (we target mid-market private)
-            if self.is_public_company(full_text):
-                return None
-
-            # If no trigger event, skip (not in territory, no trigger = not relevant)
+            # If no trigger event, skip
             if not event_type:
-                # Exception: PE-backed M&A or target company
                 is_pe_backed = self._is_pe_backed(full_text)
                 if not (matches_company or (is_pe_backed and in_territory)):
                     return None
-                # If we get here, it's a PE-backed deal or target company mention
                 event_type = EventType.STABLE_TARGET
 
-            # Must match territory OR be a target company OR be PE-backed M&A
+            # Must match territory OR be a named target company
             is_pe_backed = self._is_pe_backed(full_text)
             is_ma_event = event_type == EventType.MERGER_ACQUISITION
 
             if self.require_territory_match:
-                if is_pe_backed and is_ma_event:
-                    pass  # PE-backed M&A - include regardless of territory
-                elif not (in_territory or matches_company):
+                if not (in_territory or matches_company):
                     return None
 
         # Get industry match info (may not be set for dateline-in-territory)
