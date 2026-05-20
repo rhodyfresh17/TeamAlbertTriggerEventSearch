@@ -877,11 +877,11 @@ def main():
             tabs = st.tabs(status_tabs)
             for tab, status_key in zip(tabs, status_keys):
                 with tab:
-            status_df = classified_df[classified_df['lead_status'] == selected_status_key]
-            for idx, row in status_df.iterrows():
-                event_type = row.get('event_type', 'other')
-                event_config = EVENT_TYPES.get(event_type, EVENT_TYPES['other'])
-                render_event_card(row, event_config)
+                    status_df = classified_df[classified_df['lead_status'] == status_key]
+                    for idx, row in status_df.iterrows():
+                        event_type = row.get('event_type', 'other')
+                        event_config = EVENT_TYPES.get(event_type, EVENT_TYPES['other'])
+                        render_event_card(row, event_config)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
