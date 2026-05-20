@@ -26,9 +26,15 @@ def get_logo_base64() -> str:
     return ""
 
 # Page config
+try:
+    from PIL import Image as PILImage
+    _favicon = PILImage.open("assets/logo.png")
+except Exception:
+    _favicon = "🎯"
+
 st.set_page_config(
-    page_title="Sales Trigger Events",
-    page_icon="🎯",
+    page_title="Team Albert | Sales Intelligence",
+    page_icon=_favicon,
     layout="wide",
     initial_sidebar_state="expanded"
 )
