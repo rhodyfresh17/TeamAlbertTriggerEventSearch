@@ -75,10 +75,11 @@ st.markdown("""
     .header-inner {
         display: flex;
         align-items: center;
+        justify-content: space-between;
         gap: 1.75rem;
     }
     .header-logo {
-        height: 90px;
+        height: 120px;
         width: auto;
         opacity: 0.95;
         flex-shrink: 0;
@@ -598,12 +599,11 @@ def check_password() -> bool:
     st.markdown(f"""
         <div class="main-header">
             <div class="header-inner">
-                {logo_html}
                 <div class="header-text">
-                    <p class="header-subtitle">NetSuite Mid-Market Sales</p>
+                    <p class="header-subtitle">NetSuite Up-Market Sales</p>
                     <h1 class="header-title">Team Albert</h1>
-                    <p class="header-tagline">Sales trigger events — East Coast &amp; Eastern Canada</p>
                 </div>
+                {logo_html}
             </div>
         </div>
     """, unsafe_allow_html=True)
@@ -632,12 +632,11 @@ def main():
     st.markdown(f"""
         <div class="main-header">
             <div class="header-inner">
-                {logo_html}
                 <div class="header-text">
-                    <p class="header-subtitle">NetSuite Mid-Market Sales</p>
+                    <p class="header-subtitle">NetSuite Up-Market Sales</p>
                     <h1 class="header-title">Team Albert</h1>
-                    <p class="header-tagline">Sales trigger events — East Coast &amp; Eastern Canada</p>
                 </div>
+                {logo_html}
             </div>
         </div>
     """, unsafe_allow_html=True)
