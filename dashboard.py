@@ -10,6 +10,7 @@ Usage:
 """
 
 import os
+import json
 import base64
 import urllib.parse
 import pandas as pd
@@ -491,22 +492,119 @@ def render_event_card(row, event_config):
                     st.markdown("**Description**")
                     st.caption(str(desc)[:500] + "..." if len(str(desc)) > 500 else str(desc))
 
+                # ── Company Intel (multi-company enrichment) ──────────────
+                companies_data = row.get('companies_data') or []
+                # Supabase returns JSONB as already-parsed list or as a string
+                if isinstance(companies_data, str):
+                    try:
+                        companies_data = json.loads(companies_data)
+                    except Exception:
+                        companies_data = []
+
+                def _v(val):
+                    """Return None for any nullish value."""
+                    s = str(val).strip() if val is not None else ''
+                    return s if s and s.lower() not in ('none','null','nan','') else None
+
+                if companies_data:
+                    st.markdown(
+                        "<div style='margin:10px 0 6px;font-size:0.72rem;"
+                        "font-weight:600;color:rgba(255,255,255,0.45);"
+                        "letter-spacing:0.08em;text-transform:uppercase;'>"
+                        "Companies Involved</div>",
+                        unsafe_allow_html=True
+                    )
+                    for co in companies_data:
+                        co_name     = _v(co.get('name'))
+                        co_role     = _v(co.get('role'))
+                        co_url      = _v(co.get('url'))
+                        co_industry = _v(co.get('industry'))
+                        co_size     = _v(co.get('size'))
+                        co_hq       = _v(co.get('hq'))
+                        co_linkedin = _v(co.get('linkedin'))
+
+                        # Name + role header
+                        role_html = (
+                            f"<span style='font-size:0.72rem;color:rgba(78,140,170,0.9);"
+                            f"font-weight:600;margin-left:6px;'>{co_role}</span>"
+                            if co_role else ""
+                        )
+                        st.markdown(
+                            f"<div style='margin:4px 0 2px;'>"
+                            f"<span style='font-size:0.9rem;font-weight:600;"
+                            f"color:rgba(255,255,255,0.88);'>{co_name or '—'}</span>"
+                            f"{role_html}</div>",
+                            unsafe_allow_html=True
+                        )
+
+                        # Chips row
+                        chips = []
+                        if co_industry: chips.append(f"🏭 {co_industry}")
+                        if co_size:     chips.append(f"👥 {co_size}")
+                        if co_hq:       chips.append(f"📍 {co_hq}")
+                        if chips:
+                            st.markdown(
+                                "  <span style='color:rgba(255,255,255,0.35);'>·</span>  ".join(
+                                    f"<span style='font-size:0.78rem;"
+                                    f"color:rgba(255,255,255,0.65);'>{c}</span>"
+                                    for c in chips
+                                ),
+                                unsafe_allow_html=True
+                            )
+
+                        # Per-company links
+                        g_query = urllib.parse.quote((co_name or '') + ' company')
+                        li_search = (
+                            f"https://www.linkedin.com/search/results/companies/?"
+                            f"keywords={urllib.parse.quote(co_name or '')}"
+                        )
+                        co_buttons = []
+                        if co_url:      co_buttons.append(("🌐 Website",  co_url))
+                        if co_linkedin: co_buttons.append(("💼 LinkedIn", co_linkedin))
+                        elif co_name:   co_buttons.append(("💼 LinkedIn", li_search))
+                        if co_name:     co_buttons.append(("🔍 Google",   f"https://www.google.com/search?q={g_query}"))
+
+                        if co_buttons:
+                            btn_cols = st.columns(len(co_buttons))
+                            for bcol, (blabel, bhref) in zip(btn_cols, co_buttons):
+                                with bcol:
+                                    st.link_button(blabel, bhref, use_container_width=True)
+
+                        st.markdown(
+                            "<div style='border-top:1px solid rgba(255,255,255,0.07);"
+                            "margin:8px 0 6px;'></div>",
+                            unsafe_allow_html=True
+                        )
+
+                # ── Article link (always shown) ───────────────────────────
                 url = row.get('url', '')
                 company = str(row.get('company_name') or '').strip()
                 company = '' if company.lower() in ('nan', 'none', 'unknown company') else company
-                li_url = f"https://www.linkedin.com/search/results/companies/?keywords={urllib.parse.quote(company)}" if company else ""
-                g_url = f"https://www.google.com/search?q={urllib.parse.quote(company + ' company')}" if company else ""
 
-                link_cols = st.columns(3)
-                with link_cols[0]:
-                    if url:
-                        st.link_button("🔗 Article", url, use_container_width=True)
-                with link_cols[1]:
-                    if li_url:
-                        st.link_button("💼 LinkedIn", li_url, use_container_width=True)
-                with link_cols[2]:
-                    if g_url:
-                        st.link_button("🔍 Google", g_url, use_container_width=True)
+                # Fallback links when enrichment hasn't run yet
+                li_url = (
+                    f"https://www.linkedin.com/search/results/companies/?keywords="
+                    f"{urllib.parse.quote(company)}" if company else ""
+                )
+                g_url = (
+                    f"https://www.google.com/search?q={urllib.parse.quote(company + ' company')}"
+                    if company else ""
+                )
+
+                fallback_buttons = []
+                if url:    fallback_buttons.append(("🔗 Source Article", url))
+                # Only show generic links if no enrichment data yet
+                if not companies_data:
+                    if li_url: fallback_buttons.append(("💼 LinkedIn", li_url))
+                    if g_url:  fallback_buttons.append(("🔍 Google",   g_url))
+                elif url:
+                    pass  # article link already in fallback_buttons above
+
+                if fallback_buttons:
+                    fb_cols = st.columns(len(fallback_buttons))
+                    for fcol, (flabel, fhref) in zip(fb_cols, fallback_buttons):
+                        with fcol:
+                            st.link_button(flabel, fhref, use_container_width=True)
 
             with col2:
                 current_status = status
