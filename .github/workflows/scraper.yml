@@ -6,6 +6,9 @@ on:
     - cron: '0 */4 * * *'
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   scrape:
     runs-on: ubuntu-latest
@@ -120,3 +123,4 @@ jobs:
           name: alerts-${{ github.run_number }}
           path: alerts/
           retention-days: 30
+          if-no-files-found: ignore
