@@ -844,10 +844,10 @@ sources:
 
     - name: "Chronicle of Philanthropy"
       url: "https://www.philanthropy.com/feed"
-      enabled: true
+      enabled: false  # paywalled — returns empty feed
 
     - name: "Inside Philanthropy"
-      url: "https://www.insidephilanthropy.com/home?format=rss"
+      url: "https://www.insidephilanthropy.com/feed"
       enabled: true
 
     - name: "Philanthropy News Digest"
@@ -876,7 +876,11 @@ sources:
       enabled: true
 
     - name: "Credit Union Journal"
-      url: "https://www.cujournal.com/feed"
+      url: "https://www.cujournal.com/rss"
+      enabled: true
+
+    - name: "America's Credit Unions"
+      url: "https://www.americascreditunions.org/feed"
       enabled: true
 
     # Insurance sources
