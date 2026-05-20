@@ -79,7 +79,7 @@ st.markdown("""
         gap: 1.75rem;
     }
     .header-logo {
-        height: 120px;
+        height: 160px;
         width: auto;
         opacity: 0.95;
         flex-shrink: 0;
@@ -602,6 +602,7 @@ def check_password() -> bool:
                 <div class="header-text">
                     <p class="header-subtitle">NetSuite Up-Market Sales</p>
                     <h1 class="header-title">Team Albert</h1>
+                    <p class="header-tagline">Sales trigger events — East Coast &amp; Eastern Canada</p>
                 </div>
                 {logo_html}
             </div>
@@ -635,6 +636,7 @@ def main():
                 <div class="header-text">
                     <p class="header-subtitle">NetSuite Up-Market Sales</p>
                     <h1 class="header-title">Team Albert</h1>
+                    <p class="header-tagline">Sales trigger events — East Coast &amp; Eastern Canada</p>
                 </div>
                 {logo_html}
             </div>
