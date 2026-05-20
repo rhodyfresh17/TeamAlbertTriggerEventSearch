@@ -823,27 +823,23 @@ def main():
         new_exec = len(new_df[new_df['event_type'] == 'executive_hire'])
         new_other = len(new_df[new_df['event_type'] == 'other'])
 
-        tab_ma, tab_cfo, tab_funding, tab_stable, tab_exec, tab_other = st.tabs([
-            f"🔵 M&A ({new_ma})",
-            f"💼 CFO ({new_cfo})",
-            f"💰 Funding ({new_funding})",
-            f"🎯 Stable ({new_stable})",
-            f"👔 Exec ({new_exec})",
-            f"📋 Other ({new_other})"
-        ])
-
-        with tab_ma:
-            render_event_section(new_df, "merger_acquisition", EVENT_TYPES["merger_acquisition"], None)
-        with tab_cfo:
-            render_event_section(new_df, "cfo_hire", EVENT_TYPES["cfo_hire"], None)
-        with tab_funding:
-            render_event_section(new_df, "funding", EVENT_TYPES["funding"], None)
-        with tab_stable:
-            render_event_section(new_df, "stable_target", EVENT_TYPES["stable_target"], None)
-        with tab_exec:
-            render_event_section(new_df, "executive_hire", EVENT_TYPES["executive_hire"], None)
-        with tab_other:
-            render_event_section(new_df, "other", EVENT_TYPES["other"], None)
+        new_tab_options = {
+            f"🔵 M&A ({new_ma})": ("merger_acquisition", EVENT_TYPES["merger_acquisition"]),
+            f"💼 CFO ({new_cfo})": ("cfo_hire", EVENT_TYPES["cfo_hire"]),
+            f"💰 Funding ({new_funding})": ("funding", EVENT_TYPES["funding"]),
+            f"🎯 Stable ({new_stable})": ("stable_target", EVENT_TYPES["stable_target"]),
+            f"👔 Exec ({new_exec})": ("executive_hire", EVENT_TYPES["executive_hire"]),
+            f"📋 Other ({new_other})": ("other", EVENT_TYPES["other"]),
+        }
+        selected_new_tab = st.radio(
+            "Event type",
+            list(new_tab_options.keys()),
+            key="new_leads_tab",
+            horizontal=True,
+            label_visibility="collapsed"
+        )
+        event_type_key, event_config = new_tab_options[selected_new_tab]
+        render_event_section(new_df, event_type_key, event_config, None)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -874,14 +870,19 @@ def main():
         if not status_tabs:
             st.info("No classified leads yet.")
         else:
-            tabs = st.tabs(status_tabs)
-            for tab, status_key in zip(tabs, status_keys):
-                with tab:
-                    status_df = classified_df[classified_df['lead_status'] == status_key]
-                    for idx, row in status_df.iterrows():
-                        event_type = row.get('event_type', 'other')
-                        event_config = EVENT_TYPES.get(event_type, EVENT_TYPES['other'])
-                        render_event_card(row, event_config)
+            selected_status_tab = st.radio(
+                "Status",
+                status_tabs,
+                key="classified_tab",
+                horizontal=True,
+                label_visibility="collapsed"
+            )
+            selected_status_key = status_keys[status_tabs.index(selected_status_tab)]
+            status_df = classified_df[classified_df['lead_status'] == selected_status_key]
+            for idx, row in status_df.iterrows():
+                event_type = row.get('event_type', 'other')
+                event_config = EVENT_TYPES.get(event_type, EVENT_TYPES['other'])
+                render_event_card(row, event_config)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
