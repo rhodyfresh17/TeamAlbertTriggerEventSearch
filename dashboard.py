@@ -173,12 +173,16 @@ st.markdown("""
     .event-meta    { display: flex; gap: 1rem; margin-top: 0.75rem; font-size: 0.8rem; color: var(--text-muted); }
 
     /* Sidebar */
+    section[data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #1a3a4a 0%, #152f3d 100%) !important;
+        border-right: 1px solid rgba(78,140,170,0.2);
+    }
     section[data-testid="stSidebar"] .sidebar-section-title {
         font-size: 0.75rem;
         font-weight: 700;
         text-transform: uppercase;
         letter-spacing: 0.08em;
-        color: var(--sidebar-title) !important;
+        color: #c9a84c !important;
         margin: 1rem 0 0.5rem;
     }
 
@@ -193,6 +197,65 @@ st.markdown("""
     .streamlit-expanderHeader { font-weight: 500; font-size: 0.9rem; }
 </style>
 """, unsafe_allow_html=True)
+
+REGIONS = {
+    "New England": [
+        "Maine", "Vermont", "New Hampshire", "Massachusetts", "Rhode Island", "Connecticut",
+        "Boston", "Providence", "Hartford", "New Haven", "Stamford", "Bridgeport",
+        "Worcester", "Springfield", "Manchester", "Portland", "Burlington", "Greenwich"
+    ],
+    "Mid-Atlantic": [
+        "New York", "New Jersey", "Pennsylvania", "Delaware", "Maryland", "Virginia",
+        "West Virginia", "Washington DC", "District of Columbia",
+        "NYC", "New York City", "Philadelphia", "Pittsburgh", "Baltimore", "Richmond",
+        "Arlington", "Alexandria", "Norfolk", "Newark", "Jersey City", "Trenton",
+        "Wilmington", "Annapolis", "Bethesda", "Rockville", "McLean", "Reston",
+        "Washington", "Hoboken", "Princeton", "Allentown", "Harrisburg", "Fairfax"
+    ],
+    "South East": [
+        "North Carolina", "South Carolina", "Georgia", "Alabama", "Florida",
+        "Tennessee", "Kentucky",
+        "Charlotte", "Raleigh", "Durham", "Greensboro", "Atlanta", "Birmingham",
+        "Miami", "Tampa", "Orlando", "Jacksonville", "Nashville", "Memphis",
+        "Louisville", "Lexington", "Columbia", "Charleston", "Savannah",
+        "Fort Lauderdale", "West Palm Beach", "Huntsville", "Knoxville", "Chattanooga"
+    ],
+    "Rust Belt": [
+        "Ohio", "Michigan", "Indiana",
+        "Columbus", "Cleveland", "Cincinnati", "Akron", "Toledo", "Dayton",
+        "Detroit", "Grand Rapids", "Ann Arbor", "Lansing", "Indianapolis",
+        "Fort Wayne", "Southfield", "Troy"
+    ],
+    "Canada": [
+        "Ontario", "Quebec", "New Brunswick", "Newfoundland", "Nova Scotia",
+        "Prince Edward Island", "PEI",
+        "Toronto", "Montreal", "Ottawa", "Halifax", "Mississauga", "Brampton",
+        "Hamilton", "Moncton", "Fredericton", "Quebec City", "Charlottetown",
+        "St. John's", "Dartmouth", "Windsor", "London"
+    ],
+}
+
+
+def filter_by_region(df: pd.DataFrame, selected_regions: list) -> pd.DataFrame:
+    if not selected_regions:
+        return df
+
+    keywords = []
+    for r in selected_regions:
+        keywords.extend([k.lower() for k in REGIONS.get(r, [])])
+
+    def matches(row):
+        text = " ".join([
+            str(row.get("title", "") or ""),
+            str(row.get("description", "") or ""),
+            str(row.get("company_name", "") or ""),
+            str(row.get("matched_regions", "") or ""),
+        ]).lower()
+        return any(k in text for k in keywords)
+
+    mask = df.apply(matches, axis=1)
+    return df[mask]
+
 
 # Event type configurations with modern colors
 EVENT_TYPES = {
@@ -663,6 +726,15 @@ def main():
 
     days = st.sidebar.slider("Time Range (days)", 1, 90, 30)
 
+    st.sidebar.markdown('<p class="sidebar-section-title">📍 Region</p>', unsafe_allow_html=True)
+    selected_regions = st.sidebar.multiselect(
+        "Region",
+        options=list(REGIONS.keys()),
+        default=[],
+        placeholder="All regions",
+        label_visibility="collapsed"
+    )
+
     # Modern search bar
     st.markdown('<div class="search-container">', unsafe_allow_html=True)
     search = st.text_input(
@@ -678,6 +750,8 @@ def main():
     if df.empty:
         st.info("📭 No events found. Run the scraper to populate data.")
         return
+
+    df = filter_by_region(df, selected_regions)
 
     # Stats
     stats = get_stats(df)

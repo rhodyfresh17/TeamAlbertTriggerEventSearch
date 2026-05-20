@@ -101,6 +101,13 @@ def sync_to_supabase():
                 lead_status = 'NEW'
 
             # Clean up data for Supabase
+            matched_regions = event.get('matched_regions', [])
+            if isinstance(matched_regions, str):
+                try:
+                    matched_regions = json.loads(matched_regions)
+                except Exception:
+                    matched_regions = []
+
             data = {
                 'id': str(event['id']),
                 'title': event.get('title', ''),
@@ -111,7 +118,8 @@ def sync_to_supabase():
                 'published_date': event.get('published_date', ''),
                 'discovered_at': event.get('discovered_date', datetime.now().isoformat()),
                 'lead_status': lead_status,
-                'notes': event.get('notes', '')
+                'notes': event.get('notes', ''),
+                'matched_regions': json.dumps(matched_regions)
             }
 
             client.table('events').upsert(data, on_conflict='id').execute()
