@@ -1013,6 +1013,19 @@ sources:
       url: "http://rssfeeds.webwire.com/WebWire-News-Business-Announcements"
       enabled: true
 
+    # Google Alerts — CFO hire signals by territory region
+    - name: "Google Alert - CFO Hires (Northeast)"
+      url: "https://www.google.com/alerts/feeds/18365176555965833085/10467012147405010555"
+      enabled: true
+
+    - name: "Google Alert - CFO Hires (Mid-Atlantic & Southeast)"
+      url: "https://www.google.com/alerts/feeds/18365176555965833085/15920383913346984403"
+      enabled: true
+
+    - name: "Google Alert - CFO Hires (Midwest & Canada)"
+      url: "https://www.google.com/alerts/feeds/18365176555965833085/14609506922932416065"
+      enabled: true
+
   google_news:
     enabled: true
     base_url: "https://news.google.com/rss/search?q="
