@@ -29,107 +29,78 @@ st.markdown("""
     /* Import modern font */
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
+    /* ── Theme tokens (dark mode — matches config.toml base="dark") ── */
+    :root {
+        --text-primary:       rgba(255,255,255,0.92);
+        --text-secondary:     rgba(255,255,255,0.65);
+        --text-muted:         rgba(255,255,255,0.40);
+        --border-color:       rgba(255,255,255,0.12);
+        --card-bg:            rgba(255,255,255,0.06);
+        --card-border:        rgba(255,255,255,0.10);
+        --card-shadow:        0 4px 20px rgba(0,0,0,0.35);
+        --section-count-bg:   rgba(255,255,255,0.12);
+        --section-count-text: rgba(255,255,255,0.65);
+        --sidebar-title:      rgba(255,255,255,0.50);
+        --sidebar-caption:    rgba(255,255,255,0.32);
+    }
+
     /* Hide Streamlit branding */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
 
-    /* Global styles */
+    /* Global */
     .stApp {
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     }
 
-    /* Modern header */
+    /* Gradient header — always looks good on both modes */
     .main-header {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         padding: 2rem 2.5rem;
         border-radius: 16px;
         margin-bottom: 2rem;
-        box-shadow: 0 10px 40px rgba(102, 126, 234, 0.3);
+        box-shadow: 0 10px 40px rgba(102,126,234,0.3);
     }
+    .main-header h1 { color: white; font-size: 2rem; font-weight: 700; margin: 0; letter-spacing: -0.5px; }
+    .main-header p  { color: rgba(255,255,255,0.85); font-size: 1rem; margin-top: 0.5rem; }
 
-    .main-header h1 {
-        color: white;
-        font-size: 2rem;
-        font-weight: 700;
-        margin: 0;
-        letter-spacing: -0.5px;
-    }
-
-    .main-header p {
-        color: rgba(255,255,255,0.85);
-        font-size: 1rem;
-        margin-top: 0.5rem;
-    }
-
-    /* Modern metric cards */
+    /* Metric cards */
     .metric-card {
-        background: white;
+        background: var(--card-bg);
         border-radius: 16px;
         padding: 1.5rem;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.08);
-        border: 1px solid rgba(0,0,0,0.05);
+        box-shadow: var(--card-shadow);
+        border: 1px solid var(--card-border);
         transition: transform 0.2s ease, box-shadow 0.2s ease;
     }
+    .metric-card:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(0,0,0,0.15); }
+    .metric-icon { width: 48px; height: 48px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; margin-bottom: 1rem; }
+    .metric-value { font-size: 2rem; font-weight: 700; color: var(--text-primary); line-height: 1; }
+    .metric-label { font-size: 0.875rem; color: var(--text-secondary); margin-top: 0.5rem; font-weight: 500; }
 
-    .metric-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 8px 30px rgba(0,0,0,0.12);
-    }
-
-    .metric-icon {
-        width: 48px;
-        height: 48px;
-        border-radius: 12px;
+    /* Section headers */
+    .section-header {
         display: flex;
         align-items: center;
-        justify-content: center;
-        font-size: 1.5rem;
-        margin-bottom: 1rem;
+        gap: 0.75rem;
+        margin: 1.5rem 0 1rem;
+        padding-bottom: 0.75rem;
+        border-bottom: 2px solid var(--border-color);
+    }
+    .section-header h2 { font-size: 1.25rem; font-weight: 600; color: var(--text-primary); margin: 0; }
+    .section-count {
+        background: var(--section-count-bg);
+        color: var(--section-count-text);
+        padding: 0.25rem 0.75rem;
+        border-radius: 50px;
+        font-size: 0.8rem;
+        font-weight: 600;
     }
 
-    .metric-value {
-        font-size: 2rem;
-        font-weight: 700;
-        color: #1a1a2e;
-        line-height: 1;
-    }
-
-    .metric-label {
-        font-size: 0.875rem;
-        color: #6b7280;
-        margin-top: 0.5rem;
-        font-weight: 500;
-    }
-
-    .metric-trend {
-        font-size: 0.75rem;
-        margin-top: 0.5rem;
-        padding: 0.25rem 0.5rem;
-        border-radius: 6px;
-        display: inline-block;
-    }
-
-    .trend-up {
-        background: #d1fae5;
-        color: #065f46;
-    }
-
-    .trend-down {
-        background: #fee2e2;
-        color: #991b1b;
-    }
-
-    /* Event card inner content (inside st.container) */
-    .event-card-inner {
-        padding: 0.25rem 0;
-    }
-
-    .event-card-header {
-        display: flex;
-        align-items: flex-start;
-        gap: 1rem;
-    }
+    /* Event cards */
+    .event-card-inner { padding: 0.25rem 0; }
+    .event-card-header { display: flex; align-items: flex-start; gap: 1rem; }
 
     .event-type-badge {
         padding: 0.35rem 0.75rem;
@@ -140,156 +111,43 @@ st.markdown("""
         letter-spacing: 0.5px;
         white-space: nowrap;
     }
-
-    .badge-ma { background: #dbeafe; color: #1e40af; }
-    .badge-cfo { background: #d1fae5; color: #065f46; }
+    .badge-ma      { background: #dbeafe; color: #1e40af; }
+    .badge-cfo     { background: #d1fae5; color: #065f46; }
     .badge-funding { background: #fef3c7; color: #92400e; }
-    .badge-stable { background: #ffedd5; color: #9a3412; }
-    .badge-exec { background: #ede9fe; color: #5b21b6; }
-    .badge-other { background: #f3f4f6; color: #374151; }
+    .badge-stable  { background: #ffedd5; color: #9a3412; }
+    .badge-exec    { background: #ede9fe; color: #5b21b6; }
+    .badge-other   { background: #f3f4f6; color: #374151; }
 
-    .status-badge {
-        padding: 0.25rem 0.6rem;
-        border-radius: 50px;
-        font-size: 0.7rem;
-        font-weight: 600;
-        text-transform: uppercase;
-    }
-
-    .status-new { background: #dbeafe; color: #1e40af; }
-    .status-reviewed { background: #d1fae5; color: #065f46; }
-    .status-customer { background: #fef3c7; color: #92400e; }
-    .status-out { background: #fee2e2; color: #991b1b; }
+    .status-badge { padding: 0.25rem 0.6rem; border-radius: 50px; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; }
+    .status-new          { background: #dbeafe; color: #1e40af; }
+    .status-reviewed     { background: #d1fae5; color: #065f46; }
+    .status-customer     { background: #fef3c7; color: #92400e; }
+    .status-out          { background: #fee2e2; color: #991b1b; }
     .status-not-relevant { background: #f3f4f6; color: #6b7280; }
 
-    .event-title {
-        font-size: 1rem;
-        font-weight: 600;
-        color: #1a1a2e;
-        margin: 0.5rem 0;
-        line-height: 1.4;
+    .event-title   { font-size: 1rem; font-weight: 600; color: var(--text-primary); margin: 0.5rem 0; line-height: 1.4; }
+    .event-company { display: flex; align-items: center; gap: 0.5rem; color: var(--text-secondary); font-size: 0.875rem; }
+    .event-meta    { display: flex; gap: 1rem; margin-top: 0.75rem; font-size: 0.8rem; color: var(--text-muted); }
+
+    /* Sidebar */
+    section[data-testid="stSidebar"] .sidebar-section-title {
+        font-size: 0.75rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--sidebar-title) !important;
+        margin: 1rem 0 0.5rem;
     }
 
-    .event-company {
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-        color: #6b7280;
-        font-size: 0.875rem;
-    }
+    /* Divider */
+    hr { border: none; height: 1px; background: var(--border-color); margin: 1.5rem 0; }
 
-    .event-meta {
-        display: flex;
-        gap: 1rem;
-        margin-top: 0.75rem;
-        font-size: 0.8rem;
-        color: #9ca3af;
-    }
+    /* Buttons */
+    .stButton > button { border-radius: 8px; font-weight: 500; transition: all 0.2s ease; }
+    .stButton > button:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
 
-    /* Modern search bar */
-    .search-container {
-        background: white;
-        border-radius: 12px;
-        padding: 0.5rem;
-        box-shadow: 0 2px 12px rgba(0,0,0,0.06);
-        margin-bottom: 1.5rem;
-    }
-
-    /* Pill navigation */
-    .pill-nav {
-        display: flex;
-        gap: 0.5rem;
-        padding: 0.5rem;
-        background: #f8fafc;
-        border-radius: 12px;
-        margin-bottom: 1.5rem;
-        flex-wrap: wrap;
-    }
-
-    .pill-btn {
-        padding: 0.6rem 1.2rem;
-        border-radius: 8px;
-        font-size: 0.875rem;
-        font-weight: 500;
-        cursor: pointer;
-        border: none;
-        transition: all 0.2s ease;
-        background: transparent;
-        color: #64748b;
-    }
-
-    .pill-btn:hover {
-        background: white;
-        color: #1a1a2e;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-    }
-
-    .pill-btn.active {
-        background: white;
-        color: #667eea;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-    }
-
-    /* Section headers */
-    .section-header {
-        display: flex;
-        align-items: center;
-        gap: 0.75rem;
-        margin: 1.5rem 0 1rem;
-        padding-bottom: 0.75rem;
-        border-bottom: 2px solid #f1f5f9;
-    }
-
-    .section-header h2 {
-        font-size: 1.25rem;
-        font-weight: 600;
-        color: #1a1a2e;
-        margin: 0;
-    }
-
-    .section-count {
-        background: #f1f5f9;
-        padding: 0.25rem 0.75rem;
-        border-radius: 50px;
-        font-size: 0.8rem;
-        font-weight: 600;
-        color: #64748b;
-    }
-
-    /* Sidebar styling */
-    .css-1d391kg {
-        background: #fafbfc;
-    }
-
-    section[data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #fafbfc 0%, #f1f5f9 100%);
-    }
-
-    /* Better buttons */
-    .stButton > button {
-        border-radius: 8px;
-        font-weight: 500;
-        transition: all 0.2s ease;
-    }
-
-    .stButton > button:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-    }
-
-    /* Better expanders */
-    .streamlit-expanderHeader {
-        font-weight: 500;
-        font-size: 0.9rem;
-    }
-
-    /* Divider override */
-    hr {
-        border: none;
-        height: 1px;
-        background: #e5e7eb;
-        margin: 1.5rem 0;
-    }
+    /* Expanders */
+    .streamlit-expanderHeader { font-weight: 500; font-size: 0.9rem; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -712,8 +570,8 @@ def main():
         """)
         return
 
-    # Sidebar filters with modern styling
-    st.sidebar.markdown("### 🎛️ Filters")
+    # Sidebar filters
+    st.sidebar.markdown('<p class="sidebar-section-title">🎛️ Filters</p>', unsafe_allow_html=True)
 
     days = st.sidebar.slider("Time Range (days)", 1, 90, 30)
 
@@ -879,8 +737,8 @@ def main():
 
     # Sidebar bulk actions
     st.sidebar.markdown("---")
-    st.sidebar.markdown("### ⚡ Bulk Actions")
-    st.sidebar.caption("Apply to all NEW leads:")
+    st.sidebar.markdown('<p class="sidebar-section-title">⚡ Bulk Actions</p>', unsafe_allow_html=True)
+    st.sidebar.markdown('<p style="font-size:0.8rem;color:var(--sidebar-caption);margin:0">Apply to all NEW leads:</p>', unsafe_allow_html=True)
 
     bulk_status = st.sidebar.selectbox(
         "Mark all new as:",
@@ -906,7 +764,7 @@ def main():
 
     # Sidebar footer
     st.sidebar.markdown("---")
-    st.sidebar.caption("🎯 Sales Trigger Events Dashboard")
+    st.sidebar.markdown('<p style="font-size:0.75rem;color:var(--sidebar-caption);text-align:center;margin:0">🎯 Sales Trigger Events</p>', unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
