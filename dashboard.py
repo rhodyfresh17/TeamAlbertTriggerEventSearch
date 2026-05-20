@@ -493,13 +493,19 @@ def render_event_card(row, event_config):
                     st.caption(str(desc)[:500] + "..." if len(str(desc)) > 500 else str(desc))
 
                 # ── Company Intel (multi-company enrichment) ──────────────
-                companies_data = row.get('companies_data') or []
-                # Supabase returns JSONB as already-parsed list or as a string
-                if isinstance(companies_data, str):
-                    try:
-                        companies_data = json.loads(companies_data)
-                    except Exception:
+                _raw = row.get('companies_data')
+                # Guard against pandas NaN, None, empty string
+                try:
+                    if _raw is None or (isinstance(_raw, float) and _raw != _raw):
                         companies_data = []
+                    elif isinstance(_raw, str):
+                        companies_data = json.loads(_raw) if _raw.strip() else []
+                    elif isinstance(_raw, list):
+                        companies_data = _raw
+                    else:
+                        companies_data = []
+                except Exception:
+                    companies_data = []
 
                 def _v(val):
                     """Return None for any nullish value."""
