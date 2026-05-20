@@ -1,16 +1,14 @@
 # Sales Territory Trigger Event Scraper Configuration
-# Customize this file to match your sales territory
+# Team Albert — NetSuite Mid-Market Sales
+# Verticals: Financial Services | Nonprofits | Consumer Services
 
-# Define your sales territory
 territory:
   name: "East Coast & Eastern Canada"
 
-  # Companies to specifically monitor (add your target accounts)
   target_companies:
-    # Add your target accounts here
+    # Add named target accounts here
     # - "Company Name"
 
-  # Geographic regions to monitor
   regions:
     # US States
     - "New York"
@@ -39,8 +37,6 @@ territory:
     - "Newfoundland"
     - "Labrador"
 
-  # Major cities in territory (for more precise matching)
-  # NOTE: These are used to match PR datelines like "ARLINGTON, Va., Feb. 10"
   cities:
     - "New York City"
     - "NYC"
@@ -62,7 +58,6 @@ territory:
     - "Durham"
     - "Halifax"
     - "Quebec City"
-    # Virginia cities
     - "Arlington"
     - "Alexandria"
     - "Norfolk"
@@ -71,419 +66,332 @@ territory:
     - "Tysons"
     - "McLean"
     - "Reston"
-    # Maryland cities
     - "Bethesda"
     - "Rockville"
     - "Silver Spring"
     - "Annapolis"
-    # DC area
     - "Washington"
     - "Washington DC"
-    # New Jersey cities
     - "Jersey City"
     - "Trenton"
     - "Princeton"
     - "Hoboken"
-    # Pennsylvania cities
     - "Allentown"
     - "Harrisburg"
     - "Lancaster"
-    # Massachusetts cities
     - "Cambridge"
     - "Worcester"
     - "Springfield"
-    # Connecticut cities
     - "Stamford"
     - "New Haven"
     - "Bridgeport"
-    # North Carolina cities
     - "Greensboro"
     - "Winston-Salem"
-    # Ohio cities
     - "Cincinnati"
     - "Akron"
 
-  # Target NAICS codes (ranked by priority - best to worst)
+  # ── NAICS Codes ──
   naics_codes:
-    # Tier 1 - Top Priority
+    # Financial Services — Tier 1
+    - code: "523910"
+      name: "Miscellaneous Intermediation (Asset Managers, RIAs, Family Offices)"
+      priority: 1
+    - code: "523920"
+      name: "Portfolio Management"
+      priority: 1
+    - code: "523930"
+      name: "Investment Advice (RIAs)"
+      priority: 1
+    - code: "523999"
+      name: "Miscellaneous Financial Investment Activities"
+      priority: 1
+    - code: "522130"
+      name: "Credit Unions"
+      priority: 1
     - code: "551112"
       name: "Offices of Other Holding Companies"
       priority: 1
-    - code: "624110"
-      name: "Child and Youth Services"
+    - code: "523110"
+      name: "Investment Banking and Securities Dealing"
       priority: 1
-    - code: "813910"
-      name: "Business Associations"
+    - code: "525910"
+      name: "Open-End Investment Funds (Mutual Funds)"
+      priority: 2
+    - code: "525990"
+      name: "Other Financial Vehicles (Hedge Funds, PE Funds)"
       priority: 1
-    - code: "561499"
-      name: "All Other Business Support Services"
+    # Insurance — Tier 1
+    - code: "524113"
+      name: "Direct Life Insurance Carriers"
       priority: 1
-    - code: "813312"
-      name: "Environment, Conservation and Wildlife Organizations"
+    - code: "524114"
+      name: "Direct Health and Medical Insurance Carriers"
       priority: 1
-
-    # Tier 2 - High Priority
-    - code: "611710"
-      name: "Educational Support Services"
-      priority: 2
-    - code: "624410"
-      name: "Child Care Services"
-      priority: 2
-    - code: "621999"
-      name: "All Other Miscellaneous Ambulatory Health Care Services"
-      priority: 2
-    - code: "238170"
-      name: "Siding Contractors"
-      priority: 2
-    - code: "621511"
-      name: "Medical Laboratories"
-      priority: 2
-
-    # Tier 3 - Medium-High Priority
-    - code: "213112"
-      name: "Support Activities for Oil and Gas Operations"
-      priority: 3
+    - code: "524126"
+      name: "Direct Property and Casualty Insurance Carriers"
+      priority: 1
     - code: "524210"
       name: "Insurance Agencies and Brokerages"
-      priority: 3
-    - code: "721110"
-      name: "Hotels (except Casino Hotels) and Motels"
-      priority: 3
-    - code: "541330"
-      name: "Engineering Services"
-      priority: 3
-    - code: "624310"
-      name: "Vocational Rehabilitation Services"
-      priority: 3
-
-    # Tier 4 - Medium Priority
-    - code: "561110"
-      name: "Office Administrative Services"
-      priority: 4
-    - code: "813319"
-      name: "Other Social Advocacy Organizations"
-      priority: 4
-    - code: "561421"
-      name: "Telephone Answering Services"
-      priority: 4
-    - code: "523940"
-      name: "Portfolio Management and Investment Advice"
-      priority: 4
-    - code: "621111"
-      name: "Offices of Physicians (except Mental Health Specialists)"
-      priority: 4
-
-    # Tier 5 - Standard Priority
-    - code: "713110"
-      name: "Amusement and Theme Parks"
-      priority: 5
+      priority: 1
+    # Nonprofits — Tier 1
     - code: "813211"
       name: "Grantmaking Foundations"
-      priority: 5
-    - code: "525910"
-      name: "Open-End Investment Funds"
-      priority: 5
+      priority: 1
+    - code: "813910"
+      name: "Business Associations / Trade Associations"
+      priority: 1
     - code: "813920"
-      name: "Professional Organizations"
-      priority: 5
-    - code: "621512"
-      name: "Diagnostic Imaging Centers"
-      priority: 5
-    - code: "722513"
-      name: "Limited-Service Restaurants"
-      priority: 5
-    - code: "221118"
-      name: "Other Electric Power Generation"
+      name: "Professional Organizations / Membership Associations"
+      priority: 1
+    - code: "624110"
+      name: "Child and Youth Services / Human Services"
+      priority: 1
+    - code: "624190"
+      name: "Other Individual and Family Services"
+      priority: 1
+    - code: "611430"
+      name: "Professional and Management Development Training"
       priority: 2
-    - code: "518210"
-      name: "Data Processing, Hosting, and Related Services (Data Centers)"
+    - code: "611699"
+      name: "All Other Miscellaneous Schools and Instruction"
       priority: 2
-    - code: "561311"
-      name: "Employment Placement Agencies"
-      priority: 5
-    - code: "624210"
-      name: "Community Food Services"
-      priority: 5
+    - code: "624410"
+      name: "Child Care Services (Franchise Networks)"
+      priority: 2
+    - code: "813319"
+      name: "Other Social Advocacy Organizations / NGOs"
+      priority: 1
+    # Consumer Services — Tier 2
+    - code: "531310"
+      name: "Real Estate Property Managers"
+      priority: 2
+    - code: "531390"
+      name: "Other Activities Related to Real Estate"
+      priority: 2
+    - code: "561720"
+      name: "Janitorial Services / Commercial Cleaning"
+      priority: 2
+    - code: "811490"
+      name: "Other Personal and Household Goods Repair and Maintenance"
+      priority: 2
+    - code: "811310"
+      name: "Commercial and Industrial Machinery Repair (Service Franchises)"
+      priority: 3
 
-  # Industries to focus on (aligned with NAICS codes above)
+  # ── Target Industries ──
   industries:
-    # 551112 - Holding Companies (Tier 1)
+
+    # ── FINANCIAL SERVICES ──
+    # Asset Management & Wealth
+    - "Asset Management"
+    - "Asset Manager"
+    - "Investment Management"
+    - "Investment Manager"
+    - "Registered Investment Advisor"
+    - "RIA"
+    - "Investment Advisory"
+    - "Wealth Management"
+    - "Wealth Manager"
+    - "Wealth Advisor"
+    - "Financial Advisor"
+    - "Financial Advisory"
+    - "Investment Firm"
+    - "Investment Company"
+    - "Portfolio Management"
+    - "Portfolio Manager"
+    # Family Offices
+    - "Family Office"
+    - "Multi-Family Office"
+    - "Single Family Office"
+    - "Family Wealth"
+    - "Private Wealth"
+    # Private Equity & Venture Capital
+    - "Private Equity"
+    - "PE Firm"
+    - "PE Fund"
+    - "Private Equity Firm"
+    - "Private Equity Fund"
+    - "Buyout Firm"
+    - "Growth Equity"
+    - "Venture Capital"
+    - "Venture Capital Firm"
+    - "VC Firm"
+    - "Venture Fund"
+    - "Early Stage Investor"
+    - "Growth Capital"
+    - "Hedge Fund"
+    - "Alternative Investment"
+    - "Alternative Asset Manager"
+    # Holding Companies & Conglomerates
     - "Holding Company"
+    - "Holding Corp"
+    - "Conglomerate"
     - "Investment Holding"
     - "Parent Company"
-    - "Subsidiary"
-
-    # 624110/624410 - Child & Youth Services (Tier 1-2)
-    - "Child Services"
-    - "Youth Services"
-    - "Child Care"
-    - "Daycare"
-    - "Preschool"
-    - "Early Childhood"
-    - "After School"
-    - "Youth Program"
-
-    # 813910/813920 - Business & Professional Associations (Tier 1)
-    - "Business Association"
-    - "Trade Association"
-    - "Professional Organization"
-    - "Membership Organization"
-    - "Chamber of Commerce"
-
-    # 561499/561110/561421 - Business Support Services (Tier 1-4)
-    - "Business Services"
-    - "Business Support"
-    - "Office Administrative"
-    - "Answering Service"
-    - "Call Center"
-    - "Administrative Services"
-
-    # 813312 - Environment & Conservation (Tier 1)
-    - "Environmental"
-    - "Conservation"
-    - "Wildlife"
-    - "Sustainability"
-    - "Environmental Organization"
-
-    # 611710/624310 - Education & Vocational Services (Tier 2-3)
-    - "Educational Services"
-    - "Educational Support"
-    - "Training"
-    - "Vocational"
-    - "Rehabilitation Services"
-    - "Career Services"
-
-    # 621999/621511/621512/621111 - Healthcare & Medical (Tier 2-5)
-    - "Healthcare"
-    - "Health Services"
-    - "Medical Laboratory"
-    - "Diagnostic Imaging"
-    - "Lab Services"
-    - "Clinical Laboratory"
-    - "Radiology"
-    - "Pathology"
-    - "Physician"
-    - "Medical Practice"
-    - "Ambulatory"
-    - "Health System"
-    - "Hospital"
-    - "Medical"
-
-    # 238170 - Siding & Specialty Contractors (Tier 2)
-    - "Siding Contractor"
-    - "Roofing"
-    - "Painting Contractor"
-    - "Flooring"
-    - "Specialty Trade"
-    - "General Contractor"
-    - "Construction"
-    - "Builder"
-
-    # 213112 - Oil & Gas Support (Tier 3)
-    - "Oil"
-    - "Gas"
-    - "Petroleum"
-    - "Drilling"
-    - "Pipeline"
-    - "Oilfield Services"
-
-    # 524210 - Insurance (Tier 3)
+    - "Portfolio Company"
+    - "Subsidiary Holdings"
+    # Insurance
     - "Insurance"
-    - "Insurance Agency"
+    - "Insurance Carrier"
+    - "Insurance Company"
     - "Insurance Brokerage"
+    - "Insurance Agency"
+    - "Insurance Broker"
     - "Underwriting"
-    - "Claims"
-    - "Insurer"
+    - "Property and Casualty"
+    - "P&C Insurance"
+    - "Life Insurance"
+    - "Health Insurance"
+    - "Specialty Insurance"
+    - "Reinsurance"
+    - "Insurtech"
+    # Credit Unions
+    - "Credit Union"
+    - "Federal Credit Union"
+    - "State-Chartered Credit Union"
+    - "Member-Owned Financial"
+    # Crypto & Digital Assets
+    - "Cryptocurrency"
+    - "Crypto"
+    - "Digital Assets"
+    - "Digital Asset Management"
+    - "Blockchain"
+    - "Web3"
+    - "DeFi"
+    - "Decentralized Finance"
+    - "Crypto Exchange"
+    - "Digital Currency"
+    - "Stablecoin"
+    - "Fintech"
+    - "FinTech"
+    - "Crypto Fund"
+    - "Digital Asset Fund"
 
-    # 721110 - Hotels & Motels (Tier 3)
-    - "Hotel"
-    - "Motel"
-    - "Lodging"
-    - "Hospitality"
-    - "Resort"
-    - "Boutique Hotel"
-    - "Hotel Chain"
-    - "Bed and Breakfast"
-
-    # 541330 - Engineering Services (Tier 3)
-    - "Engineering"
-    - "Engineering Services"
-    - "Infrastructure"
-    - "Civil Engineering"
-
-    # 523940/525910 - Investment & Portfolio Management (Tier 4-5)
-    - "Investment Fund"
-    - "Portfolio Management"
-    - "Asset Management"
-    - "Investment Advice"
-    - "Wealth Management"
-    - "Financial Advisory"
-    - "Open-End Fund"
-
-    # 813319/813211 - Social Advocacy & Foundations (Tier 4-5)
-    - "Nonprofit"
-    - "Non-profit"
-    - "Foundation"
-    - "Charity"
-    - "NGO"
-    - "Social Advocacy"
-    - "Grantmaking"
-
-    # 713110 - Amusement & Theme Parks (Tier 5)
-    - "Amusement Park"
-    - "Theme Park"
-    - "Entertainment Venue"
-    - "Attractions"
-
-    # 722513 - Limited-Service Restaurants (Tier 5)
-    - "Restaurant"
-    - "QSR"
-    - "Fast Food"
-    - "Quick Service"
-    - "Limited Service"
-    - "Fast Casual"
-    - "Franchise"
-    - "Food Service"
-
-    # Energy, Renewables & Data Centers (Tier 2 - HIGH PRIORITY)
-    # Data Centers
-    - "Data Center"
-    - "Data Centre"
-    - "Datacenter"
-    - "Colocation"
-    - "Colo Facility"
-    - "Server Farm"
-    - "Cloud Infrastructure"
-    - "Hyperscale"
-    - "Edge Computing"
-    - "Edge Data Center"
-    # Energy & Utilities
-    - "Energy"
-    - "Electric Power"
-    - "Power Generation"
-    - "Utilities"
-    - "Utility Company"
-    - "Power Plant"
-    - "Electric Utility"
-    - "Energy Company"
-    - "Power Provider"
-    # Renewables & Clean Energy
-    - "Renewable"
-    - "Renewable Energy"
-    - "Solar"
-    - "Solar Power"
-    - "Solar Energy"
-    - "Wind Energy"
-    - "Wind Power"
-    - "Wind Farm"
-    - "Clean Energy"
-    - "Green Energy"
-    - "Sustainable Energy"
-    - "Battery Storage"
-    - "Energy Storage"
-    - "Grid Storage"
-    - "EV Charging"
-    - "Electric Vehicle Infrastructure"
-    - "Geothermal"
-    - "Hydroelectric"
-    - "Hydrogen"
-    - "Carbon Capture"
-    - "Net Zero"
-    - "Microgrid"
-    - "Smart Grid"
-
-    # Facilities Maintenance & Building Services (Tier 2 - HIGH PRIORITY)
-    - "Facilities Management"
-    - "Facilities Maintenance"
-    - "Facility Services"
-    - "Building Maintenance"
-    - "Building Services"
-    - "Property Management"
-    - "Property Services"
-    - "Commercial Cleaning"
-    - "Janitorial"
-    - "Janitorial Services"
-    - "Custodial"
-    - "Grounds Maintenance"
-    - "Landscaping"
-    - "Landscape Services"
-    - "Snow Removal"
-    - "Parking Lot"
-    - "Building Automation"
-    - "BMS"
-    - "CAFM"
-    - "CMMS"
-    - "Integrated Facilities"
-
-    # Environmental Services (Tier 2 - HIGH PRIORITY)
-    - "Environmental Services"
-    - "Environmental Remediation"
-    - "Waste Management"
-    - "Waste Services"
-    - "Recycling"
-    - "Hazardous Waste"
-    - "Industrial Cleaning"
-    - "Site Remediation"
-    - "Contamination"
-    - "Brownfield"
-    - "Environmental Consulting"
-    - "Environmental Compliance"
-    - "Air Quality"
-    - "Water Treatment"
-    - "Wastewater"
-    - "Stormwater"
-
-    # Field Services & Trades (Tier 2 - HIGH PRIORITY)
-    - "Field Service"
-    - "Field Services"
-    - "Field Technician"
-    - "Service Technician"
-    - "Mobile Workforce"
-    - "HVAC"
-    - "HVAC Services"
-    - "Heating and Cooling"
-    - "Plumbing"
-    - "Plumbing Services"
-    - "Electrical Contractor"
-    - "Electrical Services"
-    - "Elevator"
-    - "Elevator Service"
-    - "Fire Protection"
-    - "Fire Alarm"
-    - "Sprinkler"
-    - "Security Systems"
-    - "Access Control"
-    - "Pest Control"
-    - "Exterminator"
-    - "Roofing"
-    - "Roofing Contractor"
-    - "Painting Contractor"
-    - "Flooring"
-    - "Carpet Cleaning"
-    - "Window Cleaning"
-    - "Pressure Washing"
-    - "Equipment Maintenance"
-    - "Preventive Maintenance"
-    - "Planned Maintenance"
-
-    # 561311 - Employment Agencies (Tier 5)
-    - "Staffing"
-    - "Employment Agency"
-    - "Employment Placement"
-    - "Recruiting"
-    - "Temp Agency"
-
-    # 624210 - Community Food Services (Tier 5)
-    - "Community Food"
-    - "Food Bank"
+    # ── NONPROFITS ──
+    # Human Services
+    - "Human Services"
     - "Social Services"
     - "Community Services"
+    - "Community Organization"
+    - "Social Welfare"
+    - "Human Services Organization"
+    - "Family Services"
+    - "Child Welfare"
+    - "Youth Services"
+    - "Senior Services"
+    - "Homeless Services"
+    - "Food Bank"
+    - "Community Food"
+    - "Housing Services"
+    - "Domestic Violence"
+    - "Victim Services"
+    # International NGOs & Development
+    - "International NGO"
+    - "NGO"
+    - "Non-Governmental Organization"
+    - "International Development"
+    - "Global Development"
+    - "International Relief"
+    - "Humanitarian Organization"
+    - "Aid Organization"
+    # Foundations
+    - "Foundation"
+    - "Private Foundation"
+    - "Community Foundation"
+    - "Corporate Foundation"
+    - "Grantmaking Foundation"
+    - "Philanthropy"
+    - "Charitable Foundation"
+    # Membership & Trade Associations
+    - "Trade Association"
+    - "Professional Association"
+    - "Membership Association"
+    - "Membership Organization"
+    - "Chamber of Commerce"
+    - "Business Association"
+    - "Industry Association"
+    - "Professional Society"
+    - "Guild"
+    - "Consortium"
+    # Training & Non-School Education
+    - "Workforce Development"
+    - "Job Training"
+    - "Vocational Training"
+    - "Professional Development"
+    - "Corporate Training"
+    - "Training Organization"
+    - "Continuing Education"
+    - "Non-Profit Education"
+    - "Workforce Solutions"
+    # Childcare Franchise/Networks
+    - "Childcare Network"
+    - "Childcare Franchise"
+    - "Early Learning"
+    - "Early Childhood Education"
+    - "Child Care Center"
+    - "Preschool Network"
+    - "Daycare Chain"
+    - "Childcare Provider"
+    # Health-Focused Nonprofits Only
+    - "Community Health Center"
+    - "Federally Qualified Health Center"
+    - "FQHC"
+    - "Behavioral Health"
+    - "Mental Health Services"
+    - "Substance Abuse"
+    - "Community Mental Health"
+    - "Home Health Agency"
+    - "Hospice"
+    - "Home Care Agency"
+    # General Nonprofit Identifiers
+    - "Nonprofit"
+    - "Non-profit"
+    - "Not-for-profit"
+    - "501c3"
+    - "501(c)(3)"
+    - "Charitable Organization"
 
-  # STRICT FILTERING: Require territory match (not just industry)
-  # Set to false to allow industry-only matches (may include international)
+    # ── CONSUMER SERVICES ──
+    # Property Management
+    - "Property Management"
+    - "Property Manager"
+    - "Property Management Company"
+    - "Corporate Property Management"
+    - "Commercial Property Management"
+    - "Residential Property Management"
+    - "Real Estate Management"
+    - "Property Services"
+    - "Building Management"
+    # Cleaning Services
+    - "Commercial Cleaning"
+    - "Commercial Cleaning Franchise"
+    - "Cleaning Franchise"
+    - "Cleaning Services"
+    - "Janitorial Services"
+    - "Janitorial Franchise"
+    - "Residential Cleaning"
+    - "Maid Service"
+    - "Custodial Services"
+    # Repair & Restoration Franchise Systems
+    - "Restoration Franchise"
+    - "Restoration Services"
+    - "Damage Restoration"
+    - "Water Damage Restoration"
+    - "Fire Damage Restoration"
+    - "HVAC Franchise"
+    - "HVAC Service Franchise"
+    - "Plumbing Franchise"
+    - "Electrical Franchise"
+    - "Home Services Franchise"
+    - "Repair Franchise"
+    - "Service Franchise"
+    - "Franchise System"
+    - "Franchise Network"
+    - "Franchisor"
+    - "Multi-Unit Franchisee"
+
   require_territory_match: true
 
-  # International locations to EXCLUDE (filter out non-territory results)
   excluded_locations:
     # Asia
     - "Singapore"
@@ -557,33 +465,22 @@ territory:
     - "Australia"
     - "Sydney"
     - "Melbourne"
-    - "Brisbane"
     - "New Zealand"
     - "Auckland"
     # Latin America
     - "Mexico"
-    - "Mexico City"
     - "Brazil"
-    - "Sao Paulo"
-    - "Rio de Janeiro"
     - "Argentina"
-    - "Buenos Aires"
     - "Chile"
-    - "Santiago"
     - "Colombia"
-    - "Bogota"
     # Africa
     - "South Africa"
-    - "Johannesburg"
-    - "Cape Town"
     - "Nigeria"
-    - "Lagos"
     - "Kenya"
-    - "Nairobi"
     # Other
     - "Russia"
     - "Moscow"
-    # Non-territory US (West Coast, Midwest, South, Mountain)
+    # Non-territory US
     - "California"
     - "Los Angeles"
     - "San Francisco"
@@ -638,11 +535,6 @@ territory:
     - "Mississippi"
     - "New Mexico"
     - "Hawaii"
-    - "Lanai"
-    - "Maui"
-    - "Oahu"
-    - "Kauai"
-    - "Honolulu"
     - "Alaska"
     - "Idaho"
     - "Montana"
@@ -650,16 +542,48 @@ territory:
     - "North Dakota"
     - "South Dakota"
 
-  # Industries/companies to EXCLUDE from results
   excluded_industries:
+    # Banks (distinct from Credit Unions — Credit Unions ARE targets)
     - "Bank"
     - "Banking"
-    - "Credit Union"
+    - "Commercial Bank"
     - "Savings Bank"
     - "Federal Reserve"
     - "Mortgage Lender"
+    # Out-of-scope verticals
+    - "Restaurant"
+    - "Fast Food"
+    - "Quick Service Restaurant"
+    - "QSR"
+    - "Fast Casual"
+    - "Amusement Park"
+    - "Theme Park"
+    - "Oil and Gas"
+    - "Oil & Gas"
+    - "Petroleum"
+    - "Drilling"
+    - "Pipeline"
+    - "Hotel"
+    - "Hospitality"
+    - "Resort"
+    - "Lodging"
+    - "Engineering Firm"
+    - "Civil Engineering"
+    - "Data Center"
+    - "Colocation"
+    - "Electric Utility"
+    - "Power Plant"
+    - "Casino"
+    - "Gaming"
+    - "Sports Betting"
+    - "Technology Company"
+    - "SaaS"
+    - "Software Company"
+    - "Freight"
+    - "Logistics"
+    - "Supply Chain"
+    - "Trucking"
 
-  # Content types to EXCLUDE (irrelevant articles)
   excluded_content:
     - "concert"
     - "theatre"
@@ -671,7 +595,6 @@ territory:
     - "award show"
     - "red carpet"
     - "celebrity"
-    - "entertainment"
     - "box office"
     - "movie premiere"
     - "film festival"
@@ -685,11 +608,8 @@ territory:
     - "obituary"
     - "wedding"
     - "engagement"
-    - "baby shower"
 
-  # Company size filters (target mid-market private companies)
   company_filters:
-    # Avoid public companies
     exclude_public_companies: true
     public_company_indicators:
       - "NYSE"
@@ -705,27 +625,23 @@ territory:
       - "Fortune 500"
       - "Fortune 100"
       - "S&P 500"
-      - "billion dollar"
-      - "$B"
       - "market cap"
 
-    # Known large public companies to exclude from M&A alerts
     excluded_public_companies:
-      - "Boston Scientific"
-      - "Johnson & Johnson"
-      - "Medtronic"
-      - "Abbott"
+      - "BlackRock"
+      - "Vanguard"
+      - "Fidelity"
+      - "Charles Schwab"
+      - "Morgan Stanley"
+      - "Goldman Sachs"
+      - "JPMorgan"
+      - "Bank of America"
+      - "Wells Fargo"
+      - "Citigroup"
       - "UnitedHealth"
       - "CVS Health"
       - "Cigna"
       - "Humana"
-      - "HCA Healthcare"
-      - "McKesson"
-      - "AmerisourceBergen"
-      - "Cardinal Health"
-      - "Anthem"
-      - "Centene"
-      - "Walgreens"
       - "Amazon"
       - "Google"
       - "Microsoft"
@@ -733,13 +649,11 @@ territory:
       - "Oracle"
       - "Salesforce"
 
-    # Target company size
     min_employees: 20
     max_employees: 2000
-    min_revenue_millions: 20
+    min_revenue_millions: 5
     max_revenue_millions: 500
 
-    # Keywords indicating target size
     target_size_indicators:
       - "mid-market"
       - "middle market"
@@ -750,55 +664,35 @@ territory:
       - "privately held"
       - "family-owned"
       - "employee-owned"
+      - "member-owned"
 
-# Keywords to search for trigger events
 keywords:
   executive_hires:
-    # C-Suite Executive titles
-    - "CEO"
-    - "Chief Executive Officer"
-    - "COO"
-    - "Chief Operating Officer"
-    - "CTO"
-    - "Chief Technology Officer"
-    - "CIO"
-    - "Chief Information Officer"
-    - "CMO"
-    - "Chief Marketing Officer"
-    - "CRO"
-    - "Chief Revenue Officer"
-    - "CHRO"
-    - "Chief Human Resources Officer"
-    - "General Manager"
-    - "Managing Director"
-    - "President"
-    # Finance Executive titles
+    # Finance Leadership (primary trigger for NetSuite)
     - "CFO"
     - "Chief Financial Officer"
     - "VP Finance"
     - "Vice President Finance"
+    - "VP of Finance"
     - "Head of Finance"
-    - "Treasurer"
-    - "Finance Lead"
-    # Director titles
     - "Controller"
     - "Finance Director"
     - "Director of Finance"
     - "Director of Accounting"
     - "Accounting Director"
-    # Manager titles
+    - "Treasurer"
+    - "Finance Lead"
     - "Accounting Manager"
     - "Finance Manager"
-    # Individual contributor titles
-    - "Senior Accountant"
-    - "Staff Accountant"
-    - "Senior Financial Analyst"
-    - "Accountant"
-    # Hire indicators
-    - "named CEO"
-    - "appointed CEO"
-    - "joins as CEO"
-    - "new CEO"
+    # C-Suite (signals leadership change = tech evaluation)
+    - "CEO"
+    - "Chief Executive Officer"
+    - "COO"
+    - "Chief Operating Officer"
+    - "President"
+    - "Managing Director"
+    - "Executive Director"
+    # Hire signal phrases
     - "named CFO"
     - "appointed CFO"
     - "joins as CFO"
@@ -806,11 +700,15 @@ keywords:
     - "hires CFO"
     - "named Controller"
     - "appointed Controller"
-    - "hiring accountant"
+    - "named CEO"
+    - "appointed CEO"
+    - "new CEO"
     - "appoints"
     - "appointed"
     - "named as"
     - "promoted to"
+    - "joins as"
+    - "welcomes"
 
   mergers_acquisitions:
     - "acquisition"
@@ -828,107 +726,76 @@ keywords:
     - "has acquired"
     - "completes acquisition"
     - "announces acquisition"
+    - "signs agreement to acquire"
+    - "merger agreement"
 
   funding_events:
     - "series A"
     - "series B"
     - "series C"
+    - "series D"
     - "funding round"
     - "raises"
     - "raised"
-    - "investment"
+    - "capital raise"
+    - "investment round"
     - "venture capital"
-    - "private equity"
-    - "IPO"
-    - "going public"
+    - "private equity investment"
+    - "growth investment"
+    - "secures funding"
+    - "closes funding"
+    - "announces funding"
 
-# Data sources to scrape
+  # Nonprofit-specific growth signals
+  nonprofit_growth:
+    - "expands services"
+    - "opens new location"
+    - "new program"
+    - "launches initiative"
+    - "receives grant"
+    - "awarded grant"
+    - "new funding"
+    - "endowment"
+    - "capital campaign"
+    - "merger"
+    - "affiliation"
+    - "strategic partnership"
+
 sources:
-  # RSS feeds from major PR/news wires
   rss_feeds:
     - name: "Business Wire"
       url: "https://feed.businesswire.com/rss/home/?rss=G1QFDERJXkJeEFpRWQ=="
       enabled: true
 
-    # PR Newswire - category-specific feeds for better coverage
     - name: "PR Newswire"
       url: "https://www.prnewswire.com/rss/news-releases-list.rss"
-      enabled: true
-
-    - name: "PR Newswire - General Business"
-      url: "https://www.prnewswire.com/rss/general-business-latest-news.rss"
       enabled: true
 
     - name: "PR Newswire - Financial Services"
       url: "https://www.prnewswire.com/rss/financial-services-latest-news.rss"
       enabled: true
 
-    - name: "PR Newswire - Heavy Industry"
-      url: "https://www.prnewswire.com/rss/heavy-industry-and-manufacturing-latest-news.rss"
+    - name: "Globe Newswire"
+      url: "https://www.globenewswire.com/RssFeed/orgclass/1/feedTitle/GlobeNewswire%20-%20News%20Releases"
       enabled: true
 
-    # Major news sources
-    - name: "Reuters Business"
-      url: "https://feeds.reuters.com/reuters/businessNews"
+    - name: "Newswire - Latest"
+      url: "https://www.newswire.com/newsroom/rss"
       enabled: true
 
     - name: "Business Insider"
       url: "https://feeds.businessinsider.com/custom/all"
       enabled: true
 
-    # Alternative press release sources
-    - name: "1888 Press Release"
-      url: "https://www.1888pressrelease.com/rss/today.xml"
+    - name: "Fox Business"
+      url: "https://moxie.foxbusiness.com/google-publisher/latest.xml"
       enabled: true
 
-    # Newswire.com feeds
-    - name: "Newswire - Latest"
-      url: "https://www.newswire.com/newsroom/rss"
+    - name: "CNBC"
+      url: "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664"
       enabled: true
 
-    - name: "Globe Newswire"
-      url: "https://www.globenewswire.com/RssFeed/orgclass/1/feedTitle/GlobeNewswire%20-%20News%20Releases"
-      enabled: true
-
-    # EIN Presswire / EIN News - disabled (404 - feeds no longer available)
-    # Regional Business Journals - disabled (403 - blocks automated access)
-
-    # Canadian Business News
-    - name: "CBC Business"
-      url: "https://rss.cbc.ca/lineup/business.xml"
-      enabled: true
-
-    - name: "Financial Post"
-      url: "https://financialpost.com/feed"
-      enabled: true
-
-    # Financewire - disabled (malformed XML)
-    # FINSMES - moved to dedicated scraper (see finsmes section below)
-
-    # Industry-specific sources
-    - name: "Nonprofit Times"
-      url: "https://www.thenonprofittimes.com/feed/"
-      enabled: true
-
-    - name: "Nonprofit Quarterly"
-      url: "https://nonprofitquarterly.org/feed/"
-      enabled: true
-
-    - name: "ProPublica - Nonprofits"
-      url: "https://www.propublica.org/feeds/propublica/main"
-      enabled: true
-
-    # Restaurant Business Magazine - disabled (malformed XML)
-
-    - name: "QSR Magazine"
-      url: "https://www.qsrmagazine.com/rss.xml"
-      enabled: true
-
-    # Franchise Times - disabled (429 rate limited)
-
-    # Franchise Wire - disabled (empty/invalid response)
-
-    # Funding/Startup/PE/VC sources
+    # PE / VC / M&A sources (Financial Services)
     - name: "Crunchbase News"
       url: "https://news.crunchbase.com/feed/"
       enabled: true
@@ -951,198 +818,104 @@ sources:
 
     - name: "Private Equity Insights"
       url: "https://pe-insights.com/feed/"
+      enabled: false  # 403 blocked
+
+    # Crypto / FinTech sources (Financial Services vertical)
+    - name: "CoinDesk"
+      url: "https://www.coindesk.com/arc/outboundfeeds/rss/"
       enabled: true
 
-    # PE News - disabled (401 requires auth)
-
-    # Healthcare sources
-    - name: "Fierce Healthcare"
-      url: "https://www.fiercehealthcare.com/rss/xml"
+    - name: "Decrypt"
+      url: "https://decrypt.co/feed"
       enabled: true
 
-    # Modern Healthcare - disabled (404)
+    - name: "The Block"
+      url: "https://www.theblock.co/rss.xml"
+      enabled: true
+
+    # Nonprofit sources
+    - name: "Nonprofit Times"
+      url: "https://www.thenonprofittimes.com/feed/"
+      enabled: true
+
+    - name: "Nonprofit Quarterly"
+      url: "https://nonprofitquarterly.org/feed/"
+      enabled: true
+
+    - name: "Chronicle of Philanthropy"
+      url: "https://www.philanthropy.com/feed"
+      enabled: true
+
+    - name: "Inside Philanthropy"
+      url: "https://www.insidephilanthropy.com/home?format=rss"
+      enabled: true
+
+    - name: "Philanthropy News Digest"
+      url: "https://philanthropynewsdigest.org/feeds/news.rss"
+      enabled: true
+
+    - name: "Associations Now (ASAE)"
+      url: "https://associationsnow.com/feed/"
+      enabled: true
+
+    - name: "InterAction"
+      url: "https://www.interaction.org/feed/"
+      enabled: true
+
+    - name: "ReliefWeb"
+      url: "https://reliefweb.int/updates/rss.xml"
+      enabled: true
+
+    - name: "ProPublica"
+      url: "https://www.propublica.org/feeds/propublica/main"
+      enabled: true
+
+    # Asset Management / Wealth / RIA sources
+    - name: "Wealth Management"
+      url: "https://www.wealthmanagement.com/rss.xml"
+      enabled: true
+
+    - name: "Credit Union Journal"
+      url: "https://www.cujournal.com/feed"
+      enabled: true
 
     # Insurance sources
-    # Insurance News Net - disabled (404)
-
     - name: "Insurance Journal"
       url: "https://www.insurancejournal.com/feed/"
       enabled: true
 
-    # Insurance Business - disabled (403 blocked)
-
-    # Construction sources
-    - name: "Construction Dive"
-      url: "https://www.constructiondive.com/feeds/news/"
+    - name: "Carrier Management"
+      url: "https://www.carriermanagement.com/feed/"
       enabled: true
 
-    # Facilities Management sources
-    # Facilitate Magazine - disabled (403 blocked)
-    # Facilities Net - disabled (malformed XML)
-
-    # ENR (Engineering News-Record) - disabled (404)
-
-    # Energy/Utilities sources
-    - name: "Utility Dive"
-      url: "https://www.utilitydive.com/feeds/news/"
+    # Canadian Business
+    - name: "Financial Post"
+      url: "https://financialpost.com/feed"
       enabled: true
 
-    # Oil & Gas Journal - disabled (malformed XML)
+    - name: "CBC Business"
+      url: "https://rss.cbc.ca/lineup/business.xml"
+      enabled: false  # frequent timeouts
 
-    - name: "Solar Power World"
-      url: "https://www.solarpowerworldonline.com/feed/"
-      enabled: true
-
-    # Data Center sources (HIGH PRIORITY)
-    - name: "Data Center Dynamics"
-      url: "https://www.datacenterdynamics.com/en/rss/"
-      enabled: true
-
-    - name: "Data Center Knowledge"
-      url: "https://www.datacenterknowledge.com/rss.xml"
-      enabled: true
-
-    # Data Center Frontier - disabled (404)
-
-    # Hospitality sources
-    - name: "Hotel Management"
-      url: "https://www.hotelmanagement.net/rss.xml"
-      enabled: true
-
-    # Hospitality Net - disabled (404)
-
-    # Field Services/HVAC sources
-    # ACHR News - disabled (malformed XML)
-    # Contracting Business - disabled (404)
-
-    # Additional Healthcare
-    # Becker's Hospital Review - disabled (403 blocked)
-
-    # Additional Nonprofit
-    # Chronicle of Philanthropy - disabled (malformed XML)
-
-    # Mid-Market Focus
-    # Middle Market Growth - disabled (malformed XML)
-
-    # WebWire Industry Feeds
+    # WebWire
     - name: "WebWire - Business"
       url: "http://rssfeeds.webwire.com/WebWire-News-Business-Announcements"
       enabled: true
 
-    - name: "WebWire - Construction"
-      url: "http://rssfeeds.webwire.com/WebWire-News-Architecture-Construction-Building"
-      enabled: true
-
-    - name: "WebWire - Oil & Energy"
-      url: "http://rssfeeds.webwire.com/WebWire-News-Oil-Energy"
-      enabled: true
-
-    # WebWire - Healthcare - disabled (404)
-    # WebWire - Insurance - disabled (404)
-    # WebWire - Transportation - disabled (404)
-    # WebWire - Gaming - disabled (404)
-    # WebWire - Hospitality - disabled (404)
-
-    # Casino & Gaming sources
-    - name: "CDC Gaming Reports"
-      url: "https://cdcgaming.com/feed/"
-      enabled: true
-
-    - name: "SBC Americas (Sports Betting)"
-      url: "https://sbcamericas.com/feed/"
-      enabled: true
-
-    # Transportation & Logistics sources
-    - name: "Supply Chain Brain"
-      url: "https://www.supplychainbrain.com/rss/articles"
-      enabled: true
-
-    - name: "FreightWaves"
-      url: "https://www.freightwaves.com/news/feed"
-      enabled: true
-
-    # Travel & Hotels sources
-    - name: "Hotel Dive"
-      url: "https://www.hoteldive.com/feeds/news/"
-      enabled: true
-
-    - name: "Skift (Travel Industry)"
-      url: "https://skift.com/feed/"
-      enabled: true
-
-    # Travel Weekly - disabled (404)
-
-    # Major Tech/Business News
-    - name: "Wired Business"
-      url: "https://www.wired.com/feed/category/business/latest/rss"
-      enabled: true
-
-    - name: "Fox Business"
-      url: "https://moxie.foxbusiness.com/google-publisher/latest.xml"
-      enabled: true
-
-    - name: "CNBC"
-      url: "https://www.cnbc.com/id/100003114/device/rss/rss.html"
-      enabled: true
-
-    # Airlines & Aviation sources
-    # Simple Flying - disabled (connection issues)
-
-    # FlightGlobal - disabled (404)
-    # Aero-News Network - disabled (403)
-
-    # Google Alerts RSS feeds for LinkedIn CFO/finance hires
-    # To set up: Go to https://www.google.com/alerts, create alert with query,
-    # select "RSS feed" as delivery method, then paste the feed URL below.
-    # These catch LinkedIn announcements faster than periodic Google News scrapes.
-    #
-    # Example alerts to create:
-    #   site:linkedin.com "new CFO"
-    #   site:linkedin.com "appointed CFO"
-    #   site:linkedin.com "Chief Financial Officer" "excited to announce"
-    #   site:linkedin.com "VP Finance" "joined"
-    #   site:linkedin.com "Head of Finance" "new role"
-    #
-    # - name: "Google Alert - LinkedIn CFO"
-    #   url: "https://www.google.com/alerts/feeds/YOUR_ALERT_ID/YOUR_FEED_ID"
-    #   enabled: true
-    #
-    # - name: "Google Alert - LinkedIn CFO Appointed"
-    #   url: "https://www.google.com/alerts/feeds/YOUR_ALERT_ID/YOUR_FEED_ID"
-    #   enabled: true
-    #
-    # - name: "Google Alert - LinkedIn Chief Financial Officer"
-    #   url: "https://www.google.com/alerts/feeds/YOUR_ALERT_ID/YOUR_FEED_ID"
-    #   enabled: true
-    #
-    # - name: "Google Alert - LinkedIn VP Finance"
-    #   url: "https://www.google.com/alerts/feeds/YOUR_ALERT_ID/YOUR_FEED_ID"
-    #   enabled: true
-    #
-    # - name: "Google Alert - LinkedIn Head of Finance"
-    #   url: "https://www.google.com/alerts/feeds/YOUR_ALERT_ID/YOUR_FEED_ID"
-    #   enabled: true
-
-  # Google News RSS (requires specific search queries)
   google_news:
     enabled: true
     base_url: "https://news.google.com/rss/search?q="
 
-  # FinSMEs - Startup funding and M&A news (dedicated scraper with browser headers)
   finsmes:
     enabled: true
     url: "https://www.finsmes.com/feed"
 
-  # Bing News API (complements Google News - surfaces different results)
-  # Free tier: 1,000 calls/month at https://www.microsoft.com/en-us/bing/apis/bing-news-search-api
   bing_news:
-    enabled: false  # Set to true and add API key to enable
-    api_key: ""     # Your Bing Search API key
+    enabled: false
+    api_key: ""
     endpoint: "https://api.bing.microsoft.com/v7.0/news/search"
 
-# Alert configuration
 alerts:
-  # Email alerts (enabled via GitHub secrets)
   email:
     enabled: false
     smtp_server: "smtp.gmail.com"
@@ -1152,77 +925,45 @@ alerts:
     recipient_emails:
       - "mwjacobs3@gmail.com"
 
-  # Slack alerts
   slack:
     enabled: false
     webhook_url: ""
 
-  # Desktop notifications (disabled for CI)
   desktop:
     enabled: false
 
-  # File-based alerts (always enabled as backup)
   file:
     enabled: true
     output_dir: "alerts"
 
-# Scraper settings
 scraper:
-  # How often to check (in minutes)
   check_interval: 30
-
-  # Request timeout (seconds)
   timeout: 30
-
-  # Delay between requests (seconds) - be respectful to servers
   request_delay: 2
-
-  # User agent string
   user_agent: "Mozilla/5.0 (compatible; SalesTerritoryBot/1.0)"
-
-  # Maximum age of news to consider (hours) - 7 days
   max_age_hours: 168
-
-  # Database file for tracking seen items
   database: "trigger_events.db"
 
-# Job site search for companies hiring finance leaders
 job_search:
   enabled: true
 
-  # Job titles to search for (indicates company needs financial leadership)
   titles:
-    # Executive level - Finance
     - "CFO"
     - "Chief Financial Officer"
     - "VP Finance"
     - "Vice President Finance"
     - "Head of Finance"
-    # Executive level - Operations (signals company scaling)
-    - "COO"
-    - "Chief Operating Officer"
-    - "VP Operations"
-    - "Vice President Operations"
-    - "Chief Revenue Officer"
-    - "CRO"
-    # Director level
     - "Controller"
     - "Finance Director"
     - "Director of Finance"
     - "Director of Accounting"
     - "Accounting Director"
-    - "Director of Operations"
-    # Manager level
+    - "COO"
+    - "Chief Operating Officer"
+    - "Executive Director"
     - "Accounting Manager"
     - "Finance Manager"
-    - "Controller Manager"
-    # Senior individual contributors
-    - "Senior Accountant"
-    - "Staff Accountant"
-    - "Senior Financial Analyst"
-    - "Accountant"
 
-  # Locations to search (within your territory)
   locations:
     - "New York, NY"
     - "Boston, MA"
@@ -1236,11 +977,10 @@ job_search:
     - "Toronto, ON"
     - "Montreal, QC"
 
-  # Job boards to search (enable/disable each)
   boards:
     indeed: true
     ziprecruiter: true
     simplyhired: true
     google_jobs: true
-    ladders: true        # Executive jobs ($100K+)
-    cfo_com: true        # CFO-specific news and jobs
+    ladders: true
+    cfo_com: true
