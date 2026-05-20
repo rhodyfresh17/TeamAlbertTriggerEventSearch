@@ -26,9 +26,9 @@ jobs:
         uses: actions/cache@v4.2.3
         with:
           path: trigger_events.db
-          key: trigger-events-db-${{ github.run_id }}
+          key: trigger-events-db-v2-${{ github.run_id }}
           restore-keys: |
-            trigger-events-db-
+            trigger-events-db-v2-
 
       - name: Install dependencies
         run: |
