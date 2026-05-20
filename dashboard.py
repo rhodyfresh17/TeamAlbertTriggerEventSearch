@@ -203,43 +203,6 @@ st.markdown("""
     /* Expanders */
     .streamlit-expanderHeader { font-weight: 500; font-size: 0.9rem; }
 
-    /* Radio buttons styled as tab pills */
-    div[data-testid="stRadio"] > div {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.5rem;
-        padding: 0.25rem 0;
-    }
-    div[data-testid="stRadio"] > div > label {
-        display: flex !important;
-        align-items: center;
-        gap: 0.4rem;
-        background: rgba(255,255,255,0.07);
-        border: 1px solid rgba(255,255,255,0.15);
-        border-radius: 50px;
-        padding: 0.4rem 1rem;
-        cursor: pointer;
-        font-size: 0.875rem;
-        font-weight: 500;
-        color: rgba(255,255,255,0.7);
-        transition: all 0.15s ease;
-        user-select: none;
-    }
-    div[data-testid="stRadio"] > div > label:hover {
-        background: rgba(78,140,170,0.25);
-        border-color: rgba(78,140,170,0.6);
-        color: rgba(255,255,255,0.95);
-    }
-    div[data-testid="stRadio"] > div > label:has(input:checked) {
-        background: linear-gradient(135deg, #2d6080 0%, #1a3a4a 100%);
-        border-color: #4e8caa;
-        color: white;
-        box-shadow: 0 2px 8px rgba(45,96,128,0.4);
-    }
-    /* Hide the actual radio dot */
-    div[data-testid="stRadio"] > div > label > div:first-child {
-        display: none !important;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -861,29 +824,26 @@ def main():
         new_exec = len(new_df[new_df['event_type'] == 'executive_hire'])
         new_other = len(new_df[new_df['event_type'] == 'other'])
 
-        new_ordered_types = [
-            "merger_acquisition", "cfo_hire", "funding",
-            "stable_target", "executive_hire", "other"
-        ]
-        new_ordered_labels = [
-            f"🔵 M&A ({new_ma})", f"💼 CFO ({new_cfo})",
-            f"💰 Funding ({new_funding})", f"🎯 Stable ({new_stable})",
-            f"👔 Exec ({new_exec})", f"📋 Other ({new_other})",
-        ]
-        # Persist by TYPE not by label (label count changes after save)
-        if "new_leads_tab_type" not in st.session_state:
-            st.session_state["new_leads_tab_type"] = "merger_acquisition"
-        current_type = st.session_state["new_leads_tab_type"]
-        current_index = new_ordered_types.index(current_type) if current_type in new_ordered_types else 0
-        # Sync radio key to updated label before render
-        st.session_state["new_leads_tab"] = new_ordered_labels[current_index]
-        selected_new_label = st.radio(
-            "Event type", new_ordered_labels,
-            key="new_leads_tab", horizontal=True, label_visibility="collapsed"
-        )
-        selected_type = new_ordered_types[new_ordered_labels.index(selected_new_label)]
-        st.session_state["new_leads_tab_type"] = selected_type
-        render_event_section(new_df, selected_type, EVENT_TYPES[selected_type], None)
+        tab_ma, tab_cfo, tab_funding, tab_stable, tab_exec, tab_other = st.tabs([
+            f"🔵 M&A ({new_ma})",
+            f"💼 CFO ({new_cfo})",
+            f"💰 Funding ({new_funding})",
+            f"🎯 Stable ({new_stable})",
+            f"👔 Exec ({new_exec})",
+            f"📋 Other ({new_other})"
+        ])
+        with tab_ma:
+            render_event_section(new_df, "merger_acquisition", EVENT_TYPES["merger_acquisition"], None)
+        with tab_cfo:
+            render_event_section(new_df, "cfo_hire", EVENT_TYPES["cfo_hire"], None)
+        with tab_funding:
+            render_event_section(new_df, "funding", EVENT_TYPES["funding"], None)
+        with tab_stable:
+            render_event_section(new_df, "stable_target", EVENT_TYPES["stable_target"], None)
+        with tab_exec:
+            render_event_section(new_df, "executive_hire", EVENT_TYPES["executive_hire"], None)
+        with tab_other:
+            render_event_section(new_df, "other", EVENT_TYPES["other"], None)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -914,17 +874,9 @@ def main():
         if not status_tabs:
             st.info("No classified leads yet.")
         else:
-            if "classified_tab_key" not in st.session_state:
-                st.session_state["classified_tab_key"] = status_keys[0]
-            current_cls = st.session_state["classified_tab_key"]
-            cls_index = status_keys.index(current_cls) if current_cls in status_keys else 0
-            st.session_state["classified_tab"] = status_tabs[cls_index]
-            selected_status_tab = st.radio(
-                "Status", status_tabs,
-                key="classified_tab", horizontal=True, label_visibility="collapsed"
-            )
-            selected_status_key = status_keys[status_tabs.index(selected_status_tab)]
-            st.session_state["classified_tab_key"] = selected_status_key
+            tabs = st.tabs(status_tabs)
+            for tab, status_key in zip(tabs, status_keys):
+                with tab:
             status_df = classified_df[classified_df['lead_status'] == selected_status_key]
             for idx, row in status_df.iterrows():
                 event_type = row.get('event_type', 'other')
