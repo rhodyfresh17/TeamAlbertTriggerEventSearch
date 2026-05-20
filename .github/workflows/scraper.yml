@@ -12,15 +12,15 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5.6.0
         with:
           python-version: '3.11'
 
       # Cache the database to prevent duplicate alerts
       - name: Cache database
-        uses: actions/cache@v4
+        uses: actions/cache@v4.2.3
         with:
           path: trigger_events.db
           key: trigger-events-db-${{ github.run_id }}
@@ -114,7 +114,7 @@ jobs:
             echo "Supabase not configured - skipping sync"
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4.6.2
         if: always()
         with:
           name: alerts-${{ github.run_number }}
