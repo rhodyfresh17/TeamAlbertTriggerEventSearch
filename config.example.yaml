@@ -911,8 +911,8 @@ sources:
       enabled: true
 
     - name: "Private Equity Insights"
-      url: "https://pe-insights.com/feed/"
-      enabled: false  # 403 blocked
+      url: "https://pe-insights.com/feed/atom/"
+      enabled: true
 
     # Crypto / FinTech sources (Financial Services vertical)
     - name: "PYMNTS"
@@ -1031,7 +1031,7 @@ sources:
     base_url: "https://news.google.com/rss/search?q="
 
   finsmes:
-    enabled: true
+    enabled: false  # 403 permanently blocked
     url: "https://www.finsmes.com/feed"
 
   bing_news:
