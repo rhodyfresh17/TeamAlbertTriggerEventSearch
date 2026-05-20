@@ -10,10 +10,19 @@ Usage:
 """
 
 import os
+import base64
 import pandas as pd
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import streamlit as st
+
+
+def get_logo_base64() -> str:
+    logo_path = Path("assets/logo.png")
+    if logo_path.exists():
+        return base64.b64encode(logo_path.read_bytes()).decode()
+    return ""
 
 # Page config
 st.set_page_config(
@@ -54,16 +63,49 @@ st.markdown("""
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     }
 
-    /* Gradient header — always looks good on both modes */
+    /* Team Albert header */
     .main-header {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 2rem 2.5rem;
+        background: linear-gradient(135deg, #1a3a4a 0%, #2d6080 60%, #1a3a4a 100%);
+        padding: 1.75rem 2.5rem;
         border-radius: 16px;
         margin-bottom: 2rem;
-        box-shadow: 0 10px 40px rgba(102,126,234,0.3);
+        box-shadow: 0 10px 40px rgba(0,0,0,0.4);
+        border: 1px solid rgba(78,140,170,0.3);
     }
-    .main-header h1 { color: white; font-size: 2rem; font-weight: 700; margin: 0; letter-spacing: -0.5px; }
-    .main-header p  { color: rgba(255,255,255,0.85); font-size: 1rem; margin-top: 0.5rem; }
+    .header-inner {
+        display: flex;
+        align-items: center;
+        gap: 1.75rem;
+    }
+    .header-logo {
+        height: 90px;
+        width: auto;
+        filter: brightness(0) invert(1);
+        opacity: 0.92;
+        flex-shrink: 0;
+    }
+    .header-text { display: flex; flex-direction: column; gap: 0.3rem; }
+    .header-title {
+        color: white;
+        font-size: 1.9rem;
+        font-weight: 700;
+        margin: 0;
+        letter-spacing: 0.5px;
+        line-height: 1.1;
+    }
+    .header-subtitle {
+        color: #c9a84c;
+        font-size: 0.8rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        margin: 0;
+    }
+    .header-tagline {
+        color: rgba(255,255,255,0.6);
+        font-size: 0.875rem;
+        margin: 0;
+    }
 
     /* Metric cards */
     .metric-card {
@@ -551,10 +593,18 @@ def check_password() -> bool:
     if st.session_state.get("authenticated"):
         return True
 
-    st.markdown("""
+    logo_b64 = get_logo_base64()
+    logo_html = f'<img src="data:image/png;base64,{logo_b64}" class="header-logo">' if logo_b64 else ""
+    st.markdown(f"""
         <div class="main-header">
-            <h1>🎯 Sales Trigger Events</h1>
-            <p>Team Albert — NetSuite Sales Intelligence</p>
+            <div class="header-inner">
+                {logo_html}
+                <div class="header-text">
+                    <p class="header-subtitle">NetSuite Mid-Market Sales</p>
+                    <h1 class="header-title">Team Albert</h1>
+                    <p class="header-tagline">Sales trigger events — East Coast &amp; Eastern Canada</p>
+                </div>
+            </div>
         </div>
     """, unsafe_allow_html=True)
 
@@ -576,11 +626,19 @@ def main():
     if not check_password():
         return
 
-    # Modern gradient header
-    st.markdown("""
+    # Header
+    logo_b64 = get_logo_base64()
+    logo_html = f'<img src="data:image/png;base64,{logo_b64}" class="header-logo">' if logo_b64 else ""
+    st.markdown(f"""
         <div class="main-header">
-            <h1>🎯 Sales Trigger Events</h1>
-            <p>Track M&A, executive hires, and funding events in your territory</p>
+            <div class="header-inner">
+                {logo_html}
+                <div class="header-text">
+                    <p class="header-subtitle">NetSuite Mid-Market Sales</p>
+                    <h1 class="header-title">Team Albert</h1>
+                    <p class="header-tagline">Sales trigger events — East Coast &amp; Eastern Canada</p>
+                </div>
+            </div>
         </div>
     """, unsafe_allow_html=True)
 
