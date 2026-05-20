@@ -8,6 +8,14 @@ import os
 import json
 import sqlite3
 from datetime import datetime
+from pathlib import Path
+
+# Load .env for local runs (no-op if file absent or dotenv not installed)
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).parent / '.env')
+except ImportError:
+    pass
 
 try:
     from supabase import create_client

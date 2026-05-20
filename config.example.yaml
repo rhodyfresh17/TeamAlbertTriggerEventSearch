@@ -950,7 +950,7 @@ sources:
 
     - name: "Philanthropy News Digest"
       url: "https://philanthropynewsdigest.org/feeds/news.rss"
-      enabled: true
+      enabled: false  # malformed XML
 
     - name: "Associations Now (ASAE)"
       url: "https://associationsnow.com/feed/"
@@ -962,7 +962,7 @@ sources:
 
     - name: "ReliefWeb"
       url: "https://reliefweb.int/updates/rss.xml"
-      enabled: true
+      enabled: false  # returns empty
 
     - name: "ProPublica"
       url: "https://www.propublica.org/feeds/propublica/main"
@@ -975,16 +975,16 @@ sources:
 
     - name: "Credit Union Journal"
       url: "https://www.cujournal.com/rss"
-      enabled: true
+      enabled: false  # malformed XML
 
     - name: "America's Credit Unions"
       url: "https://www.americascreditunions.org/feed"
-      enabled: true
+      enabled: false  # malformed XML
 
     # Asset Management / Wealth / RIA additional
     - name: "WealthBriefing Americas"
       url: "https://www.wealthbriefing.com/html/rss/rss_WealthBriefingAmericas_latest.php"
-      enabled: true
+      enabled: false  # malformed XML
 
     # Insurance sources
     - name: "Insurance Journal"
@@ -997,7 +997,7 @@ sources:
 
     - name: "Dig-In (Digital Insurance)"
       url: "https://www.dig-in.com/feed"
-      enabled: true
+      enabled: false  # malformed XML
 
     # Canadian Business
     - name: "Financial Post"
