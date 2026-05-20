@@ -485,7 +485,8 @@ def render_event_card(row, event_config):
                     st.caption(str(desc)[:500] + "..." if len(str(desc)) > 500 else str(desc))
 
                 url = row.get('url', '')
-                company = row.get('company_name') or ''
+                company = str(row.get('company_name') or '').strip()
+                company = '' if company.lower() in ('nan', 'none', 'unknown company') else company
                 li_url = f"https://www.linkedin.com/search/results/companies/?keywords={urllib.parse.quote(company)}" if company else ""
                 g_url = f"https://www.google.com/search?q={urllib.parse.quote(company + ' company')}" if company else ""
 
