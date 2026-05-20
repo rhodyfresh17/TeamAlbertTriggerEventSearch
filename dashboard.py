@@ -11,6 +11,7 @@ Usage:
 
 import os
 import base64
+import urllib.parse
 import pandas as pd
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -484,8 +485,20 @@ def render_event_card(row, event_config):
                     st.caption(str(desc)[:500] + "..." if len(str(desc)) > 500 else str(desc))
 
                 url = row.get('url', '')
-                if url:
-                    st.link_button("🔗 View Source", url, use_container_width=False)
+                company = row.get('company_name') or ''
+                li_url = f"https://www.linkedin.com/search/results/companies/?keywords={urllib.parse.quote(company)}" if company else ""
+                g_url = f"https://www.google.com/search?q={urllib.parse.quote(company + ' company')}" if company else ""
+
+                link_cols = st.columns(3)
+                with link_cols[0]:
+                    if url:
+                        st.link_button("🔗 Article", url, use_container_width=True)
+                with link_cols[1]:
+                    if li_url:
+                        st.link_button("💼 LinkedIn", li_url, use_container_width=True)
+                with link_cols[2]:
+                    if g_url:
+                        st.link_button("🔍 Google", g_url, use_container_width=True)
 
             with col2:
                 current_status = status
