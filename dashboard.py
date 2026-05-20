@@ -80,9 +80,9 @@ st.markdown("""
     .header-logo {
         height: 90px;
         width: auto;
-        filter: brightness(0) invert(1);
-        opacity: 0.92;
+        opacity: 0.95;
         flex-shrink: 0;
+        mix-blend-mode: screen;
     }
     .header-text { display: flex; flex-direction: column; gap: 0.3rem; }
     .header-title {
