@@ -202,6 +202,44 @@ st.markdown("""
 
     /* Expanders */
     .streamlit-expanderHeader { font-weight: 500; font-size: 0.9rem; }
+
+    /* Radio buttons styled as tab pills */
+    div[data-testid="stRadio"] > div {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        padding: 0.25rem 0;
+    }
+    div[data-testid="stRadio"] > div > label {
+        display: flex !important;
+        align-items: center;
+        gap: 0.4rem;
+        background: rgba(255,255,255,0.07);
+        border: 1px solid rgba(255,255,255,0.15);
+        border-radius: 50px;
+        padding: 0.4rem 1rem;
+        cursor: pointer;
+        font-size: 0.875rem;
+        font-weight: 500;
+        color: rgba(255,255,255,0.7);
+        transition: all 0.15s ease;
+        user-select: none;
+    }
+    div[data-testid="stRadio"] > div > label:hover {
+        background: rgba(78,140,170,0.25);
+        border-color: rgba(78,140,170,0.6);
+        color: rgba(255,255,255,0.95);
+    }
+    div[data-testid="stRadio"] > div > label:has(input:checked) {
+        background: linear-gradient(135deg, #2d6080 0%, #1a3a4a 100%);
+        border-color: #4e8caa;
+        color: white;
+        box-shadow: 0 2px 8px rgba(45,96,128,0.4);
+    }
+    /* Hide the actual radio dot */
+    div[data-testid="stRadio"] > div > label > div:first-child {
+        display: none !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
