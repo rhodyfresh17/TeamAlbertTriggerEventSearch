@@ -30,19 +30,22 @@ docker compose up -d hermes-elon   # recreates the container with the new mount
 
 Verify from inside Elon: `ls /projects/TeamAlbertTriggerEventSearch/CLAUDE.md` — should exist.
 
-### A.2. Recommended Hermes skills to install
+### A.2. Required Hermes skills (likely already bundled — verify only)
 
-Run inside Elon's container (one at a time — installing in parallel hits GitHub's 60/hr anonymous rate limit):
+The skills Elon needs for code review are **bundled by default** with the Hermes image and enabled out of the box. No `install` needed. Verify from the host:
 
 ```bash
-hermes skills install codebase-inspection
-hermes skills install github-code-review
-hermes skills install github-pr-workflow
-hermes skills install systematic-debugging
-hermes skills install test-driven-development   # optional, only if adding tests
+docker exec hermes-coder /opt/hermes/.venv/bin/hermes skills list 2>&1 | \
+  grep -E 'codebase-inspection|github-code-review|github-pr-workflow|systematic-debugging'
 ```
 
-These give Elon: structured code review, codebase navigation, GitHub PR/comment ops, and TDD scaffolding.
+Each should print a row with `builtin │ builtin │ enabled`. If ANY are missing or disabled, then (and only then) run:
+
+```bash
+docker exec hermes-coder /opt/hermes/.venv/bin/hermes skills install <name>
+```
+
+Note: from outside the container, `hermes` is not on `$PATH` — always use the full path `/opt/hermes/.venv/bin/hermes`. When Elon runs commands from inside his own chat interface (port 9185), the path is set up correctly already.
 
 ### A.3. Optional — bake project context into Elon's SOUL.md
 
@@ -292,7 +295,35 @@ source venv/bin/activate
 - **Finance leadership override is two-layer** — once in the prompt (so LLM produces consistent justifications), once in code (so it can't be ignored). When changing one, change both.
 - **The dashboard's pandas reads from Supabase return NaN for missing JSONB fields**. Always guard with `if isinstance(x, float) and x != x:` or `_v()` helper. There's a history of NaN-related bugs.
 
-### Things that don't work / dead ends
+### Web-search backend: Tavily (and ONLY Tavily for this app)
+
+This app uses **Tavily** (`TAVILY_API_KEY` in `.env` / GitHub Secrets) for the
+firmographic-enrichment step. Do NOT swap it for Firecrawl, even if you see
+Scout or another Hermes agent using Firecrawl.
+
+**Why the distinction matters:**
+- **Scout (the `hermes-sales` Hermes agent)** runs open-ended sales research
+  for individual prospects — it switched to **Firecrawl** in May 2026 after
+  a Tavily key rotation broke its env var. That's a Scout-specific choice
+  and only affects Scout.
+- **This app** does bulk firmographic enrichment (~150-300 search calls per
+  scrape cycle). The search-then-summarise pattern is exactly what Tavily
+  is built for; Firecrawl is built for "I already know the URL, scrape this
+  page." Our pipeline doesn't have URLs up front — we discover them via
+  search. So Tavily is the right fit here even when other agents use
+  Firecrawl.
+
+**Resilience benefit:** If Tavily has an outage, Scout still works (Firecrawl).
+If Firecrawl has an outage, this app still works (Tavily). Don't collapse
+the two — keep them independent.
+
+**Key rotation gotcha:** Tavily keys were once hardcoded across BOTH this
+app and Scout's docker-compose.yml. Rotating the key broke Scout silently.
+If you rotate again in the future, also update the `TAVILY_API_KEY` env
+var on any Hermes container that uses Tavily — or accept that those agents
+will stop working on web search until updated.
+
+### Other dead ends / things that don't work
 - **Hermes gateway is messaging-only** — port 8084 on `hermes-sales` container is for Telegram/Discord, not an HTTP API. Use Ollama (localhost:11434) directly for LLM calls, not the Hermes gateway.
 - **X/Twitter monitoring** is not viable on free tier. X killed the free API in 2023. Public Nitter/RSSHub instances are unreliable. If A.J. revisits, options are $200/mo X Basic API or Apify scrapers ($20-100/mo).
 - **Indeed/ZipRecruiter/SimplyHired/Ladders/CFO.com** are all bot-blocked. The scraper code is left in `job_scraper.py` for reference but disabled in config. Adzuna replaces them.
