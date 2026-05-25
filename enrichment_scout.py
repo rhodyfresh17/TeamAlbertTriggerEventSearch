@@ -70,9 +70,56 @@ RATE_LIMIT_SECONDS = 1.2
 
 MIGRATION_SQL = (
     "Run in Supabase SQL Editor:\n"
-    "  ALTER TABLE events ADD COLUMN IF NOT EXISTS companies_data JSONB;\n"
-    "  ALTER TABLE events ADD COLUMN IF NOT EXISTS enriched_at    TIMESTAMPTZ;"
+    "  ALTER TABLE events ADD COLUMN IF NOT EXISTS companies_data       JSONB;\n"
+    "  ALTER TABLE events ADD COLUMN IF NOT EXISTS enriched_at          TIMESTAMPTZ;\n"
+    "  ALTER TABLE events ADD COLUMN IF NOT EXISTS grade                TEXT;\n"
+    "  ALTER TABLE events ADD COLUMN IF NOT EXISTS hashtags             JSONB;\n"
+    "  ALTER TABLE events ADD COLUMN IF NOT EXISTS grade_justification  TEXT;\n"
+    "  ALTER TABLE events ADD COLUMN IF NOT EXISTS cfo_status           TEXT;\n"
+    "  ALTER TABLE events ADD COLUMN IF NOT EXISTS research_notes       JSONB;"
 )
+
+# Post-enrichment industry exclusions — applied AFTER firmographic extraction
+# to catch industries that slipped past the scrape-time text-only filter
+# (e.g. "Chilean Cobalt Corp." doesn't say "Mining" in its title but its
+# discovered industry was "Critical Minerals Exploration"). Substring-matched
+# against the discovered industry string of the PRIMARY company.
+POST_ENRICHMENT_INDUSTRY_BLOCK = [
+    # Mining / metals / extractive
+    'mining', 'mineral', 'minerals', 'ore', 'metals industry', 'rare earth',
+    'cobalt', 'copper mining', 'gold mining', 'silver mining', 'uranium',
+    'lithium mining', 'extractive', 'exploration', 'drilling', 'refining',
+    'smelting',
+    # Heavy industry
+    'steel', 'aluminum', 'foundry', 'heavy industry', 'industrial manufacturing',
+    # Oil & gas
+    'oil & gas', 'oil and gas', 'petroleum', 'petrochemical', 'refinery',
+    # Out-of-target verticals
+    'hotel', 'hospitality', 'restaurant', 'qsr', 'fast food',
+    'casino', 'gaming', 'sports betting',
+    'engineering firm', 'civil engineering', 'construction company',
+    'data center', 'colocation',
+    'power generation', 'utilities', 'electric utility',
+    'solar farm', 'wind farm',
+    'logistics', 'freight', 'trucking', 'supply chain',
+]
+
+# Primary-company roles (the actual subject of the event)
+PRIMARY_ROLES = {
+    'acquirer', 'target', 'portfolio company',
+    'hiring company', 'primary',
+}
+
+
+def industry_is_blocked(industry: str):
+    """Return (is_blocked, matched_keyword) for an industry string."""
+    if not industry:
+        return False, ''
+    industry_lower = industry.lower()
+    for kw in POST_ENRICHMENT_INDUSTRY_BLOCK:
+        if kw in industry_lower:
+            return True, kw
+    return False, ''
 
 logging.basicConfig(
     level=logging.INFO,
@@ -350,6 +397,153 @@ def enrich_one_company(company_name: str, industry_hint: str = '') -> dict:
     }
 
 
+# ── Step 4 — TAL grading (TAL V10.2 system, adapted for our flow) ───────────
+
+TAL_GRADING_PROMPT = '''\
+You are an AI research analyst for Oracle NetSuite sales applying the TAL V10.2 \
+grading system. Be CONSERVATIVE — do NOT inflate hashtags or grades.
+
+EVENT
+Title: {title}
+Type: {event_type}
+URL: {article_url}
+Description: {description}
+
+COMPANIES (pre-researched firmographics)
+{companies_block}
+
+HASHTAG RULES — apply ONLY when evidence is unambiguous. Each requires \
+explicit support from the input above. Never apply by inference. Max 6.
+
+- #NewCFO: event_type is "cfo_hire" OR title explicitly states a new CFO/Chief \
+Financial Officer announcement. DO NOT apply for general "officer" departures.
+- #Funding: event_type is "funding" AND company is for-profit. DO NOT apply to \
+nonprofit grants/donations or to companies BEING acquired.
+- #Acquisitions: event_type is "merger_acquisition" AND the company being \
+graded has role "Acquirer". DO NOT apply for Target role.
+- #PEBacked: a company in the event has role "Lead Investor" or "Investor" AND \
+the investor name signals a PE firm (contains "Capital"/"Partners"/"Equity" OR \
+matches known names: Bain, KKR, Blackstone, Carlyle, Apollo, TPG, Vista, \
+Thoma Bravo, Nautic, EIG, Roark, Hellman & Friedman, Silver Lake). DO NOT \
+apply for VC funding alone (General Catalyst, Sequoia, a16z = VC, not PE).
+- #HoldCo: name contains "Holdings" OR industry is "Holding Companies & \
+Conglomerates" OR description explicitly mentions multiple operating subsidiaries.
+- #100EE: firmographic size is 201-500 or larger. NOT 1-50 or 51-200.
+- #Locations: explicit mention of 3+ physical locations/stores/branches/offices. \
+DO NOT apply for HAVING a HQ city.
+- #Entities: explicit mention of multiple legal entities/subsidiaries/EINs. \
+DO NOT apply by inference.
+- #Global: documented operations in 3+ countries OR HQ outside US/Canada. DO \
+NOT apply for a single international partnership.
+- #HyperGrowth: documented >50% YoY revenue growth or 100+ headcount expansion \
+in <12 months. DO NOT apply for routine funding rounds.
+- #Franchisor: company franchises its brand to others. Explicit only.
+- #Franchisee: company operates franchised locations. Explicit only.
+- #FormerUser: explicitly mentioned as former NetSuite customer. SKIP otherwise.
+- #PrevConvo: explicit prior sales conversation. SKIP otherwise.
+- #Legacy: explicit mention of legacy ERP (QuickBooks, Sage 50, Dynamics GP). \
+SKIP otherwise.
+
+When in doubt, DROP the hashtag.
+
+GRADE — conservative, do NOT inflate:
+- A = 3+ hashtags AND 2 triggers (the event itself counts as 1 trigger; a 2nd \
+trigger needs another distinct hashtag-worthy signal beyond the base event)
+- B = 2 hashtags AND at least 1 trigger
+- C = 1 hashtag (a single trigger from event_type alone is C, not B)
+- D = 0 hashtags
+
+CFO STATUS:
+- "New" if event_type is "cfo_hire"
+- "Unable to verify" otherwise
+
+For research_notes, use ONLY URLs that appear in the input above (article URL, \
+company URLs, revenue source URLs). NEVER invent sources.
+
+OUTPUT — return ONLY valid JSON (no markdown fences, no preamble):
+{{
+  "grade": "A|B|C|D",
+  "hashtags": ["#X", "#Y"],
+  "cfo_status": "New|Unable to verify",
+  "grade_justification": "one sentence",
+  "research_notes": [
+    {{"finding": "what was found", "source_url": "URL from input"}},
+    {{"finding": "...", "source_url": "..."}},
+    {{"finding": "...", "source_url": "..."}}
+  ]
+}}'''
+
+
+def _build_companies_block(companies_data: list) -> str:
+    """Format the enriched companies into a structured block for the prompt."""
+    lines = []
+    for c in companies_data:
+        lines.append(
+            f"  - Name: {c.get('name')}\n"
+            f"    Role: {c.get('role')}\n"
+            f"    URL: {c.get('url')}\n"
+            f"    Industry: {c.get('industry')}\n"
+            f"    Size: {c.get('size')}, Revenue: {c.get('revenue')}, "
+            f"HQ: {c.get('hq')}\n"
+            f"    Revenue Source: {c.get('revenue_source') or 'n/a'}"
+        )
+    return '\n'.join(lines)
+
+
+def grade_event(event: dict, companies_data: list) -> dict:
+    """Apply TAL V10.2 grading rules. Returns dict with grade/hashtags/etc.
+    On any failure returns an empty-graded record so the rest of the pipeline
+    can still write the event."""
+    empty = {
+        'grade': None,
+        'hashtags': [],
+        'cfo_status': None,
+        'grade_justification': None,
+        'research_notes': [],
+    }
+    if not companies_data:
+        return empty
+
+    prompt = TAL_GRADING_PROMPT.format(
+        title=event.get('title', ''),
+        event_type=event.get('event_type', ''),
+        article_url=event.get('source_url') or event.get('url') or '',
+        description=(event.get('description') or '')[:600],
+        companies_block=_build_companies_block(companies_data),
+    )
+    data = llm_json(prompt, max_tokens=800)
+    if not data:
+        return empty
+
+    # Validate + coerce
+    grade = (data.get('grade') or '').strip().upper()
+    if grade not in ('A', 'B', 'C', 'D'):
+        grade = None
+
+    hashtags = data.get('hashtags') or []
+    if isinstance(hashtags, str):
+        # Defensive: model returned a string instead of array
+        hashtags = [h.strip() for h in hashtags.split() if h.strip().startswith('#')]
+    hashtags = [h for h in hashtags if isinstance(h, str) and h.startswith('#')][:6]
+
+    notes = data.get('research_notes') or []
+    if not isinstance(notes, list):
+        notes = []
+    notes = [
+        {'finding': str(n.get('finding', ''))[:300],
+         'source_url': str(n.get('source_url', ''))[:500]}
+        for n in notes if isinstance(n, dict) and n.get('finding')
+    ][:6]
+
+    return {
+        'grade': grade,
+        'hashtags': hashtags,
+        'cfo_status': (data.get('cfo_status') or '').strip() or None,
+        'grade_justification': (data.get('grade_justification') or '').strip() or None,
+        'research_notes': notes,
+    }
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def enrich_events(
@@ -475,13 +669,53 @@ def enrich_events(
                 'linkedin':       firm.get('linkedin'),
             })
 
-        # ── 3. Write to Supabase ──────────────────────────────────────────
+        # ── 3. Post-enrichment industry filter ────────────────────────────
+        # Now that we know the discovered industry, re-apply exclusions.
+        # Catches mining/steel/oil that slipped past the scrape-time text
+        # filter (e.g. "Chilean Cobalt Corp." → industry "Critical Minerals
+        # Exploration" → blocked here).
+        primary = next(
+            (c for c in enriched
+             if str(c.get('role', '')).lower() in PRIMARY_ROLES),
+            enriched[0]
+        )
+        blocked, kw = industry_is_blocked(primary.get('industry') or '')
+        if blocked:
+            log.info(
+                f'  🚫 Post-enrichment block — industry '
+                f'"{primary.get("industry")}" matched "{kw}". Deleting event.'
+            )
+            if not dry_run:
+                try:
+                    client.table('events').delete().eq('id', eid).execute()
+                except Exception as e:
+                    log.error(f'    Delete failed: {e}')
+            ok += 1  # count as processed (not failed)
+            continue
+
+        # ── 4. TAL V10.2 grading ──────────────────────────────────────────
+        log.info(f'  Grading via TAL V10.2…')
+        grading = grade_event(event, enriched)
+        if grading.get('grade'):
+            log.info(
+                f'    Grade={grading["grade"]}  '
+                f'Hashtags={" ".join(grading["hashtags"]) or "(none)"}'
+            )
+
+        # ── 5. Write to Supabase ──────────────────────────────────────────
         if dry_run:
-            log.info(f'  Would write {len(enriched)} company record(s)')
+            log.info(f'  Would write {len(enriched)} company record(s) + grade')
             ok += 1
             continue
 
-        payload = {'companies_data': enriched}
+        payload = {
+            'companies_data':      enriched,
+            'grade':               grading.get('grade'),
+            'hashtags':            grading.get('hashtags') or [],
+            'grade_justification': grading.get('grade_justification'),
+            'cfo_status':          grading.get('cfo_status'),
+            'research_notes':      grading.get('research_notes') or [],
+        }
         if col_ok.get('enriched_at'):
             payload['enriched_at'] = datetime.utcnow().isoformat()
 
@@ -490,10 +724,23 @@ def enrich_events(
             ok += 1
         except Exception as e:
             if 'does not exist' in str(e):
-                log.error(f'  Write failed — missing column. {MIGRATION_SQL}')
+                # New grading columns may not be present yet — retry without them
+                log.warning(
+                    f'  Some columns missing — retrying with firmographics only. '
+                    f'{MIGRATION_SQL}'
+                )
+                try:
+                    minimal = {'companies_data': enriched}
+                    if col_ok.get('enriched_at'):
+                        minimal['enriched_at'] = datetime.utcnow().isoformat()
+                    client.table('events').update(minimal).eq('id', eid).execute()
+                    ok += 1
+                except Exception as e2:
+                    log.error(f'  Supabase write failed: {e2}')
+                    fail += 1
             else:
                 log.error(f'  Supabase write failed: {e}')
-            fail += 1
+                fail += 1
 
     print()
     log.info(

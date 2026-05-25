@@ -372,6 +372,30 @@ def _band_idx(b) -> int:
         return -1
 
 
+def filter_by_grades(
+    df: pd.DataFrame,
+    allowed_grades: list,
+    include_ungraded: bool = True,
+) -> pd.DataFrame:
+    """Keep events whose TAL grade is in `allowed_grades`.
+    Events with no grade are kept iff include_ungraded=True (so fresh
+    events don't disappear before grading runs)."""
+    if not allowed_grades:
+        return df
+    allowed_set = {g.upper() for g in allowed_grades}
+
+    def keep(row):
+        g = row.get('grade')
+        if g is None or (isinstance(g, float) and g != g):
+            return include_ungraded
+        g_str = str(g).strip().upper()
+        if not g_str or g_str in ('NONE', 'NAN'):
+            return include_ungraded
+        return g_str in allowed_set
+
+    return df[df.apply(keep, axis=1)]
+
+
 def filter_by_revenue_bands(
     df: pd.DataFrame,
     allowed_bands: list,
@@ -652,12 +676,53 @@ def render_event_card(row, event_config):
     status_cfg = STATUS_CONFIG.get(status, STATUS_CONFIG["NEW"])
     badge_class = event_config.get('badge_class', 'badge-other')
 
+    # TAL grade badge — A=green, B=blue, C=amber, D=grey
+    grade_raw = row.get('grade')
+    grade = str(grade_raw).strip().upper() if grade_raw else ''
+    grade_colors = {
+        'A': ('#10b981', 'rgba(16,185,129,0.15)'),  # green
+        'B': ('#3b82f6', 'rgba(59,130,246,0.15)'),  # blue
+        'C': ('#f59e0b', 'rgba(245,158,11,0.15)'),  # amber
+        'D': ('#6b7280', 'rgba(107,114,128,0.18)'), # grey
+    }
+    grade_html = ""
+    if grade in grade_colors:
+        fg, bg = grade_colors[grade]
+        grade_html = (
+            f'<span title="TAL V10.2 fit grade" '
+            f'style="display:inline-flex;align-items:center;justify-content:center;'
+            f'width:1.7rem;height:1.7rem;border-radius:50%;background:{bg};'
+            f'color:{fg};font-weight:700;font-size:0.85rem;border:1.5px solid {fg};'
+            f'margin-right:0.4rem;">{grade}</span>'
+        )
+
+    # Hashtag chips (max 6, from companies_data grading step)
+    hashtags_raw = row.get('hashtags') or []
+    if isinstance(hashtags_raw, str):
+        try:
+            hashtags_raw = json.loads(hashtags_raw) if hashtags_raw.strip() else []
+        except Exception:
+            hashtags_raw = []
+    if isinstance(hashtags_raw, float) and hashtags_raw != hashtags_raw:  # NaN
+        hashtags_raw = []
+    hashtags_html = ""
+    if hashtags_raw and isinstance(hashtags_raw, list):
+        chip_spans = "".join(
+            f'<span style="font-size:0.68rem;background:rgba(78,140,170,0.18);'
+            f'color:#9cd0e6;padding:0.15rem 0.45rem;border-radius:4px;'
+            f'margin:0 0.2rem 0.2rem 0;display:inline-block;">{h}</span>'
+            for h in hashtags_raw[:6]
+        )
+        hashtags_html = (
+            f'<div style="margin-top:0.4rem;">{chip_spans}</div>'
+        )
+
     # Unified card: header + expander in one container
     with st.container(border=True):
         st.markdown(f"""
             <div class="event-card-inner">
                 <div class="event-card-header">
-                    <span class="event-type-badge {badge_class}">{event_config['icon']} {event_config['label']}</span>
+                    {grade_html}<span class="event-type-badge {badge_class}">{event_config['icon']} {event_config['label']}</span>
                     <span class="status-badge {status_cfg['class']}">{status_cfg['label']}</span>
                 </div>
                 <div class="event-title">{title}</div>
@@ -668,6 +733,7 @@ def render_event_card(row, event_config):
                 <div class="event-meta">
                     <span>📅 {date_display}</span>
                 </div>
+                {hashtags_html}
             </div>
         """, unsafe_allow_html=True)
 
@@ -679,6 +745,78 @@ def render_event_card(row, event_config):
                 if desc:
                     st.markdown("**Description**")
                     st.caption(str(desc)[:500] + "..." if len(str(desc)) > 500 else str(desc))
+
+                # ── TAL Grade analysis ────────────────────────────────────
+                gj = row.get('grade_justification')
+                if gj and isinstance(gj, str) and gj.strip():
+                    cfo_s = row.get('cfo_status')
+                    cfo_disp = (
+                        f"  ·  <span style='color:rgba(255,255,255,0.55);'>"
+                        f"CFO: {cfo_s}</span>"
+                        if cfo_s and isinstance(cfo_s, str) and cfo_s.strip()
+                        else ""
+                    )
+                    st.markdown(
+                        "<div style='margin:10px 0 4px;font-size:0.72rem;"
+                        "font-weight:600;color:rgba(255,255,255,0.45);"
+                        "letter-spacing:0.08em;text-transform:uppercase;'>"
+                        f"TAL Grade {row.get('grade','')}"
+                        f"{cfo_disp}</div>",
+                        unsafe_allow_html=True
+                    )
+                    st.markdown(
+                        f"<div style='font-size:0.83rem;color:rgba(255,255,255,0.72);"
+                        f"font-style:italic;margin-bottom:8px;'>{gj}</div>",
+                        unsafe_allow_html=True
+                    )
+
+                # ── Research notes (with citations) ───────────────────────
+                rn_raw = row.get('research_notes')
+                try:
+                    if rn_raw is None or (isinstance(rn_raw, float) and rn_raw != rn_raw):
+                        notes = []
+                    elif isinstance(rn_raw, str):
+                        notes = json.loads(rn_raw) if rn_raw.strip() else []
+                    elif isinstance(rn_raw, list):
+                        notes = rn_raw
+                    else:
+                        notes = []
+                except Exception:
+                    notes = []
+
+                if notes:
+                    st.markdown(
+                        "<div style='margin:10px 0 4px;font-size:0.72rem;"
+                        "font-weight:600;color:rgba(255,255,255,0.45);"
+                        "letter-spacing:0.08em;text-transform:uppercase;'>"
+                        "Research Notes</div>",
+                        unsafe_allow_html=True
+                    )
+                    for n in notes[:5]:
+                        if not isinstance(n, dict): continue
+                        finding = (n.get('finding') or '').strip()
+                        src = (n.get('source_url') or '').strip()
+                        if not finding: continue
+                        if src:
+                            from urllib.parse import urlparse as _up
+                            try:
+                                domain = _up(src).netloc.replace('www.','') or src[:30]
+                            except Exception:
+                                domain = src[:30]
+                            st.markdown(
+                                f"<div style='font-size:0.8rem;color:rgba(255,255,255,0.78);"
+                                f"margin:3px 0;'>• {finding} "
+                                f"<a href='{src}' target='_blank' style='color:#9cd0e6;"
+                                f"text-decoration:none;font-size:0.72rem;'>"
+                                f"[{domain}]</a></div>",
+                                unsafe_allow_html=True
+                            )
+                        else:
+                            st.markdown(
+                                f"<div style='font-size:0.8rem;color:rgba(255,255,255,0.78);"
+                                f"margin:3px 0;'>• {finding}</div>",
+                                unsafe_allow_html=True
+                            )
 
                 # ── Company Intel (multi-company enrichment) ──────────────
                 _raw = row.get('companies_data')
@@ -1129,6 +1267,29 @@ def main():
                 key="flt_include_unknown",
             )
 
+            # ── TAL Grade filter ──────────────────────────────────────────
+            st.markdown("**🎯 TAL Grade**")
+            selected_grades = st.multiselect(
+                "Grades to include",
+                options=['A', 'B', 'C', 'D'],
+                default=['A', 'B'],
+                placeholder="Select grades…",
+                help=(
+                    "A = 3+ hashtags + 2 triggers (hottest)  ·  "
+                    "B = 2 hashtags + 1 trigger  ·  "
+                    "C = 1 hashtag  ·  "
+                    "D = 0 hashtags (coldest)"
+                ),
+                label_visibility="collapsed",
+                key="flt_grades",
+            )
+            include_ungraded = st.checkbox(
+                "Also show ungraded events",
+                value=True,
+                help="Events scraped before grading was enabled, or where grading is still pending. Keep ON to avoid hiding fresh events.",
+                key="flt_include_ungraded",
+            )
+
     with search_col:
         st.markdown('<div class="search-container">', unsafe_allow_html=True)
         search = st.text_input(
@@ -1152,6 +1313,12 @@ def main():
         df,
         allowed_bands=selected_bands,
         include_unknown=include_unknown,
+    )
+
+    df = filter_by_grades(
+        df,
+        allowed_grades=selected_grades,
+        include_ungraded=include_ungraded,
     )
 
     # Stats
