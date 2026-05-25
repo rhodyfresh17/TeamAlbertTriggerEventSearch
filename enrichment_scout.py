@@ -60,7 +60,9 @@ TAVILY_API_KEY    = os.environ.get('TAVILY_API_KEY',
     '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')
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
 OLLAMA_URL        = os.environ.get('OLLAMA_URL',   'http://localhost:11434')
-OLLAMA_MODEL      = os.environ.get('OLLAMA_MODEL', 'qwen2.5:14b')
+# Default model — falls back to whatever is locally available. Override with
+# `export OLLAMA_MODEL=...` to use a specific model (e.g. qwen2.5:14b).
+OLLAMA_MODEL      = os.environ.get('OLLAMA_MODEL', 'qwen3-coder:30b')
 CLAUDE_MODEL      = 'claude-3-5-haiku-20241022'
 
 RATE_LIMIT_SECONDS = 1.2
@@ -221,16 +223,21 @@ def extract_event_companies(event: dict) -> list:
 # ── Step 2 — Tavily web search ────────────────────────────────────────────────
 
 def tavily_search(company_name: str, industry_hint: str = '') -> dict:
-    """Search Tavily. industry_hint steers results toward the right entity."""
+    """Search Tavily. industry_hint steers results toward the right entity.
+    Revenue + employee keywords in the query surface firmographic pages
+    (Crunchbase, ZoomInfo, Bloomberg, Owler) naturally."""
     hint = f' {industry_hint}' if industry_hint else ''
-    query = f'"{company_name}"{hint} company official website headquarters employees'
+    query = (
+        f'"{company_name}"{hint} company official website headquarters '
+        f'employees annual revenue size'
+    )
     try:
         resp = requests.post(
             'https://api.tavily.com/search',
             json={
                 'api_key':        TAVILY_API_KEY,
                 'query':          query,
-                'max_results':    5,
+                'max_results':    6,
                 'search_depth':   'basic',
                 'include_answer': True,
             },
@@ -254,10 +261,15 @@ Industry context from the news event: "{industry_hint}"
 Search results:
 {results_text}
 
-Important: Only extract data that clearly matches "{company_name}" in the context \
+CRITICAL: Only extract data that clearly matches "{company_name}" in the context \
 of "{industry_hint}". If the results describe a different company with a similar \
-name (wrong country, wrong industry), return null for those fields rather than \
-guessing.
+name (wrong country, wrong industry, different sector), return null for ALL \
+fields rather than guessing.
+
+For REVENUE, be especially careful — only extract if a source explicitly states \
+revenue (Crunchbase, Bloomberg, IPO filings, press releases, official company \
+statements). NEVER guess from employee count or industry alone. If revenue \
+is not explicitly stated, return null.
 
 Return ONLY a JSON object (no markdown, no explanation) with these keys \
 (null if unknown or ambiguous):
@@ -265,9 +277,15 @@ Return ONLY a JSON object (no markdown, no explanation) with these keys \
   "url":      "official website URL (https://...) or null",
   "industry": "specific industry — be precise, e.g. 'Wealth Management', \
 'Healthcare IT', 'Commercial Banking', 'B2B SaaS', 'Private Equity', \
-'Utilities' — not generic like 'Technology' or 'Services' — or null",
+'Insurance', 'Auto Dealer', 'Charitable Foundation' — not generic like \
+'Technology' or 'Services' — or null",
   "size":     "one of: '1-50', '51-200', '201-500', '501-1000', \
-'1001-5000', '5000+', or null",
+'1001-5000', '5001-10000', '10000+', or null",
+  "revenue":  "STRICT BUCKET. Must be EXACTLY one of these strings: \
+'<$10M', '$10M-50M', '$50M-100M', '$100M-200M', '$200M-500M', '$500M-1B', \
+'$1B+', or null. DO NOT return free-form values like '$27.9B' or '$50M' — \
+map them to the bucket they fall into ($27.9B → '$1B+', $50M → '$50M-100M'). \
+Use null if revenue is not explicitly stated in the search results.",
   "hq":       "City, ST abbreviation (e.g. 'Boston, MA' or 'Toronto, ON'), \
 US/Canada only unless clearly elsewhere — or null",
   "linkedin": "full https://www.linkedin.com/company/... URL or null"
@@ -275,7 +293,7 @@ US/Canada only unless clearly elsewhere — or null",
 
 
 def enrich_one_company(company_name: str, industry_hint: str = '') -> dict:
-    empty = {'url': None, 'industry': None, 'size': None,
+    empty = {'url': None, 'industry': None, 'size': None, 'revenue': None,
              'hq': None, 'linkedin': None}
 
     search = tavily_search(company_name, industry_hint)
@@ -297,12 +315,13 @@ def enrich_one_company(company_name: str, industry_hint: str = '') -> dict:
         industry_hint=industry_hint or 'unknown',
         results_text='\n'.join(lines).strip()
     )
-    data = llm_json(prompt, max_tokens=400)
+    data = llm_json(prompt, max_tokens=500)
 
     return {
         'url':      data.get('url')      or None,
         'industry': data.get('industry') or None,
         'size':     data.get('size')     or None,
+        'revenue':  data.get('revenue')  or None,
         'hq':       data.get('hq')       or None,
         'linkedin': data.get('linkedin') or None,
     }
@@ -408,8 +427,8 @@ def enrich_events(
                     time.sleep(RATE_LIMIT_SECONDS)
                 else:
                     firm_cache[cache_key] = {
-                        'url': None, 'industry': None,
-                        'size': None, 'hq': None, 'linkedin': None
+                        'url': None, 'industry': None, 'size': None,
+                        'revenue': None, 'hq': None, 'linkedin': None
                     }
             else:
                 log.info(f'  → Cached:   {name}')
@@ -425,6 +444,7 @@ def enrich_events(
                 'url':      firm.get('url'),
                 'industry': firm.get('industry'),
                 'size':     firm.get('size'),
+                'revenue':  firm.get('revenue'),
                 'hq':       firm.get('hq'),
                 'linkedin': firm.get('linkedin'),
             })

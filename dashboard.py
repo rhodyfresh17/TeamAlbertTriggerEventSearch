@@ -266,6 +266,92 @@ def filter_by_region(df: pd.DataFrame, selected_regions: list) -> pd.DataFrame:
     return df[mask]
 
 
+# Ordered low → high. Used to compare revenue bands.
+REVENUE_BANDS = [
+    '<$10M', '$10M-50M', '$50M-100M', '$100M-200M',
+    '$200M-500M', '$500M-1B', '$1B+',
+]
+
+def _coerce_revenue_band(raw) -> str:
+    """Map any revenue string (including free-form like '$27.9B' or '$50M') to
+    our canonical bucket. Returns '' if not parseable. Defense-in-depth for
+    when the LLM ignores the bucket constraint."""
+    import re
+    if not raw or not isinstance(raw, str):
+        return ''
+    s = raw.strip()
+    # If already a canonical bucket, return as-is
+    if s in REVENUE_BANDS:
+        return s
+    # Try to parse a single dollar figure like "$27.9B" or "$50M"
+    m = re.search(r'\$?\s*(\d+(?:\.\d+)?)\s*([MBK])', s, re.IGNORECASE)
+    if not m:
+        return ''
+    val, unit = float(m.group(1)), m.group(2).upper()
+    millions = val * (1000 if unit == 'B' else (0.001 if unit == 'K' else 1))
+    if millions < 10:    return '<$10M'
+    if millions < 50:    return '$10M-50M'
+    if millions < 100:   return '$50M-100M'
+    if millions < 200:   return '$100M-200M'
+    if millions < 500:   return '$200M-500M'
+    if millions < 1000:  return '$500M-1B'
+    return '$1B+'
+
+
+def _band_idx(b) -> int:
+    """Return ordinal index of a revenue band, or -1 if not recognised.
+    Tolerates free-form revenue strings via _coerce_revenue_band."""
+    if not b:
+        return -1
+    canonical = b if b in REVENUE_BANDS else _coerce_revenue_band(b)
+    try:
+        return REVENUE_BANDS.index(canonical)
+    except (ValueError, AttributeError):
+        return -1
+
+
+def filter_by_revenue_band(df: pd.DataFrame, max_band: str = '$100M-200M') -> pd.DataFrame:
+    """Drop events where the primary company has CONFIRMED revenue above max_band.
+    Events with unknown revenue are kept (don't punish missing data)."""
+    max_idx = _band_idx(max_band)
+    if max_idx < 0:
+        return df
+
+    # Primary roles we care about (the actual subject of the event)
+    primary_roles = {
+        'acquirer', 'target', 'portfolio company',
+        'hiring company', 'primary',
+    }
+
+    def keep(row):
+        cd = row.get('companies_data')
+        # NaN-safe unwrap
+        if cd is None or (isinstance(cd, float) and cd != cd):
+            return True
+        if isinstance(cd, str):
+            try:
+                import json as _json
+                cd = _json.loads(cd) if cd.strip() else []
+            except Exception:
+                return True
+        if not isinstance(cd, list) or not cd:
+            return True
+
+        # Find primary company; fall back to first company in the list
+        primary = next(
+            (c for c in cd
+             if str(c.get('role', '')).lower() in primary_roles),
+            cd[0]
+        )
+        rev_idx = _band_idx(primary.get('revenue') or '')
+        # rev_idx < 0  → unknown revenue, keep
+        # rev_idx <= max_idx → in or below target band, keep
+        # rev_idx > max_idx  → confirmed too big, drop
+        return rev_idx < 0 or rev_idx <= max_idx
+
+    return df[df.apply(keep, axis=1)]
+
+
 # Event type configurations with modern colors
 EVENT_TYPES = {
     "merger_acquisition": {
@@ -526,6 +612,7 @@ def render_event_card(row, event_config):
                         co_url      = _v(co.get('url'))
                         co_industry = _v(co.get('industry'))
                         co_size     = _v(co.get('size'))
+                        co_revenue  = _v(co.get('revenue'))
                         co_hq       = _v(co.get('hq'))
                         co_linkedin = _v(co.get('linkedin'))
 
@@ -543,10 +630,16 @@ def render_event_card(row, event_config):
                             unsafe_allow_html=True
                         )
 
-                        # Chips row
+                        # Chips row — green chip for in-band revenue (NetSuite up-market sweet spot)
                         chips = []
                         if co_industry: chips.append(f"🏭 {co_industry}")
                         if co_size:     chips.append(f"👥 {co_size}")
+                        if co_revenue:
+                            in_band = co_revenue in (
+                                '<$10M', '$10M-50M', '$50M-100M', '$100M-200M'
+                            )
+                            rev_emoji = '💵' if in_band else '🏛️'
+                            chips.append(f"{rev_emoji} {co_revenue}")
                         if co_hq:       chips.append(f"📍 {co_hq}")
                         if chips:
                             st.markdown(
@@ -860,6 +953,16 @@ def main():
         label_visibility="collapsed"
     )
 
+    # Revenue band filter — NetSuite up-market sweet spot is $0-$200M.
+    # When enabled, hide events whose primary company has KNOWN revenue >$200M.
+    # Events with no known revenue are always shown (so we don't lose new leads).
+    st.sidebar.markdown('<p class="sidebar-section-title">💵 Revenue Band</p>', unsafe_allow_html=True)
+    hide_megacaps = st.sidebar.checkbox(
+        "Hide companies > $200M",
+        value=True,
+        help="Filter out events whose primary company has confirmed revenue above $200M (out of NetSuite up-market band). Leads with unknown revenue are always shown."
+    )
+
     # Modern search bar
     st.markdown('<div class="search-container">', unsafe_allow_html=True)
     search = st.text_input(
@@ -877,6 +980,9 @@ def main():
         return
 
     df = filter_by_region(df, selected_regions)
+
+    if hide_megacaps:
+        df = filter_by_revenue_band(df, max_band='$100M-200M')
 
     # Stats
     stats = get_stats(df)
