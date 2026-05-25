@@ -453,8 +453,19 @@ trigger needs another distinct hashtag-worthy signal beyond the base event)
 - C = 1 hashtag (a single trigger from event_type alone is C, not B)
 - D = 0 hashtags
 
+SPECIAL RULE — FINANCE LEADERSHIP HIRE OVERRIDE:
+If the event involves hiring a CFO, Controller, VP Finance, Vice President of \
+Finance, Head of Finance, Director of Finance, Chief Financial Officer, or \
+Chief Accounting Officer, this is the HIGHEST-VALUE trigger in NetSuite sales \
+and overrides the standard 1-hashtag = C rule:
+- Apply #NewCFO hashtag (even if title says Controller / VP Finance)
+- MINIMUM grade is B (never C or D) even when #NewCFO is the only hashtag
+- If #NewCFO PLUS one other distinct hashtag (e.g. #PEBacked, #HoldCo, \
+#Acquisitions, #HyperGrowth) → grade A
+
 CFO STATUS:
-- "New" if event_type is "cfo_hire"
+- "New" if event_type is "cfo_hire" OR title/description mentions hiring a \
+CFO/Controller/VP Finance/Head of Finance/Director of Finance
 - "Unable to verify" otherwise
 
 For research_notes, use ONLY URLs that appear in the input above (article URL, \
@@ -488,6 +499,38 @@ def _build_companies_block(companies_data: list) -> str:
             f"    Revenue Source: {c.get('revenue_source') or 'n/a'}"
         )
     return '\n'.join(lines)
+
+
+# Finance leadership roles that should always trigger a minimum Grade B per
+# user requirement: "new CFOs/Controllers/VPs of Finance are VERY high value
+# and probably more valuable than any other trigger".
+FINANCE_LEADERSHIP_PATTERNS = [
+    'cfo', 'chief financial officer', 'chief financial',
+    'controller',
+    'vp finance', 'vp of finance', 'vice president finance',
+    'vice president of finance', 'head of finance',
+    'director of finance', 'finance director',
+    'chief accounting officer', 'chief accountant',
+]
+
+
+def _has_finance_leadership_trigger(event: dict) -> bool:
+    """True if the event title or description indicates hiring a finance
+    leadership role (CFO, Controller, VP Finance, etc.)."""
+    text = ' '.join([
+        (event.get('title') or ''),
+        (event.get('description') or ''),
+    ]).lower()
+    if not text.strip():
+        return False
+    if event.get('event_type') == 'cfo_hire':
+        return True
+    # Check for finance leadership keywords combined with hiring verbs
+    HIRE_VERBS = ('appoints', 'names', 'hires', 'welcomes', 'taps',
+                  'joins as', 'promoted to', 'elevated to', 'hiring')
+    has_hire = any(v in text for v in HIRE_VERBS) or 'hire' in text
+    has_role = any(p in text for p in FINANCE_LEADERSHIP_PATTERNS)
+    return has_hire and has_role
 
 
 def grade_event(event: dict, companies_data: list) -> dict:
@@ -535,11 +578,32 @@ def grade_event(event: dict, companies_data: list) -> dict:
         for n in notes if isinstance(n, dict) and n.get('finding')
     ][:6]
 
+    cfo_status = (data.get('cfo_status') or '').strip() or None
+    justification = (data.get('grade_justification') or '').strip() or None
+
+    # ── Finance leadership override (defense in depth) ────────────────
+    # Even if the LLM ignored or misapplied the special rule in the prompt,
+    # code enforces: any finance leadership hire trigger → minimum Grade B
+    # and #NewCFO hashtag present.
+    if _has_finance_leadership_trigger(event):
+        if '#NewCFO' not in hashtags:
+            hashtags = ['#NewCFO'] + hashtags
+            hashtags = hashtags[:6]  # cap at 6
+        if grade in (None, 'C', 'D'):
+            old_grade = grade or 'ungraded'
+            grade = 'B'
+            note = (
+                f'Finance leadership hire override: '
+                f'bumped from {old_grade} → B per TAL high-value-trigger rule. '
+            )
+            justification = note + (justification or '')
+        cfo_status = cfo_status or 'New'
+
     return {
         'grade': grade,
         'hashtags': hashtags,
-        'cfo_status': (data.get('cfo_status') or '').strip() or None,
-        'grade_justification': (data.get('grade_justification') or '').strip() or None,
+        'cfo_status': cfo_status,
+        'grade_justification': justification,
         'research_notes': notes,
     }
 

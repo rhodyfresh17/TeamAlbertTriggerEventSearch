@@ -676,24 +676,35 @@ def render_event_card(row, event_config):
     status_cfg = STATUS_CONFIG.get(status, STATUS_CONFIG["NEW"])
     badge_class = event_config.get('badge_class', 'badge-other')
 
-    # TAL grade badge — A=green, B=blue, C=amber, D=grey
+    # TAL grade badge — solid colored pill, prominent. A=green, B=blue,
+    # C=amber, D=grey. White text on solid bg + drop shadow for visibility.
     grade_raw = row.get('grade')
     grade = str(grade_raw).strip().upper() if grade_raw else ''
     grade_colors = {
-        'A': ('#10b981', 'rgba(16,185,129,0.15)'),  # green
-        'B': ('#3b82f6', 'rgba(59,130,246,0.15)'),  # blue
-        'C': ('#f59e0b', 'rgba(245,158,11,0.15)'),  # amber
-        'D': ('#6b7280', 'rgba(107,114,128,0.18)'), # grey
+        'A': '#10b981',  # emerald
+        'B': '#3b82f6',  # blue
+        'C': '#f59e0b',  # amber
+        'D': '#6b7280',  # slate
+    }
+    grade_descriptions = {
+        'A': 'Grade A — Hot lead (3+ hashtags + 2 triggers)',
+        'B': 'Grade B — Strong lead (2 hashtags + 1 trigger, or finance leadership hire)',
+        'C': 'Grade C — Warm lead (1 hashtag)',
+        'D': 'Grade D — Cold lead (0 hashtags)',
     }
     grade_html = ""
     if grade in grade_colors:
-        fg, bg = grade_colors[grade]
+        color = grade_colors[grade]
+        desc = grade_descriptions[grade]
         grade_html = (
-            f'<span title="TAL V10.2 fit grade" '
+            f'<span title="{desc}" '
             f'style="display:inline-flex;align-items:center;justify-content:center;'
-            f'width:1.7rem;height:1.7rem;border-radius:50%;background:{bg};'
-            f'color:{fg};font-weight:700;font-size:0.85rem;border:1.5px solid {fg};'
-            f'margin-right:0.4rem;">{grade}</span>'
+            f'padding:0.35rem 0.75rem;border-radius:6px;'
+            f'background:{color};color:#ffffff;'
+            f'font-weight:800;font-size:0.82rem;letter-spacing:0.08em;'
+            f'box-shadow:0 2px 6px rgba(0,0,0,0.25);'
+            f'margin-right:0.55rem;text-transform:uppercase;'
+            f'cursor:help;">Grade {grade}</span>'
         )
 
     # Hashtag chips (max 6, from companies_data grading step)
