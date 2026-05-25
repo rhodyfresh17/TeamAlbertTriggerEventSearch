@@ -266,40 +266,61 @@ def filter_by_region(df: pd.DataFrame, selected_regions: list) -> pd.DataFrame:
     return df[mask]
 
 
-# Revenue buckets, ordered low → high. Used for filter UI + comparisons.
-REVENUE_BANDS = [
-    '<$5M', '$5M-10M', '$10M-25M', '$25M-50M', '$50M-100M',
-    '$100M-200M', '$200M-500M', '$500M-1B', '$1B+',
-]
+# 4-segment NetSuite sales taxonomy, ordered low → high.
+#   LMM  (Lower Mid-Market):  $0-$10M
+#   MM   (Mid-Market):        $10M-$20M
+#   Corp (Corporate):         $20M-$100M
+#   Enterprise:               $100M+
+REVENUE_BANDS = ['LMM', 'MM', 'Corp', 'Enterprise']
 
-# Map LEGACY buckets (from older enriched events) → current canonical buckets.
-# We pick the LOWER end of the equivalent range so legacy data is treated
-# conservatively (more likely to be shown to small-co reps).
+# Human-readable description for the chip tooltip and sidebar help
+BAND_RANGE = {
+    'LMM':        '$0-$10M',
+    'MM':         '$10M-$20M',
+    'Corp':       '$20M-$100M',
+    'Enterprise': '$100M+',
+}
+
+# Map LEGACY buckets (from earlier enrichment runs) → current 4 segments.
+# Used so events enriched against older schemas still filter correctly
+# without forcing a full re-enrichment.
 LEGACY_BUCKET_MAP = {
-    '<$10M':    '<$5M',
-    '$10M-50M': '$10M-25M',
+    # Original 7-bucket schema
+    '<$10M':       'LMM',
+    '$10M-50M':    'MM',   # straddles MM + Corp; conservative pick
+    '$50M-100M':   'Corp',
+    '$100M-200M':  'Enterprise',
+    '$200M-500M':  'Enterprise',
+    '$500M-1B':    'Enterprise',
+    '$1B+':        'Enterprise',
+    # Granular 9-bucket schema (briefly used between commits ac17b5b..db6402c)
+    '<$5M':        'LMM',
+    '$5M-10M':     'LMM',
+    '$10M-25M':    'MM',   # straddles MM + Corp; conservative pick
+    '$25M-50M':    'Corp',
 }
 
 # Quick presets for the sidebar
 REVENUE_PRESETS = {
-    'NetSuite Up-Market ($0-$200M)': ['<$5M', '$5M-10M', '$10M-25M', '$25M-50M',
-                                       '$50M-100M', '$100M-200M'],
-    'SMB only (< $25M)':              ['<$5M', '$5M-10M', '$10M-25M'],
-    'Mid-market ($25M-$200M)':        ['$25M-50M', '$50M-100M', '$100M-200M'],
-    'Enterprise ($200M+)':            ['$200M-500M', '$500M-1B', '$1B+'],
-    'All bands':                       list(REVENUE_BANDS),
+    'NetSuite Up-Market ($0-$100M)': ['LMM', 'MM', 'Corp'],
+    'LMM only (<$10M)':              ['LMM'],
+    'MM only ($10M-$20M)':           ['MM'],
+    'Corp only ($20M-$100M)':        ['Corp'],
+    'Under $20M (LMM + MM)':         ['LMM', 'MM'],
+    'Enterprise ($100M+)':           ['Enterprise'],
+    'All segments':                   list(REVENUE_BANDS),
 }
 
 
 def _coerce_revenue_band(raw) -> str:
-    """Map any revenue string (including free-form like '$27.9B', '$50M',
-    or legacy buckets '$10M-50M') to a current canonical bucket. Returns ''
+    """Map any revenue string (canonical segment, legacy bucket, or free-form
+    dollar figure like '$27.9B') to one of the 4 current segments. Returns ''
     if not parseable. Defense-in-depth for LLM deviations + legacy data."""
     import re
     if not raw or not isinstance(raw, str):
         return ''
     s = raw.strip()
-    # Already a canonical bucket
+    # Already a canonical segment
     if s in REVENUE_BANDS:
         return s
     # Legacy bucket from older enrichment runs
@@ -311,20 +332,15 @@ def _coerce_revenue_band(raw) -> str:
         return ''
     val, unit = float(m.group(1)), m.group(2).upper()
     millions = val * (1000 if unit == 'B' else (0.001 if unit == 'K' else 1))
-    if millions < 5:     return '<$5M'
-    if millions < 10:    return '$5M-10M'
-    if millions < 25:    return '$10M-25M'
-    if millions < 50:    return '$25M-50M'
-    if millions < 100:   return '$50M-100M'
-    if millions < 200:   return '$100M-200M'
-    if millions < 500:   return '$200M-500M'
-    if millions < 1000:  return '$500M-1B'
-    return '$1B+'
+    if millions < 10:    return 'LMM'
+    if millions < 20:    return 'MM'
+    if millions < 100:   return 'Corp'
+    return 'Enterprise'
 
 
 def _band_idx(b) -> int:
-    """Return ordinal index of a revenue band, or -1 if not recognised.
-    Tolerates free-form strings + legacy buckets via _coerce_revenue_band."""
+    """Return ordinal index of a revenue segment, or -1 if not recognised.
+    Tolerates legacy buckets + free-form strings via _coerce_revenue_band."""
     if not b:
         return -1
     canonical = b if b in REVENUE_BANDS else _coerce_revenue_band(b)
@@ -660,24 +676,56 @@ def render_event_card(row, event_config):
                             unsafe_allow_html=True
                         )
 
-                        # Chips row — green chip for in-band revenue (NetSuite up-market sweet spot)
-                        chips = []
-                        if co_industry: chips.append(f"🏭 {co_industry}")
-                        if co_size:     chips.append(f"👥 {co_size}")
+                        # Chips row — each chip is (text, tooltip). The
+                        # revenue chip gets a tooltip showing the segment's
+                        # dollar range AND the source URL the LLM cited.
+                        import html as _html
+                        from urllib.parse import urlparse as _urlparse
+
+                        chips = []  # list of (display_text, tooltip)
+                        if co_industry: chips.append((f"🏭 {co_industry}", ''))
+                        if co_size:     chips.append((f"👥 {co_size}", ''))
                         if co_revenue:
-                            # Green for in-band (NetSuite up-market ≤ $200M),
-                            # grey for above. Tolerates legacy bucket names
-                            # and free-form values via _band_idx.
-                            rev_emoji = '💵' if _band_idx(co_revenue) <= 5 and _band_idx(co_revenue) >= 0 else '🏛️'
-                            chips.append(f"{rev_emoji} {co_revenue}")
-                        if co_hq:       chips.append(f"📍 {co_hq}")
+                            seg = _coerce_revenue_band(co_revenue) or co_revenue
+                            rev_idx = _band_idx(seg)
+                            in_band = 0 <= rev_idx <= 2  # LMM, MM, Corp
+                            rev_emoji = '💵' if in_band else '🏛️'
+
+                            # Build tooltip: range + source citation
+                            tooltip_parts = []
+                            range_txt = BAND_RANGE.get(seg, '')
+                            if range_txt:
+                                tooltip_parts.append(f"{seg} = {range_txt}")
+                            src = _v(co.get('revenue_source'))
+                            if src:
+                                try:
+                                    domain = _urlparse(src).netloc.replace('www.', '') or src
+                                except Exception:
+                                    domain = src
+                                tooltip_parts.append(f"Source: {domain}")
+                            elif co_revenue and co_revenue != seg:
+                                # Show original raw value if it differed (e.g. "$27.9B" → "Enterprise")
+                                tooltip_parts.append(f"Reported: {co_revenue}")
+                            tooltip = ' · '.join(tooltip_parts)
+
+                            chips.append((f"{rev_emoji} {seg}", tooltip))
+                        if co_hq:       chips.append((f"📍 {co_hq}", ''))
+
                         if chips:
+                            rendered = []
+                            for txt, tip in chips:
+                                style = "font-size:0.78rem;color:rgba(255,255,255,0.65);"
+                                if tip:
+                                    style += "cursor:help;border-bottom:1px dotted rgba(255,255,255,0.35);"
+                                title_attr = (
+                                    f' title="{_html.escape(tip, quote=True)}"'
+                                    if tip else ''
+                                )
+                                rendered.append(
+                                    f"<span style='{style}'{title_attr}>{txt}</span>"
+                                )
                             st.markdown(
-                                "  <span style='color:rgba(255,255,255,0.35);'>·</span>  ".join(
-                                    f"<span style='font-size:0.78rem;"
-                                    f"color:rgba(255,255,255,0.65);'>{c}</span>"
-                                    for c in chips
-                                ),
+                                "  <span style='color:rgba(255,255,255,0.35);'>·</span>  ".join(rendered),
                                 unsafe_allow_html=True
                             )
 
@@ -983,27 +1031,33 @@ def main():
         label_visibility="collapsed"
     )
 
-    # Revenue band filter — pick the specific bands you target.
-    # Each rep can dial this in: SMB-only reps select only <$25M bands,
-    # mid-market reps select $25M-200M, etc. Quick presets handle the
-    # common patterns; multiselect below lets you fine-tune.
-    st.sidebar.markdown('<p class="sidebar-section-title">💵 Revenue Bands</p>', unsafe_allow_html=True)
+    # Revenue segment filter — 4 NetSuite sales tiers:
+    #   LMM  (<$10M)   ·  MM   ($10-$20M)
+    #   Corp ($20-100M)  ·  Enterprise (>$100M)
+    # Each rep dials this to their own segment. Presets cover common patterns,
+    # multiselect below lets you fine-tune.
+    st.sidebar.markdown('<p class="sidebar-section-title">💵 Revenue Segment</p>', unsafe_allow_html=True)
 
     preset = st.sidebar.selectbox(
         "Preset",
         options=list(REVENUE_PRESETS.keys()),
-        index=0,  # NetSuite Up-Market ($0-$200M)
+        index=0,  # NetSuite Up-Market ($0-$100M)
         help="Quick presets. Use the multiselect below to fine-tune.",
         label_visibility="collapsed"
     )
     default_bands = REVENUE_PRESETS[preset]
 
     selected_bands = st.sidebar.multiselect(
-        "Bands to include",
+        "Segments to include",
         options=REVENUE_BANDS,
         default=default_bands,
-        placeholder="Select revenue bands…",
-        help="Only show companies whose confirmed revenue falls in these bands.",
+        placeholder="Select segments…",
+        help=(
+            "LMM = Lower Mid-Market (<$10M)  ·  "
+            "MM = Mid-Market ($10M-$20M)  ·  "
+            "Corp = Corporate ($20M-$100M)  ·  "
+            "Enterprise (>$100M)"
+        ),
         label_visibility="collapsed",
         key=f"rev_bands_{preset}",  # Reset multiselect when preset changes
     )

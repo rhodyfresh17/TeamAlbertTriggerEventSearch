@@ -281,12 +281,15 @@ Return ONLY a JSON object (no markdown, no explanation) with these keys \
 'Technology' or 'Services' — or null",
   "size":     "one of: '1-50', '51-200', '201-500', '501-1000', \
 '1001-5000', '5001-10000', '10000+', or null",
-  "revenue":  "STRICT BUCKET. Must be EXACTLY one of these strings: \
-'<$5M', '$5M-10M', '$10M-25M', '$25M-50M', '$50M-100M', '$100M-200M', \
-'$200M-500M', '$500M-1B', '$1B+', or null. DO NOT return free-form values \
-like '$27.9B' or '$50M' — map them to the bucket they fall into \
-($27.9B → '$1B+', $50M → '$50M-100M', $18M → '$10M-25M'). Use null if \
-revenue is not explicitly stated in the search results.",
+  "revenue":  "STRICT SEGMENT. Must be EXACTLY one of: \
+'LMM' (Lower Mid-Market, <$10M), 'MM' (Mid-Market, $10M-$20M), \
+'Corp' (Corporate, $20M-$100M), 'Enterprise' (>$100M), or null. \
+DO NOT return dollar amounts — map them to the segment they fall into: \
+$5M → 'LMM', $15M → 'MM', $50M → 'Corp', $500M → 'Enterprise', \
+$1.5B → 'Enterprise'. Use null if revenue is not explicitly stated.",
+  "revenue_source": "The full URL of the search result where the revenue \
+figure was found (e.g. 'https://www.crunchbase.com/organization/acme'). \
+Must be one of the URLs in the search results above. null if revenue is null.",
   "hq":       "City, ST abbreviation (e.g. 'Boston, MA' or 'Toronto, ON'), \
 US/Canada only unless clearly elsewhere — or null",
   "linkedin": "full https://www.linkedin.com/company/... URL or null"
@@ -295,7 +298,7 @@ US/Canada only unless clearly elsewhere — or null",
 
 def enrich_one_company(company_name: str, industry_hint: str = '') -> dict:
     empty = {'url': None, 'industry': None, 'size': None, 'revenue': None,
-             'hq': None, 'linkedin': None}
+             'revenue_source': None, 'hq': None, 'linkedin': None}
 
     search = tavily_search(company_name, industry_hint)
     if not search.get('results'):
@@ -316,15 +319,23 @@ def enrich_one_company(company_name: str, industry_hint: str = '') -> dict:
         industry_hint=industry_hint or 'unknown',
         results_text='\n'.join(lines).strip()
     )
-    data = llm_json(prompt, max_tokens=500)
+    data = llm_json(prompt, max_tokens=550)
+
+    # Only keep revenue_source if revenue itself was extracted (no point
+    # citing a URL for a null revenue)
+    revenue       = data.get('revenue')        or None
+    revenue_src   = data.get('revenue_source') or None
+    if not revenue:
+        revenue_src = None
 
     return {
-        'url':      data.get('url')      or None,
-        'industry': data.get('industry') or None,
-        'size':     data.get('size')     or None,
-        'revenue':  data.get('revenue')  or None,
-        'hq':       data.get('hq')       or None,
-        'linkedin': data.get('linkedin') or None,
+        'url':            data.get('url')      or None,
+        'industry':       data.get('industry') or None,
+        'size':           data.get('size')     or None,
+        'revenue':        revenue,
+        'revenue_source': revenue_src,
+        'hq':             data.get('hq')       or None,
+        'linkedin':       data.get('linkedin') or None,
     }
 
 
@@ -429,7 +440,8 @@ def enrich_events(
                 else:
                     firm_cache[cache_key] = {
                         'url': None, 'industry': None, 'size': None,
-                        'revenue': None, 'hq': None, 'linkedin': None
+                        'revenue': None, 'revenue_source': None,
+                        'hq': None, 'linkedin': None
                     }
             else:
                 log.info(f'  → Cached:   {name}')
@@ -440,14 +452,15 @@ def enrich_events(
                 log.info(f'     {" | ".join(found)}')
 
             enriched.append({
-                'name':     name,
-                'role':     role,
-                'url':      firm.get('url'),
-                'industry': firm.get('industry'),
-                'size':     firm.get('size'),
-                'revenue':  firm.get('revenue'),
-                'hq':       firm.get('hq'),
-                'linkedin': firm.get('linkedin'),
+                'name':           name,
+                'role':           role,
+                'url':            firm.get('url'),
+                'industry':       firm.get('industry'),
+                'size':           firm.get('size'),
+                'revenue':        firm.get('revenue'),
+                'revenue_source': firm.get('revenue_source'),
+                'hq':             firm.get('hq'),
+                'linkedin':       firm.get('linkedin'),
             })
 
         # ── 3. Write to Supabase ──────────────────────────────────────────
