@@ -637,13 +637,12 @@ territory:
     - "South Dakota"
 
   excluded_industries:
-    # Banks (distinct from Credit Unions — Credit Unions ARE targets)
-    - "Bank"
-    - "Banking"
-    - "Commercial Bank"
-    - "Savings Bank"
-    - "Federal Reserve"
-    - "Mortgage Lender"
+    # ⚠️ NOTE: "Bank" / "Banking" / "Commercial Bank" / "Savings Bank" /
+    # "Federal Reserve" / "Mortgage Lender" were previously listed here but
+    # CONFLICT with your FY27 subindustries (Banking is a TARGET). Removed.
+    # If you want to block specific large public banks (e.g. JPMorgan, BofA),
+    # add them to territory.company_filters.excluded_public_companies instead.
+
     # Out-of-scope verticals
     - "Restaurant"
     - "Fast Food"
@@ -652,27 +651,101 @@ territory:
     - "Fast Casual"
     - "Amusement Park"
     - "Theme Park"
+
+    # Oil & Gas / Petroleum
     - "Oil and Gas"
     - "Oil & Gas"
     - "Petroleum"
     - "Drilling"
     - "Pipeline"
+    - "Petrochemical"
+    - "Refinery"
+    - "Refining"
+
+    # Mining / Metals / Exploration (Copper Quest leak → fixed here)
+    - "Mining"
+    - "Mineral Exploration"
+    - "Mineral Resources"
+    - "Mining Corp"
+    - "Mining Inc"
+    - "Mining Company"
+    - "Mining Operations"
+    - "Mining Ltd"
+    - "Gold Mining"
+    - "Copper Mining"
+    - "Coal Mining"
+    - "Uranium"
+    - "Lithium Mining"
+    - "Resource Exploration"
+    - "Junior Mining"
+    - "Mining Stock"
+    # Junior-mining naming patterns (catches Copper Quest Exploration Inc etc.)
+    - "Exploration Inc"
+    - "Exploration Corp"
+    - "Exploration Ltd"
+    - "Exploration Limited"
+    - "Resources Inc"
+    - "Resources Corp"
+    - "Resources Ltd"
+    - "Minerals Inc"
+    - "Minerals Corp"
+    - "Minerals Ltd"
+    - "Metals Inc"
+    - "Metals Corp"
+    - "Metals Ltd"
+    - "Gold Corp"
+    - "Gold Inc"
+    - "Silver Corp"
+    - "Silver Inc"
+
+    # Steel / Heavy industry (Sault Ste. Marie steel leak → fixed here)
+    - "Steelworker"
+    - "Steelmaker"
+    - "Steel Industry"
+    - "Steel Investment"
+    - "Steel Mill"
+    - "Steel Manufacturer"
+    - "Iron Ore"
+    - "Smelter"
+    - "Foundry"
+    - "Aluminum Producer"
+    - "Heavy Industry"
+    - "Heavy Manufacturing"
+    - "Industrial Manufacturer"
+
+    # Hospitality / Travel (museums/theaters/libraries are kept separately)
     - "Hotel"
     - "Hospitality"
     - "Resort"
     - "Lodging"
+
+    # Engineering & Construction
     - "Engineering Firm"
     - "Civil Engineering"
+    - "Construction Company"
+    - "General Contractor"
+
+    # Tech infrastructure & Utilities
     - "Data Center"
     - "Colocation"
     - "Electric Utility"
     - "Power Plant"
+    - "Power Generation"
+    - "Renewable Energy"
+    - "Solar Farm"
+    - "Wind Farm"
+
+    # Gaming / Casino
     - "Casino"
     - "Gaming"
     - "Sports Betting"
+
+    # Generic tech (target only specific consumer-services tech)
     - "Technology Company"
     - "SaaS"
     - "Software Company"
+
+    # Logistics / Freight (not a target)
     - "Freight"
     - "Logistics"
     - "Supply Chain"
