@@ -823,22 +823,158 @@ def enrich_events(
     )
 
 
+# ── Regrade-only mode (free — no Tavily, no firmographic re-fetch) ─────────
+
+def regrade_only_events(limit: int = None, dry_run: bool = False):
+    """Re-apply ONLY the TAL grading + post-enrichment industry filter +
+    event_type reclassification to existing events. Uses each event's existing
+    companies_data — does NOT call Tavily and does NOT re-extract firmographics.
+
+    Use this when you only want to apply NEW grading/classification rules to
+    historical events without burning Tavily API credits. Ollama (local, free)
+    is still used for the grading LLM call.
+    """
+    check_required_keys()  # not strictly needed (no Tavily) — but harmless
+    client = get_supabase()
+    col_ok = check_columns(client)
+
+    # Fetch events that already have firmographic data
+    query = client.table('events').select(
+        'id, company_name, event_type, title, description, '
+        'source_url, companies_data'
+    ).not_.is_('companies_data', 'null')
+    result = query.order('discovered_at', desc=True).execute()
+    events = result.data or []
+    if limit:
+        events = events[:limit]
+
+    if not events:
+        log.info('No events with existing companies_data — nothing to regrade.')
+        return
+
+    tag = 'DRY RUN — ' if dry_run else ''
+    log.info(
+        f'{tag}Regrading {len(events)} event(s) using existing firmographics. '
+        f'NO Tavily calls (free).'
+    )
+    print()
+
+    ok = deleted = upgraded = fail = 0
+
+    for idx, event in enumerate(events, 1):
+        eid   = event['id']
+        title = (event.get('title') or '')[:80]
+        log.info(f'[{idx}/{len(events)}] {title}')
+
+        # Unwrap companies_data
+        cd = event.get('companies_data')
+        if isinstance(cd, str):
+            try:
+                cd = json.loads(cd)
+            except Exception:
+                cd = []
+        if not cd or not isinstance(cd, list):
+            log.info('  (empty companies_data — skipping)')
+            continue
+
+        # ── Post-enrichment industry filter ───────────────────────────────
+        primary = next(
+            (c for c in cd
+             if str(c.get('role', '')).lower() in PRIMARY_ROLES),
+            cd[0]
+        )
+        blocked, kw = industry_is_blocked(primary.get('industry') or '')
+        if blocked:
+            log.info(
+                f'  🚫 Industry "{primary.get("industry")}" matched "{kw}" '
+                f'→ delete'
+            )
+            if not dry_run:
+                try:
+                    client.table('events').delete().eq('id', eid).execute()
+                    deleted += 1
+                except Exception as e:
+                    log.error(f'  Delete failed: {e}')
+                    fail += 1
+            else:
+                deleted += 1
+            continue
+
+        # ── TAL grading (Ollama only, free) ───────────────────────────────
+        grading = grade_event(event, cd)
+        if grading.get('grade'):
+            log.info(
+                f'  Grade={grading["grade"]}  '
+                f'Hashtags={" ".join(grading["hashtags"]) or "(none)"}'
+            )
+
+        if dry_run:
+            ok += 1
+            continue
+
+        # ── Build payload (don't touch companies_data — we didn't change it) ─
+        payload = {
+            'grade':               grading.get('grade'),
+            'hashtags':            grading.get('hashtags') or [],
+            'grade_justification': grading.get('grade_justification'),
+            'cfo_status':          grading.get('cfo_status'),
+            'research_notes':      grading.get('research_notes') or [],
+        }
+
+        # event_type reclassification: only upgrade to cfo_hire when warranted
+        current_etype = (event.get('event_type') or '').lower()
+        if (current_etype != 'cfo_hire'
+                and _has_finance_leadership_trigger(event)):
+            payload['event_type'] = 'cfo_hire'
+            upgraded += 1
+            log.info(f'  Reclassifying event_type {current_etype!r} → cfo_hire')
+
+        try:
+            client.table('events').update(payload).eq('id', eid).execute()
+            ok += 1
+        except Exception as e:
+            if 'does not exist' in str(e):
+                log.error(
+                    f'  Write failed — schema not migrated yet. {MIGRATION_SQL}'
+                )
+            else:
+                log.error(f'  Write failed: {e}')
+            fail += 1
+
+    print()
+    log.info(
+        f'Done — regraded: {ok}, deleted (industry block): {deleted}, '
+        f'event_type → cfo_hire: {upgraded}, failed: {fail}'
+    )
+    log.info('Tavily API calls used: 0  (regrade-only mode)')
+
+
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
     p = argparse.ArgumentParser(
         description='Enrich trigger events with multi-company firmographic data'
     )
-    p.add_argument('--limit',     type=int, default=None,
+    p.add_argument('--limit',         type=int, default=None,
                    help='Max events to process (default: all)')
-    p.add_argument('--re-enrich', action='store_true',
-                   help='Re-process already-enriched events')
-    p.add_argument('--dry-run',   action='store_true',
+    p.add_argument('--re-enrich',     action='store_true',
+                   help='Full re-enrichment (calls Tavily for firmographics + re-grade). '
+                        'Costs Tavily quota.')
+    p.add_argument('--regrade-only',  action='store_true',
+                   help='Re-apply grading rules + industry filter + event_type '
+                        'reclassification using EXISTING firmographic data. '
+                        'NO Tavily calls (free, Ollama-only).')
+    p.add_argument('--dry-run',       action='store_true',
                    help='Preview without writing to Supabase')
     args = p.parse_args()
 
-    enrich_events(
-        limit=args.limit,
-        re_enrich=args.re_enrich,
-        dry_run=args.dry_run,
-    )
+    if args.regrade_only:
+        if args.re_enrich:
+            sys.exit('Choose one: --regrade-only OR --re-enrich (not both)')
+        regrade_only_events(limit=args.limit, dry_run=args.dry_run)
+    else:
+        enrich_events(
+            limit=args.limit,
+            re_enrich=args.re_enrich,
+            dry_run=args.dry_run,
+        )
