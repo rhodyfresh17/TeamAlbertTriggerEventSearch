@@ -1132,6 +1132,54 @@ sec_filings:
   # Update this to YOUR contact info to be a good API citizen.
   user_agent: "TeamAlbert Sales Intelligence (sales-leads@teamalbert.local)"
 
+# ── Adzuna job board API ───────────────────────────────────────────────
+# Structured API source for finance leadership job postings — replaces the
+# 5 broken HTML scrapers (Indeed/ZipRecruiter/SimplyHired/Ladders/CFO.com).
+#
+# SETUP:
+#   1. Get free API key at https://developer.adzuna.com/signup
+#   2. Set credentials in .env (don't commit them):
+#        ADZUNA_APP_ID=xxxxxxxx
+#        ADZUNA_APP_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+#   3. For GitHub Actions: add ADZUNA_APP_ID + ADZUNA_APP_KEY as repo secrets
+#
+# API-BUDGET MATH (Adzuna free tier is ~100-250 calls/month):
+#   Each scrape cycle makes 1 call per country in `countries`.
+#   `run_hours` restricts which scrape cycles (every 4hr at 0/4/8/12/16/20 UTC)
+#   actually fire Adzuna.
+#
+#   Default below: run_hours=[12] (noon UTC = 8am EDT / 7am EST)
+#     → 1 cycle/day × 2 countries × 30 days = ~60 calls/month
+#     → safely fits FREE 100/month tier
+#
+#   Want 2x/day? Set run_hours: [12, 20]  → 120 calls/month (fits 250 tier)
+#   Want 3x/day? Set run_hours: [8, 12, 20]  → 180 calls/month
+#   Want every cycle? Set run_hours: []  → 360 calls/month (requires paid)
+adzuna:
+  enabled: true
+  # UTC hours at which Adzuna should fire (must match a scrape-cycle hour:
+  # 0, 4, 8, 12, 16, 20). Empty list = run every cycle (uses ~360 calls/mo).
+  run_hours:
+    - 12   # noon UTC = 8am EDT / 7am EST
+  # Geographic coverage — Adzuna supports US + Canada for our territory
+  countries:
+    - us
+    - ca
+  # Max age (days) of postings to surface
+  max_days_old: 14
+  # Max results per API call (50 = max for free tier)
+  results_per_page: 50
+  # Job titles to search — Adzuna uses OR-semantics across these
+  titles:
+    - CFO
+    - Chief Financial Officer
+    - VP Finance
+    - Vice President Finance
+    - Controller
+    - Finance Director
+    - Director of Finance
+    - Head of Finance
+
 job_search:
   enabled: true
 
@@ -1192,9 +1240,11 @@ job_search:
     - "Prince Edward Island"
 
   boards:
-    indeed: true
-    ziprecruiter: true
-    simplyhired: true
-    google_jobs: true
-    ladders: true
-    cfo_com: true
+    # All sites except Google Jobs are bot-blocked and return 0 results.
+    # Adzuna (below) replaces them with a structured API source.
+    indeed: false       # blocked by Cloudflare anti-bot
+    ziprecruiter: false # blocked
+    simplyhired: false  # blocked
+    google_jobs: true   # ✓ still works
+    ladders: false      # requires login
+    cfo_com: false      # site changed, selectors broken

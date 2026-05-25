@@ -24,6 +24,7 @@ class EventSource(Enum):
     GLOBE_NEWSWIRE = "globe_newswire"
     SEC_EDGAR = "sec_edgar"
     GOOGLE_NEWS = "google_news"
+    ADZUNA = "adzuna"
     LINKEDIN = "linkedin"
     OTHER = "other"
 
