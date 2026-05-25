@@ -278,31 +278,83 @@ python monitor_health.py --weekly
 python monitor_health.py --json     # machine-readable
 ```
 
-### Recommended schedule for Elon
+### Monitoring architecture — IMPORTANT for any agent doing maintenance
 
-**Hourly (quick)** — catches outages fast:
+The monitoring is split between two execution environments by design:
+
+1. **Mac launchd cron runs `monitor_health.py`** — fires daily at 7am Eastern
+   via `~/Library/LaunchAgents/com.teamalbert.healthcheck.plist`. The script
+   needs the Mac's Python venv (which has `supabase`, `dotenv`, `requests`
+   installed) AND access to Ollama at `localhost:11434`. Monday runs use
+   `--weekly`, other days use `--daily`. The wrapper `run_health_check.sh`
+   chooses mode based on day-of-week.
+
+2. **Elon (running inside his Hermes container) reads the alerts log** —
+   he does NOT run the health check himself. His container doesn't have
+   the right Python deps installed, and `localhost` inside a container
+   does NOT resolve to the Mac's Ollama. Instead, Elon reads:
+     `/projects/TeamAlbertTriggerEventSearch/logs/health_alerts.log`
+   and reports/escalates based on what he finds there.
+
+### What Elon's role looks like day-to-day
+
+**Daily** (whenever asked, or on his own schedule):
 ```
-Run monitor_health.py --quick. If exit code != 0, summarize the FAIL items
-and post a message describing what's broken + the recommended fix.
+1. cd /projects/TeamAlbertTriggerEventSearch
+2. tail -30 logs/health_alerts.log    # see recent monitoring output
+3. If most recent entries show "All clear" → report "system healthy"
+4. If recent entries show 🟡 or 🔴 → summarize WHAT'S wrong + the
+   recommended fix (already in the alerts log). Optionally git pull
+   first to check for any commits that might address it.
 ```
 
-**Weekly (deep + code review combined)** — Monday morning:
+**Weekly** (Monday morning, after the launchd cron has run --weekly):
 ```
-1. Run monitor_health.py --weekly. Note any WARN/FAIL.
-2. Pull latest git: cd /projects/TeamAlbertTriggerEventSearch && git pull
-3. Run weekly code review per §8 playbook.
-4. Combined report to A.J. — health + code findings.
+1. cd /projects/TeamAlbertTriggerEventSearch && git pull
+2. tail -50 logs/health_alerts.log   # this week's monitoring history
+3. git log --oneline --since="7 days ago"   # this week's commits
+4. Conduct code review per §8 playbook on the recent commits
+5. Combined report: health status + code review findings
 ```
+
+### Log file layout
+
+| File | Owner | Purpose |
+|---|---|---|
+| `logs/health_alerts.log` | launchd writes, Elon reads | Concise alert summary — one entry per check run. "All clear" or 🟡/🔴 + actionable details. |
+| `logs/health_check_runtime.log` | launchd writes | Full verbose output of each health check run — for debugging when alerts log shows something unexpected |
+| `logs/healthcheck_launchd.log` | launchd writes | launchd's own stdout/stderr — only relevant if launchd itself fails |
+| `logs/enrichment.log` | launchd writes (different cron) | The enrichment cron's output — Elon can read for context |
+| `logs/enrichment_launchd.log` | launchd writes | enrichment launchd's stdout/stderr |
 
 ### How Elon notifies A.J. of failures
 
-For now (MVP): when running interactively via Hermes chat, Elon just reports findings to A.J. in the conversation. For autonomous monitoring (no chat session active), options:
+For MVP, when running interactively in Hermes chat, Elon reports findings
+directly to A.J. in the conversation. For autonomous monitoring without
+an active chat, future options (none picked yet):
 
-1. **Hermes cron** — schedule the health check; Elon writes findings to a known file (e.g. `logs/health_alerts.log`); A.J. checks that file (or dashboard surfaces it)
-2. **Hermes messaging platform** — if Telegram/Slack is configured for any Hermes agent, Elon can DM A.J. when a check fails
-3. **GitHub Issues** — Elon can use the `github-pr-workflow` skill to open an issue on the repo when something breaks
+1. **Hermes messaging platform** — if Telegram/Slack is configured for
+   Elon, he can DM A.J. when health_alerts.log has new 🔴 entries
+2. **Dashboard widget** — surface `health_alerts.log` content inside
+   the Streamlit dashboard so A.J. sees alerts when he visits
+3. **GitHub Issues** — Elon uses `github-pr-workflow` skill to open
+   issues when something breaks
 
-A.J. has not picked a notification path yet — for MVP, stick with reporting in-chat when prompted.
+### Why Mac runs the check, not Elon
+
+Important — this came up during initial setup. Elon (Hermes container)
+cannot run `monitor_health.py` directly because:
+
+- The container's Python doesn't have `supabase`, `dotenv` installed
+- `localhost` inside the container does NOT resolve to the Mac's Ollama
+  (would need `host.docker.internal:11434` instead)
+- The Mac's `~/.env` isn't readable from inside the container by default
+- Installing deps in the container survives only until restart
+
+Keeping the EXECUTION on the Mac (native env, real Ollama, real venv)
+and SYNTHESIS on Elon (reads logs, summarizes, escalates) is the
+clean separation. Don't try to "fix" this by installing supabase
+inside Elon's container — the architecture is intentional.
 
 ---
 
@@ -523,6 +575,7 @@ TeamAlbertTriggerEventSearch/
 ├── sheets_sync.py                     # alt Google Sheets sync (rarely used)
 ├── sync_db.py                         # alt S3 SQLite sync (rarely used)
 ├── run_enrichment.sh                  # launchd wrapper for enrichment
+├── run_health_check.sh                # launchd wrapper for monitor_health.py
 ├── scripts/
 │   └── check_feeds.py                 # feed health debug tool
 ├── src/

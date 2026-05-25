@@ -288,10 +288,17 @@ def check_cleanup_dryrun():
             capture_output=True, text=True, timeout=60,
             cwd=str(script.parent)
         )
-        # Parse output for the "would be dropped" line
-        for line in r.stdout.split('\n'):
+        # cleanup_legacy_events.py uses Python logging which goes to stderr —
+        # check both streams for the result line
+        combined = (r.stdout or '') + '\n' + (r.stderr or '')
+        for line in combined.split('\n'):
             if 'would be dropped' in line:
-                n = int(line.split()[1])
+                # Format: "Result: N of M events would be dropped"
+                parts = line.replace(':', '').split()
+                try:
+                    n = int(parts[1])
+                except (IndexError, ValueError):
+                    continue
                 if n == 0:
                     return PASS, 'No noise in DB (cleanup dry-run clean)'
                 if n > 10:
