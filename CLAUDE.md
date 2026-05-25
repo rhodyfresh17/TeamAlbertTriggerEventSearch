@@ -2,6 +2,83 @@
 
 You are an AI agent (Elon, or any successor) inheriting this codebase. This document is your complete onboarding. Read it end-to-end before making changes.
 
+> 📎 **Note on filename**: This file is also accessible as `.hermes.md` (symlink) so it loads automatically when Hermes agents enter the directory. Hermes loads project context in priority order: `.hermes.md` → `AGENTS.md` → `CLAUDE.md` → `.cursorrules`. Editing either filename updates both (they're the same file). **Your global SOUL.md (Hermes identity, in `HERMES_HOME`) loads independently — this file does NOT override it.**
+
+---
+
+## §A. ONE-TIME SETUP FOR HERMES AGENTS (Elon — read this first)
+
+Skip this section if you're a Claude agent (you already have filesystem access). For Hermes agents (Elon and successors), three things need to be in place once before you can review/maintain this repo:
+
+### A.1. Repo must be volume-mounted into your container
+
+You live in Docker; your container can't see the host filesystem unless the user adds a volume mount. The required mount in `docker-compose.yml`:
+
+```yaml
+hermes-elon:                       # (or whatever container name)
+  volumes:
+    # ... existing mounts ...
+    - ~/Shared/AI-BOTS/TeamAlbertTriggerEventSearch:/projects/TeamAlbertTriggerEventSearch:rw
+```
+
+After editing docker-compose.yml, the user runs:
+
+```bash
+cd ~/Shared/AI-BOTS
+docker compose up -d hermes-elon   # recreates the container with the new mount
+```
+
+Verify from inside Elon: `ls /projects/TeamAlbertTriggerEventSearch/CLAUDE.md` — should exist.
+
+### A.2. Recommended Hermes skills to install
+
+Run inside Elon's container (one at a time — installing in parallel hits GitHub's 60/hr anonymous rate limit):
+
+```bash
+hermes skills install codebase-inspection
+hermes skills install github-code-review
+hermes skills install github-pr-workflow
+hermes skills install systematic-debugging
+hermes skills install test-driven-development   # optional, only if adding tests
+```
+
+These give Elon: structured code review, codebase navigation, GitHub PR/comment ops, and TDD scaffolding.
+
+### A.3. Optional — bake project context into Elon's SOUL.md
+
+If Elon will spend significant time on this repo, add a paragraph to his global SOUL.md (in his `HERMES_HOME`) so he knows the project exists across all sessions:
+
+```
+You are also the long-term maintainer of TeamAlbertTriggerEventSearch
+(/projects/TeamAlbertTriggerEventSearch). When working in that directory,
+read CLAUDE.md / .hermes.md first for full project context. Conduct weekly
+code reviews using the playbook in section §8 of that file. The user
+(A.J. Albert) is non-technical — explain trade-offs in plain language and
+never ask him to paste secrets into chat.
+```
+
+If Elon's role is broader and he should only pay attention to this repo when explicitly asked, skip this — pasting the weekly prompt (see §A.4) is enough.
+
+### A.4. Paste-ready prompt for weekly code review
+
+Whenever A.J. wants the weekly review done, he pastes this into Elon's chat:
+
+```
+Weekly code review of /projects/TeamAlbertTriggerEventSearch.
+
+1. cd /projects/TeamAlbertTriggerEventSearch
+2. git pull origin main
+3. git log --oneline --since="7 days ago"  → identify commits to review
+4. Read CLAUDE.md §8 (Code review playbook) for the focused review approach
+5. Execute the review on the changed files
+6. Report findings as 🔴 BUG / 🟡 RISK / ⚪ NIT, capped at 500 words
+
+If no commits in 7 days OR no real findings, say so plainly — do not
+manufacture work.
+```
+
+Elon will: pull the repo, walk recent diffs, apply the §8 playbook, and report.
+
 ---
 
 ## 0. The 60-second elevator pitch
