@@ -258,6 +258,54 @@ Hashtag definitions are STRICT (see prompt) — there's a history of the LLM stu
 
 ---
 
+## 4b. Ongoing health monitoring (Elon's primary maintenance job)
+
+A single script — `monitor_health.py` — runs end-to-end diagnostics. Three modes:
+
+| Mode | Runtime | What it checks |
+|---|---|---|
+| `--quick` *(default)* | ~10s | env creds, Tavily API, Ollama, Supabase reachable, scrape freshness, enrichment lag, local SQLite, launchd job loaded |
+| `--daily` | ~30s | all of the above + source health (productive vs silent feeds) + 7-day-vs-prior volume trend |
+| `--weekly` | ~60s | all of the above + cleanup_legacy_events.py dry-run (catches new noise patterns) |
+
+Each check returns 🟢 PASS / 🟡 WARN / 🔴 FAIL with a one-liner. **Exit code is non-zero if any FAIL**, so cron and Elon can detect failures programmatically.
+
+```bash
+# Run from Mac terminal or inside Elon's container
+python monitor_health.py            # quick
+python monitor_health.py --daily
+python monitor_health.py --weekly
+python monitor_health.py --json     # machine-readable
+```
+
+### Recommended schedule for Elon
+
+**Hourly (quick)** — catches outages fast:
+```
+Run monitor_health.py --quick. If exit code != 0, summarize the FAIL items
+and post a message describing what's broken + the recommended fix.
+```
+
+**Weekly (deep + code review combined)** — Monday morning:
+```
+1. Run monitor_health.py --weekly. Note any WARN/FAIL.
+2. Pull latest git: cd /projects/TeamAlbertTriggerEventSearch && git pull
+3. Run weekly code review per §8 playbook.
+4. Combined report to A.J. — health + code findings.
+```
+
+### How Elon notifies A.J. of failures
+
+For now (MVP): when running interactively via Hermes chat, Elon just reports findings to A.J. in the conversation. For autonomous monitoring (no chat session active), options:
+
+1. **Hermes cron** — schedule the health check; Elon writes findings to a known file (e.g. `logs/health_alerts.log`); A.J. checks that file (or dashboard surfaces it)
+2. **Hermes messaging platform** — if Telegram/Slack is configured for any Hermes agent, Elon can DM A.J. when a check fails
+3. **GitHub Issues** — Elon can use the `github-pr-workflow` skill to open an issue on the repo when something breaks
+
+A.J. has not picked a notification path yet — for MVP, stick with reporting in-chat when prompted.
+
+---
+
 ## 5. Common operations cheat sheet
 
 ```bash
@@ -267,6 +315,9 @@ source venv/bin/activate
 
 | Task | Command |
 |---|---|
+| **Health check (quick — ~10s)** | `python monitor_health.py` |
+| **Health check (daily — ~30s)** | `python monitor_health.py --daily` |
+| **Health check (weekly — ~60s)** | `python monitor_health.py --weekly` |
 | Manual scrape cycle (locally, mirrors GitHub Actions) | `python -m src.main` |
 | Enrich only NEW events | `python enrichment_scout.py` |
 | Re-grade ALL events (free, no Tavily) | `python enrichment_scout.py --regrade-only` |
@@ -465,6 +516,7 @@ TeamAlbertTriggerEventSearch/
 │   └── scraper.yml                    # 4-hour cron + optional enrichment in CI
 ├── dashboard.py                       # Streamlit UI
 ├── enrichment_scout.py                # enrichment + grading
+├── monitor_health.py                  # end-to-end health check (Elon runs)
 ├── supabase_sync.py                   # SQLite → Supabase
 ├── cleanup_legacy_events.py           # retroactive cleanup
 ├── import_leads.py                    # manual lead import
