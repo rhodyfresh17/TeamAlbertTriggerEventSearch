@@ -952,17 +952,9 @@ sources:
       url: "https://nonprofitquarterly.org/feed/"
       enabled: true
 
-    - name: "Chronicle of Philanthropy"
-      url: "https://www.philanthropy.com/feed"
-      enabled: false  # paywalled — returns empty feed
-
     - name: "Inside Philanthropy"
       url: "https://www.insidephilanthropy.com/feed"
       enabled: true
-
-    - name: "Philanthropy News Digest"
-      url: "https://philanthropynewsdigest.org/feeds/news.rss"
-      enabled: false  # malformed XML
 
     - name: "Associations Now (ASAE)"
       url: "https://associationsnow.com/feed/"
@@ -971,10 +963,6 @@ sources:
     - name: "InterAction"
       url: "https://www.interaction.org/feed/"
       enabled: true
-
-    - name: "ReliefWeb"
-      url: "https://reliefweb.int/updates/rss.xml"
-      enabled: false  # returns empty
 
     - name: "ProPublica"
       url: "https://www.propublica.org/feeds/propublica/main"
@@ -985,19 +973,6 @@ sources:
       url: "https://www.wealthmanagement.com/rss.xml"
       enabled: true
 
-    - name: "Credit Union Journal"
-      url: "https://www.cujournal.com/rss"
-      enabled: false  # malformed XML
-
-    - name: "America's Credit Unions"
-      url: "https://www.americascreditunions.org/feed"
-      enabled: false  # malformed XML
-
-    # Asset Management / Wealth / RIA additional
-    - name: "WealthBriefing Americas"
-      url: "https://www.wealthbriefing.com/html/rss/rss_WealthBriefingAmericas_latest.php"
-      enabled: false  # malformed XML
-
     # Insurance sources
     - name: "Insurance Journal"
       url: "https://www.insurancejournal.com/feed/"
@@ -1007,18 +982,10 @@ sources:
       url: "https://www.carriermanagement.com/feed/"
       enabled: true
 
-    - name: "Dig-In (Digital Insurance)"
-      url: "https://www.dig-in.com/feed"
-      enabled: false  # malformed XML
-
     # Canadian Business
     - name: "Financial Post"
       url: "https://financialpost.com/feed"
       enabled: true
-
-    - name: "CBC Business"
-      url: "https://rss.cbc.ca/lineup/business.xml"
-      enabled: false  # frequent timeouts
 
     # WebWire
     - name: "WebWire - Business"
