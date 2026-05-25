@@ -61,10 +61,26 @@ st.markdown("""
         --sidebar-caption:    rgba(255,255,255,0.32);
     }
 
-    /* Hide Streamlit branding */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
+    /* Hide Streamlit branding clutter — but KEEP the sidebar collapse/expand
+       toggle (which lives inside the header chrome). Previously we hid the
+       whole header which broke the ability to re-open a collapsed sidebar. */
+    #MainMenu {display: none;}
+    footer {display: none;}
+    [data-testid="stToolbar"] {display: none;}
+    [data-testid="stDeployButton"] {display: none;}
+    /* Make the header itself transparent so it doesn't show a bar, but DO NOT
+       hide it — Streamlit puts the "expand sidebar" button inside it. */
+    [data-testid="stHeader"] { background: transparent !important; }
+
+    /* Defense-in-depth: force the sidebar toggle visible even if a future
+       Streamlit version moves it under a different testid. */
+    [data-testid="stSidebarCollapsedControl"],
+    [data-testid="collapsedControl"],
+    button[kind="headerNoPadding"] {
+        visibility: visible !important;
+        display: flex !important;
+        z-index: 999999 !important;
+    }
 
     /* Global */
     .stApp {
