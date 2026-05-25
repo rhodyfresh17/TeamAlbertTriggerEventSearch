@@ -56,8 +56,9 @@ except ImportError:
     SUPABASE_AVAILABLE = False
 
 # ── Config ────────────────────────────────────────────────────────────────────
-TAVILY_API_KEY    = os.environ.get('TAVILY_API_KEY',
-    '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')
+# Tavily key MUST come from env (.env locally, GitHub Secret in CI).
+# We don't fall back to any hardcoded value — that would leak into git history.
+TAVILY_API_KEY    = os.environ.get('TAVILY_API_KEY', '')
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
 OLLAMA_URL        = os.environ.get('OLLAMA_URL',   'http://localhost:11434')
 # Default model — falls back to whatever is locally available. Override with
@@ -162,6 +163,16 @@ def get_supabase():
     if not url or not key:
         sys.exit("Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env")
     return create_client(url, key)
+
+
+def check_required_keys():
+    """Fail fast with a clear message if required API keys aren't set."""
+    if not TAVILY_API_KEY:
+        sys.exit(
+            "TAVILY_API_KEY not set. Add to .env (local) or GitHub Secrets (CI):\n"
+            "  TAVILY_API_KEY=tvly-...\n"
+            "Get a free key at https://tavily.com"
+        )
 
 
 def check_columns(client):
@@ -346,6 +357,7 @@ def enrich_events(
     re_enrich: bool = False,
     dry_run: bool = False,
 ):
+    check_required_keys()
     client  = get_supabase()
     col_ok  = check_columns(client)
     backend = _llm_backend()
