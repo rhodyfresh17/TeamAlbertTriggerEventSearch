@@ -1,134 +1,394 @@
-# CLAUDE.md - AI Assistant Guidelines for TriggerEventSearch
+# CLAUDE.md — Team Albert Sales Intelligence
 
-This document provides essential context and guidelines for AI assistants working on the TriggerEventSearch repository.
-
-## Project Overview
-
-**TriggerEventSearch** is a project for searching and managing trigger events. This repository is currently in its initial setup phase.
-
-### Repository Status
-- **Current State**: New/Empty repository - ready for initial development
-- **Primary Purpose**: Event trigger search functionality (to be implemented)
-
-## Repository Structure
-
-```
-TriggerEventSearch/
-├── CLAUDE.md          # AI assistant guidelines (this file)
-├── README.md          # Project documentation (to be created)
-├── src/               # Source code (to be created)
-├── tests/             # Test files (to be created)
-└── docs/              # Documentation (to be created)
-```
-
-## Development Guidelines
-
-### Code Style Conventions
-
-1. **Language**: Determine based on project requirements (JavaScript/TypeScript, Python, Go, etc.)
-2. **Formatting**: Use consistent formatting tools (Prettier, Black, gofmt, etc.)
-3. **Naming Conventions**:
-   - Use descriptive, meaningful names
-   - Follow language-specific conventions (camelCase, snake_case, PascalCase as appropriate)
-
-### Commit Message Format
-
-Use conventional commits format:
-```
-<type>(<scope>): <description>
-
-[optional body]
-
-[optional footer]
-```
-
-Types:
-- `feat`: New feature
-- `fix`: Bug fix
-- `docs`: Documentation changes
-- `style`: Code style changes (formatting, etc.)
-- `refactor`: Code refactoring
-- `test`: Adding or updating tests
-- `chore`: Maintenance tasks
-
-### Branch Naming
-
-- Feature branches: `feature/<description>`
-- Bug fixes: `fix/<description>`
-- Claude AI branches: `claude/<session-id>`
-
-## AI Assistant Instructions
-
-### When Working on This Repository
-
-1. **Read Before Modifying**: Always read existing files before making changes
-2. **Minimal Changes**: Make only the changes necessary to complete the task
-3. **Test Your Changes**: Ensure any code changes are tested appropriately
-4. **Document Significant Changes**: Update documentation when adding major features
-
-### Key Commands
-
-```bash
-# Check repository status
-git status
-
-# Run tests (once implemented)
-# npm test / pytest / go test ./... (depending on language)
-
-# Build project (once implemented)
-# npm run build / python setup.py build / go build (depending on language)
-```
-
-### Development Workflow
-
-1. Create or checkout the appropriate branch
-2. Make changes incrementally
-3. Test changes before committing
-4. Write clear commit messages
-5. Push changes to the designated branch
-
-## Project-Specific Notes
-
-### Trigger Event Search Concepts
-
-This project focuses on:
-- **Event Triggers**: Conditions or actions that initiate events
-- **Search Functionality**: Querying and filtering trigger events
-- **Event Management**: Creating, updating, and monitoring triggers
-
-### Future Development Areas
-
-- [ ] Define core data models for trigger events
-- [ ] Implement search/query functionality
-- [ ] Build API endpoints for event management
-- [ ] Create user interface components
-- [ ] Add comprehensive test coverage
-
-## Getting Started
-
-### Prerequisites
-
-(To be defined based on technology stack)
-
-### Setup Instructions
-
-1. Clone the repository
-2. Install dependencies (once defined)
-3. Configure environment (once defined)
-4. Run the application (once defined)
-
-## Contributing
-
-1. Always work on feature branches or designated AI branches
-2. Follow the coding standards outlined above
-3. Include tests for new functionality
-4. Update documentation as needed
-
-## Additional Resources
-
-- Project issue tracker: GitHub Issues
-- Documentation: `/docs` directory (to be created)
+You are an AI agent (Elon, or any successor) inheriting this codebase. This document is your complete onboarding. Read it end-to-end before making changes.
 
 ---
 
-*This CLAUDE.md file should be updated as the project evolves and more conventions are established.*
+## 0. The 60-second elevator pitch
+
+This is a **sales lead intelligence tool** for A.J. Albert's NetSuite Up-Market Sales team. It:
+
+1. **Scrapes** news/SEC/job sources every 4 hours (via GitHub Actions cron)
+2. **Enriches** each event with firmographic data (Tavily + local Ollama) — extracts companies involved, industry, size, revenue, HQ, LinkedIn
+3. **Grades** each event with TAL V10.2 (A/B/C/D fit score for NetSuite Up-Market)
+4. **Surfaces** results on a Streamlit Cloud dashboard at https://teamalbertfy27leads.streamlit.app/ — password-protected, filterable by region, revenue segment, grade
+
+User: **A.J. Albert** — NetSuite Up-Market Sales rep on Team Albert. Non-technical. Depends on you to write code, run commands, and explain in plain language. **Always offer local-only verification (PASS/FAIL, `${VAR}`) rather than asking him to paste secrets in chat.**
+
+---
+
+## 1. Architecture (data flow)
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│  GitHub Actions cron (every 4 hours, `.github/workflows/scraper.yml`) │
+│  ───────────────────────────────────────────────────────────────────  │
+│  1. python -m src.main                                               │
+│     ├── RSSScraper        (PR Newswire, VC News Daily, etc.)        │
+│     ├── GoogleNewsScraper                                            │
+│     ├── JobScraper        (Google Jobs only — others bot-blocked)   │
+│     ├── BingNewsScraper   (disabled, no API key)                    │
+│     ├── FinSMEsScraper    (disabled, permanent 403)                 │
+│     ├── SECScraper        (EFTS API, 8-K Items 5.02 / 2.01 / 1.01) │
+│     └── AdzunaScraper     (free-tier API, once/day at noon UTC)     │
+│                                                                       │
+│     Two-pass dedup (URL hash → recent title match) before write       │
+│     Industry exclusion check (mining/steel/oil/hospitality/etc.)      │
+│     → SQLite (trigger_events.db, CACHED between Actions runs)         │
+│                                                                       │
+│  2. python3 supabase_sync.py                                          │
+│     Upserts SQLite events to Supabase                                 │
+│     **PRESERVES user-set lead_status + notes**                        │
+│     **Does NOT touch grade/hashtags** (enrichment writes those direct)│
+└──────────────────────────────────────────────────────────────────────┘
+                                  ↓
+┌──────────────────────────────────────────────────────────────────────┐
+│  Mac launchd cron — `~/Library/LaunchAgents/com.teamalbert.enrichment.plist` │
+│  ─────────────────────────────────────────────────────────────────  │
+│  Fires at :30 past 0/4/8/12/16/20 local Eastern time                  │
+│  → run_enrichment.sh → python enrichment_scout.py                     │
+│                                                                       │
+│  Per unenriched event:                                                │
+│   1. LLM extracts companies + roles (Ollama qwen3-coder:30b)          │
+│   2. Tavily search per unique company name                            │
+│   3. LLM extracts firmographics → companies_data JSONB                │
+│   4. POST-ENRICHMENT industry filter — DELETE if industry blocked     │
+│      (catches mining leaks the scrape-time text filter misses)        │
+│   5. TAL V10.2 grading → grade/hashtags/justification/cfo_status      │
+│   6. Finance leadership override → min Grade B                        │
+│   7. event_type reclassification (executive_hire → cfo_hire if        │
+│      CFO/Controller/VP Finance detected in text)                      │
+│   8. Writes directly to Supabase                                      │
+└──────────────────────────────────────────────────────────────────────┘
+                                  ↓
+┌──────────────────────────────────────────────────────────────────────┐
+│  Streamlit Cloud dashboard — dashboard.py                             │
+│  ───────────────────────────────────────────────────────────────────  │
+│  Reads from Supabase (no writes except lead_status/notes updates)     │
+│  Password-gated via st.secrets["DASHBOARD_PASSWORD"]                  │
+│  Auto-deploys on git push to main                                     │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 2. The business model
+
+### Territory (FY27)
+Source of truth: `/Users/andrewalbertbase/Downloads/FY27 Territories.xlsx` (kept locally — not in repo).
+
+- **23 US states** (Northeast + Mid-Atlantic + Southeast + Rust Belt): AL, CT, DE, FL, GA, IN, KY, ME, MD, MA, MI, NH, NJ, NY, NC, OH, PA, RI, SC, TN, VT, VA, WV
+- **DC** included per A.J. (not in official xlsx but his actual coverage)
+- **6 Canadian provinces**: NB, NL, NS, ON, PE, QC
+
+### Target industries — 3 NSCorp verticals × 32 ZoomInfo subindustries
+
+| Industry | Subindustries (examples) |
+|---|---|
+| **Financial Services** | Banking · Credit Cards & Transaction Processing · Debt Collection · Holding Companies · Insurance · Investment Banking · Lending & Brokerage · VC & PE |
+| **Nonprofits & Organizations** | Charitable Foundations · Cultural & Arts (Museums, Theaters, Libraries, Zoos) · Educational Institutions (Colleges, K-12) · Membership Orgs (Religious, Associations) |
+| **Consumer Services** | Auctions · Auto Dealers · Auto Repair · Barber/Salon · Cleaning · Funeral Homes · Photography · Real Estate · Repair Services |
+
+⚠️ **Gotcha — "Banking" was previously EXCLUDED in config**, silently dropping legitimate Banking-vertical leads for who-knows-how-long. Fixed in commit `16529a1`. If you ever see Banking-related events not appearing, check `territory.excluded_industries` doesn't list "Bank" or "Banking" again.
+
+### Revenue segments (NetSuite Up-Market sales taxonomy)
+
+| Code | Range | Notes |
+|---|---|---|
+| **LMM** | <$10M | Lower mid-market |
+| **MM** | $10M-$20M | Mid-market |
+| **Corp** | $20M-$100M | Corporate |
+| **Enterprise** | $100M+ | Out of NetSuite up-market band — usually on Oracle/SAP |
+
+Default dashboard filter shows LMM + MM + Corp (the up-market sweet spot, $0-$100M).
+
+### TAL V10.2 grading rules (in `enrichment_scout.py` → `TAL_GRADING_PROMPT`)
+
+- **A** — 3+ hashtags AND 2 triggers
+- **B** — 2 hashtags AND 1 trigger
+- **C** — 1 hashtag
+- **D** — 0 hashtags
+- **Finance leadership override** — CFO/Controller/VP Finance/Head of Finance/Director of Finance hire → **minimum Grade B** (enforced both in prompt + in code defense-in-depth via `_has_finance_leadership_trigger()`)
+
+Hashtag allowlist (max 6 per event):
+`#HyperGrowth #100EE #Locations #Entities #HoldCo #Global #Franchisor #Franchisee #Funding #PEBacked #Acquisitions #FormerUser #NewCFO #PrevConvo #Legacy`
+
+Hashtag definitions are STRICT (see prompt) — there's a history of the LLM stuffing hashtags to inflate grades. Don't loosen the definitions without A.J.'s approval.
+
+---
+
+## 3. Key files (in dependency order)
+
+### Configuration
+- **`config.example.yaml`** ← edit this; gitignored `config.yaml` is generated via `cp`. Holds territory, keywords, RSS feeds, excluded industries, mega-bank exclusions, Adzuna/SEC settings.
+- **`.env`** (gitignored) — local secrets: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, TAVILY_API_KEY, ADZUNA_APP_ID, ADZUNA_APP_KEY
+- **`.streamlit/secrets.toml`** (gitignored) — Streamlit Cloud secrets: SUPABASE_URL, SUPABASE_KEY (anon), DASHBOARD_PASSWORD
+- **`.github/workflows/scraper.yml`** — cron schedule + Actions secrets wiring
+- **`requirements.txt`** — Python deps
+
+### Scrapers (`src/scrapers/`)
+- **`base.py`** — `BaseScraper` parent class. **`extract_company_name()`** (40+ verb patterns, case-insensitive) and **`matches_industry()`** live here. Both used heavily downstream.
+- **`rss_scraper.py`** — handles all RSS feeds in `config.sources.rss_feeds`
+- **`sec_scraper.py`** — SEC EDGAR EFTS search. Item 5.02 (officer changes), 2.01 (M&A completion), 1.01 (material agreements). **Pre-fetches CFO-related accession numbers in one extra EFTS call, paginated to 5 pages.**
+- **`adzuna_scraper.py`** — Adzuna jobs API. Throttled to noon UTC only to stay under free tier (~60 calls/month).
+- **`job_scraper.py`** — Google Jobs (other boards disabled — Indeed/ZipRecruiter/SimplyHired/Ladders/CFO.com all bot-blocked)
+- **`news_scraper.py`** — Google News
+- **`bing_scraper.py`** — Bing News (disabled — needs paid API key)
+- **`finsmes_scraper.py`** — FinSMEs (disabled — permanent 403)
+
+### Pipeline orchestration
+- **`src/main.py`** — `TriggerEventMonitor` orchestrates the scrape cycle. Two-pass dedup (URL → recent title) lives here. Wires all scrapers.
+- **`src/database.py`** — SQLite manager. `has_seen_url()`, `mark_url_seen()`, `has_recent_event_title()` (the title dedup added in commit `c606bca`).
+- **`src/models.py`** — `TriggerEvent` dataclass, `EventType` + `EventSource` enums.
+
+### Enrichment + grading
+- **`enrichment_scout.py`** — THE most important file outside the scraper. Reads unenriched events from Supabase, runs the 4-step pipeline (extract → search → firmographics → grade), writes back. **Has THREE modes:**
+  - default — enrich only new events
+  - `--re-enrich` — full re-pull (calls Tavily, costs quota)
+  - `--regrade-only` — re-apply grading + industry filter + event_type reclassification using EXISTING companies_data (NO Tavily calls, free)
+- **`run_enrichment.sh`** + **`~/Library/LaunchAgents/com.teamalbert.enrichment.plist`** — launchd wrapper that fires enrichment every 4 hours on the Mac.
+
+### Sync + dashboard
+- **`supabase_sync.py`** — pushes SQLite scraped events to Supabase. **Critical**: preserves user-set `lead_status` and `notes` (the bug it had previously was silently overwriting them every cycle — see commit `14157c2`).
+- **`dashboard.py`** — Streamlit UI. ~1300 lines. Reads from Supabase, renders event cards by category tab, handles filtering + bulk actions. Filters live in an `st.popover` (NOT the sidebar — sidebar toggle was unreliable).
+
+### Maintenance scripts
+- **`cleanup_legacy_events.py`** — retroactively apply current filter rules + dedup to existing Supabase events. Dry-run by default; `--apply` to delete.
+- **`import_leads.py`** — manual import of prospect lists (for `stable_target` event type)
+- **`sheets_sync.py`** — alternative Google Sheets sync (rarely used)
+- **`sync_db.py`** — S3 sync for SQLite (rarely used; GitHub Actions cache handles this normally)
+- **`scripts/check_feeds.py`** — debug utility for feed health
+
+---
+
+## 4. Credentials map
+
+**🔒 NEVER ask A.J. to paste secrets into chat. NEVER print/log secret values. Always offer local-only verification (PASS/FAIL, length/prefix only, `${VAR}` references).**
+
+| Secret | Where it lives | Purpose |
+|---|---|---|
+| `SUPABASE_URL` | `.env`, Streamlit secrets, GitHub Secrets | Supabase project URL |
+| `SUPABASE_SERVICE_ROLE_KEY` | `.env`, GitHub Secrets | Server-side writes (bypasses RLS) |
+| `SUPABASE_KEY` (anon) | Streamlit secrets only | Dashboard reads |
+| `TAVILY_API_KEY` | `.env`, GitHub Secrets (optional) | Web search for company enrichment. Was leaked in git history (commit `ac17b5b`), rotated in commit `536b57d`. Never re-hardcode a fallback. |
+| `ADZUNA_APP_ID` + `ADZUNA_APP_KEY` | `.env`, GitHub Secrets | Adzuna jobs API (free tier ~100-250 calls/month) |
+| `ANTHROPIC_API_KEY` | GitHub Secrets (optional) | Cloud-based LLM for enrichment fallback. If unset, enrichment uses local Ollama. |
+| `DASHBOARD_PASSWORD` | Streamlit secrets | Dashboard login |
+| `EMAIL_PASSWORD` + `SENDER_EMAIL` | GitHub Secrets | Email alerts (legacy — currently unused) |
+
+---
+
+## 5. Common operations cheat sheet
+
+```bash
+cd /Users/andrewalbertbase/Shared/AI-BOTS/TeamAlbertTriggerEventSearch
+source venv/bin/activate
+```
+
+| Task | Command |
+|---|---|
+| Manual scrape cycle (locally, mirrors GitHub Actions) | `python -m src.main` |
+| Enrich only NEW events | `python enrichment_scout.py` |
+| Re-grade ALL events (free, no Tavily) | `python enrichment_scout.py --regrade-only` |
+| Full re-enrich (uses Tavily quota!) | `python enrichment_scout.py --re-enrich` |
+| Cleanup industry leaks + dupes (dry-run) | `python cleanup_legacy_events.py` |
+| Cleanup — actually delete | `python cleanup_legacy_events.py --apply` |
+| Run dashboard locally | `streamlit run dashboard.py` |
+| Check launchd job is loaded | `launchctl list \| grep teamalbert` |
+| Reload launchd job | `launchctl unload ~/Library/LaunchAgents/com.teamalbert.enrichment.plist && launchctl load ~/Library/LaunchAgents/com.teamalbert.enrichment.plist` |
+| Tail enrichment log | `tail -f logs/enrichment.log` |
+| Sync config.example → config.yaml | `cp config.example.yaml config.yaml` |
+
+---
+
+## 6. Known issues, gotchas, and "we've been here before"
+
+### Architectural quirks
+- **`config.yaml` is gitignored** — always edit `config.example.yaml`, then `cp` locally. GitHub Actions does this `cp` automatically in the workflow.
+- **SQLite is cached between GitHub Actions runs** via `actions/cache@v4` with key `trigger-events-db-v2-*`. URL + title dedup history lives there. If the cache expires (24h TTL), the next run starts with empty dedup history — some duplicates may slip through. Rare.
+- **enriched_at and grade fields live ONLY in Supabase**, never in SQLite. `supabase_sync.py` must NOT write them or you'll wipe enrichment every cycle (this bug existed — see commit `14157c2`).
+- **Two scrape paths for CFO events**: SEC scraper classifies at scrape time using the pre-fetched CFO adsh set; enrichment_scout.py also reclassifies via `_has_finance_leadership_trigger()` as a backstop (catches non-SEC sources).
+
+### Data quality
+- **Title-based dedup uses EXACT normalized match** — different outlets with slight title variations slip through. Don't add fuzzy matching without A.J.'s approval — risks dropping real distinct events.
+- **post-enrichment industry filter is MORE aggressive than scrape-time** because we have the structured `industry` field by then. Mining/cobalt/steel/etc. events get DELETED at this stage if they slipped past the title-only scrape filter.
+- **Finance leadership override is two-layer** — once in the prompt (so LLM produces consistent justifications), once in code (so it can't be ignored). When changing one, change both.
+- **The dashboard's pandas reads from Supabase return NaN for missing JSONB fields**. Always guard with `if isinstance(x, float) and x != x:` or `_v()` helper. There's a history of NaN-related bugs.
+
+### Things that don't work / dead ends
+- **Hermes gateway is messaging-only** — port 8084 on `hermes-sales` container is for Telegram/Discord, not an HTTP API. Use Ollama (localhost:11434) directly for LLM calls, not the Hermes gateway.
+- **X/Twitter monitoring** is not viable on free tier. X killed the free API in 2023. Public Nitter/RSSHub instances are unreliable. If A.J. revisits, options are $200/mo X Basic API or Apify scrapers ($20-100/mo).
+- **Indeed/ZipRecruiter/SimplyHired/Ladders/CFO.com** are all bot-blocked. The scraper code is left in `job_scraper.py` for reference but disabled in config. Adzuna replaces them.
+- **BusinessWire RSS** now requires a registered channel ID — the legacy URL returns 0 items. If A.J. wants BW back, he must sign up free at services.businesswire.com and add the generated URL to config.
+
+### User preferences (from MEMORY.md)
+- **DC IS in territory** (not in xlsx but A.J.'s actual coverage)
+- **Crypto-native businesses ARE good fits** (NetSuite + Cryptio integration). Don't block crypto feeds.
+- **A.J. has a lead-scoring prompt** (the TAL V10.2 in this repo — already integrated). If he mentions a new prompt, ask for it before assuming.
+
+---
+
+## 7. Recent change history (current state as of today's last commit)
+
+Today's session (commit `14157c2` and back, in chronological order):
+
+| Commit | What |
+|---|---|
+| `6cd73c5` | Rebuilt SEC 8-K scraper using EFTS search API + added PR Newswire Personnel/M&A feeds |
+| `83cb1ca` | Expanded mega-bank exclusion list + added `cleanup_legacy_events.py` |
+| `55edb64` | gitignored logs/ |
+| `ba5ce3a` | Removed 8 dead RSS feeds |
+| `ac17b5b` | Enrichment v2: revenue extraction + $200M dashboard filter |
+| `db6402c` | Scalable revenue band filter — multiselect + presets |
+| `55df34b` | 4-segment revenue taxonomy (LMM/MM/Corp/Ent) + source citation tooltips |
+| `8ee573d` | Fixed extract_company_name() — no more "?" entries from funding/M&A headlines |
+| `16529a1` | Critical fix: territory filter was blocking Banking (a target subindustry) |
+| `1bb5861` | Adzuna job scraper replaces 5 broken HTML scrapers |
+| `f774fda`, `de9f146`, `3252b68`, `9eaa7ed` | Sidebar collapse bug saga — ended with filters moved to inline `st.popover` |
+| `536b57d` | Security: removed hardcoded Tavily key fallback |
+| `4dbf29a` | TAL V10.2 grading + post-enrichment industry filter |
+| `6f7e5ce` | Finance leadership → min Grade B + larger badge |
+| `cb570ca` | SEC 8-K Item 5.02 now correctly routes CFO changes to CFO_HIRE tab |
+| `e35d8de` | `--regrade-only` mode (re-grade without burning Tavily quota) |
+| `c606bca` | Cobalt/lithium keywords + title-based dedup for syndicated press releases |
+| `14157c2` | **4 bugs fixed from code review** — supabase_sync was clobbering user state, etype case mismatch, missing source_url in select, SEC CFO prefetch capped at 100 |
+
+The full session is documented in detail across commits — read commit messages for context on any change. Each is self-explanatory.
+
+---
+
+## 8. Code review playbook
+
+When asked to review the codebase (weekly or otherwise), use this approach. It surfaced 4 real bugs on the first run today.
+
+**Prompt template for code review (spawn a fresh agent or do it yourself):**
+
+```
+Review the repo at /Users/andrewalbertbase/Shared/AI-BOTS/TeamAlbertTriggerEventSearch
+for correctness bugs introduced since the last review.
+
+Priority files (most-modified, highest blast radius):
+- enrichment_scout.py
+- dashboard.py
+- src/scrapers/sec_scraper.py
+- src/scrapers/base.py
+- src/scrapers/adzuna_scraper.py
+- src/main.py
+- src/database.py
+- cleanup_legacy_events.py
+- config.example.yaml
+- supabase_sync.py
+
+LOOK FOR (high-confidence only):
+- Correctness bugs (wrong logic, off-by-one, missing cases)
+- Integration mismatches (shape A vs shape B between functions/scrapers/dashboard)
+- NaN/None safety — pandas reads from Supabase JSONB often return NaN
+- Stale comments that contradict the code
+- Dead code from refactors
+- Schema mismatches (Supabase column added but never read, or read but never written)
+- Error handling that hides real bugs
+- Security issues (re-introduced hardcoded secrets, unsafe SQL, etc.)
+- Case-sensitivity bugs (event_type is LOWERCASE in storage but sometimes checked uppercase — common foot-gun)
+
+SKIP (don't waste tokens on):
+- Code style / naming
+- Hypothetical scaling (this is at ~80 events, not 80k)
+- Test coverage gaps (no test suite is intentional for MVP)
+- Documentation completeness
+- Performance micro-optimizations
+
+FORMAT:
+🔴 BUG — will cause incorrect behavior
+🟡 RISK — could cause issue under conditions
+⚪ NIT — worth knowing but minor
+
+Each: file:line — one-sentence description — suggested fix
+Cap report at 500 words. If you find nothing real, say so — don't manufacture findings.
+```
+
+After review:
+1. Fix the 🔴 BUGs immediately
+2. Address 🟡 RISKs unless they're truly low-probability
+3. Skip NITs unless they have very high ROI
+
+---
+
+## 9. Backlog (parked items for future sessions)
+
+These came up during today's session but were deferred. Surface them when relevant — don't auto-implement without A.J.'s approval.
+
+| Priority | Item | Notes |
+|---|---|---|
+| Medium | **Consumer Services feed gap** | Auto Dealers, Real Estate, Personal Care, Repair Services — no dedicated feeds yet. Possibilities: Automotive News, GlobeSt (real estate), Cleanlink Daily. |
+| Medium | **Daily digest email** | Morning email to A.J./team with top fresh Grade A+B leads. Email creds already in GitHub Secrets. |
+| Medium | **Adzuna recruiter blacklist** | Vaco, Robert Half, Korn Ferry, Heidrick & Struggles, JM Search, McCracken Alliance — they post "Hiring: CFO" on behalf of unnamed clients, creating noise. Wait for ~1 week of production data before blocking. |
+| Low | **Dashboard polish** | Kanban/pipeline view, hot-lead badges, saved filter presets per user, mobile responsive. |
+| Low | **CLAUDE.md** has stale Canadian SEC state-code comments in `sec_scraper.py:31-38`. The codes A0-A5 are likely wrong (real EDGAR mapping differs); the standard codes ON/QC/NB/NS/PE/NL handle Canadian filings anyway. Worth cleaning up. |
+
+---
+
+## 10. When in doubt
+
+- **A.J. is non-technical** — explain trade-offs in plain language, offer recommendations (don't dump options on him).
+- **Stop and warn before risky actions** — if a change could leak data, drop leads, or cost real $ on APIs, STOP and offer a local-only alternative first.
+- **Never amend commits** — always create new ones. Pre-commit hooks failing? Investigate; never `--no-verify`.
+- **Test before shipping** — for non-trivial changes, run a small dry-run / spot-check against real Supabase data before committing.
+- **Commit messages** — conventional commits style (`feat:`, `fix:`, `chore:`, `security:`). End with `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>` (or whatever model you are). Body should explain the WHY, not just the WHAT.
+
+---
+
+## 11. Project file tree (top-level)
+
+```
+TeamAlbertTriggerEventSearch/
+├── CLAUDE.md                          # ← you are here
+├── README.md
+├── requirements.txt
+├── config.example.yaml                # source of truth — edit this
+├── config.yaml                        # gitignored — generated via cp
+├── .env                               # gitignored — local secrets
+├── .gitignore
+├── assets/
+│   └── logo.png                       # Team Albert branding
+├── .streamlit/
+│   ├── config.toml                    # dark theme
+│   └── secrets.toml                   # gitignored — Streamlit Cloud secrets
+├── .github/workflows/
+│   └── scraper.yml                    # 4-hour cron + optional enrichment in CI
+├── dashboard.py                       # Streamlit UI
+├── enrichment_scout.py                # enrichment + grading
+├── supabase_sync.py                   # SQLite → Supabase
+├── cleanup_legacy_events.py           # retroactive cleanup
+├── import_leads.py                    # manual lead import
+├── sheets_sync.py                     # alt Google Sheets sync (rarely used)
+├── sync_db.py                         # alt S3 SQLite sync (rarely used)
+├── run_enrichment.sh                  # launchd wrapper for enrichment
+├── scripts/
+│   └── check_feeds.py                 # feed health debug tool
+├── src/
+│   ├── __init__.py
+│   ├── main.py                        # scrape orchestration
+│   ├── database.py                    # SQLite manager
+│   ├── models.py                      # TriggerEvent, EventType, EventSource
+│   ├── alerts.py                      # email/file alert handlers
+│   ├── enrichment.py                  # (legacy enrichment, unused now)
+│   ├── performance/                   # async, caching, rate-limiting helpers
+│   └── scrapers/
+│       ├── __init__.py
+│       ├── base.py                    # BaseScraper + extract_company_name
+│       ├── rss_scraper.py
+│       ├── sec_scraper.py             # SEC EDGAR EFTS
+│       ├── adzuna_scraper.py          # Adzuna jobs API
+│       ├── job_scraper.py             # Google Jobs
+│       ├── news_scraper.py            # Google News
+│       ├── bing_scraper.py            # (disabled)
+│       └── finsmes_scraper.py         # (disabled)
+├── tests/                             # minimal — not the focus
+├── logs/                              # gitignored — enrichment.log etc.
+├── alerts/                            # gitignored — text alert files
+└── venv/                              # gitignored
+```
+
+---
+
+**End of handoff. Welcome aboard.**
