@@ -1042,59 +1042,6 @@ def main():
     if not check_password():
         return
 
-    # Floating "Filters" button — fallback for cases where the native Streamlit
-    # sidebar toggle (which lives in the header chrome) isn't visible. This
-    # button programmatically clicks the underlying Streamlit toggle when
-    # pressed, so the sidebar opens/closes regardless of which testid the
-    # current Streamlit version uses.
-    st.markdown("""
-    <style>
-      .ta-filters-fab {
-        position: fixed;
-        top: 0.75rem;
-        left: 0.75rem;
-        z-index: 999999;
-        background: linear-gradient(135deg, #4e8caa 0%, #3a6e87 100%);
-        color: #fff;
-        border: 1px solid rgba(255,255,255,0.25);
-        border-radius: 10px;
-        padding: 0.45rem 0.85rem;
-        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-        font-size: 0.82rem;
-        font-weight: 600;
-        letter-spacing: 0.02em;
-        cursor: pointer;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.35);
-        transition: transform 0.12s, box-shadow 0.12s;
-      }
-      .ta-filters-fab:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 6px 16px rgba(0,0,0,0.45);
-      }
-      .ta-filters-fab:active { transform: translateY(0); }
-    </style>
-    <button class="ta-filters-fab" onclick="
-      const sels = [
-        '[data-testid=stSidebarCollapsedControl]',
-        '[data-testid=collapsedControl]',
-        '[data-testid=stSidebarNavCollapseButton]',
-        '[data-testid=stSidebarHeader] button',
-        '[data-testid=stExpandSidebarButton]',
-        'button[kind=header]',
-        'button[kind=headerNoPadding]'
-      ];
-      // Search inside both the main document and Streamlit's iframe parent
-      const roots = [document, window.parent && window.parent.document].filter(Boolean);
-      for (const root of roots) {
-        for (const s of sels) {
-          const btn = root.querySelector(s);
-          if (btn) { btn.click(); return; }
-        }
-      }
-      console.warn('Sidebar toggle not found via any known selector');
-    ">☰ Filters</button>
-    """, unsafe_allow_html=True)
-
     # Header
     logo_b64 = get_logo_base64()
     logo_html = f'<img src="data:image/png;base64,{logo_b64}" class="header-logo">' if logo_b64 else ""
@@ -1126,65 +1073,71 @@ def main():
         """)
         return
 
-    # Sidebar filters
-    st.sidebar.markdown('<p class="sidebar-section-title">🎛️ Filters</p>', unsafe_allow_html=True)
+    # ── Filters + Search row ────────────────────────────────────────────
+    # Filters live in a popover instead of the sidebar, so they're always
+    # accessible regardless of sidebar collapse state. Search stays inline
+    # next to the filter button.
+    filter_col, search_col = st.columns([1, 5])
 
-    days = st.sidebar.slider("Time Range (days)", 1, 90, 30)
+    with filter_col:
+        with st.popover("🎛️  Filters", use_container_width=True):
+            days = st.slider("Time Range (days)", 1, 90, 30, key="flt_days")
 
-    st.sidebar.markdown('<p class="sidebar-section-title">📍 Region</p>', unsafe_allow_html=True)
-    selected_regions = st.sidebar.multiselect(
-        "Region",
-        options=list(REGIONS.keys()),
-        default=[],
-        placeholder="All regions",
-        label_visibility="collapsed"
-    )
+            st.markdown("**📍 Region**")
+            selected_regions = st.multiselect(
+                "Region",
+                options=list(REGIONS.keys()),
+                default=[],
+                placeholder="All regions",
+                label_visibility="collapsed",
+                key="flt_regions",
+            )
 
-    # Revenue segment filter — 4 NetSuite sales tiers:
-    #   LMM  (<$10M)   ·  MM   ($10-$20M)
-    #   Corp ($20-100M)  ·  Enterprise (>$100M)
-    # Each rep dials this to their own segment. Presets cover common patterns,
-    # multiselect below lets you fine-tune.
-    st.sidebar.markdown('<p class="sidebar-section-title">💵 Revenue Segment</p>', unsafe_allow_html=True)
+            # Revenue segment filter — 4 NetSuite sales tiers:
+            #   LMM  (<$10M)   ·  MM   ($10-$20M)
+            #   Corp ($20-100M)  ·  Enterprise (>$100M)
+            st.markdown("**💵 Revenue Segment**")
+            preset = st.selectbox(
+                "Preset",
+                options=list(REVENUE_PRESETS.keys()),
+                index=0,  # NetSuite Up-Market ($0-$100M)
+                help="Quick presets. Use the multiselect below to fine-tune.",
+                label_visibility="collapsed",
+                key="flt_preset",
+            )
+            default_bands = REVENUE_PRESETS[preset]
 
-    preset = st.sidebar.selectbox(
-        "Preset",
-        options=list(REVENUE_PRESETS.keys()),
-        index=0,  # NetSuite Up-Market ($0-$100M)
-        help="Quick presets. Use the multiselect below to fine-tune.",
-        label_visibility="collapsed"
-    )
-    default_bands = REVENUE_PRESETS[preset]
+            selected_bands = st.multiselect(
+                "Segments to include",
+                options=REVENUE_BANDS,
+                default=default_bands,
+                placeholder="Select segments…",
+                help=(
+                    "LMM = Lower Mid-Market (<$10M)  ·  "
+                    "MM = Mid-Market ($10M-$20M)  ·  "
+                    "Corp = Corporate ($20M-$100M)  ·  "
+                    "Enterprise (>$100M)"
+                ),
+                label_visibility="collapsed",
+                key=f"flt_bands_{preset}",  # Reset multiselect when preset changes
+            )
 
-    selected_bands = st.sidebar.multiselect(
-        "Segments to include",
-        options=REVENUE_BANDS,
-        default=default_bands,
-        placeholder="Select segments…",
-        help=(
-            "LMM = Lower Mid-Market (<$10M)  ·  "
-            "MM = Mid-Market ($10M-$20M)  ·  "
-            "Corp = Corporate ($20M-$100M)  ·  "
-            "Enterprise (>$100M)"
-        ),
-        label_visibility="collapsed",
-        key=f"rev_bands_{preset}",  # Reset multiselect when preset changes
-    )
+            include_unknown = st.checkbox(
+                "Also include companies with unknown revenue",
+                value=True,
+                help="Most newly-discovered leads don't have revenue data yet. Keep this ON to surface them; turn OFF to see only confirmed sized companies.",
+                key="flt_include_unknown",
+            )
 
-    include_unknown = st.sidebar.checkbox(
-        "Also include companies with unknown revenue",
-        value=True,
-        help="Most newly-discovered leads don't have revenue data yet. Keep this ON to surface them; turn OFF to see only confirmed sized companies."
-    )
-
-    # Modern search bar
-    st.markdown('<div class="search-container">', unsafe_allow_html=True)
-    search = st.text_input(
-        "Search",
-        placeholder="🔍 Search by company, title, or keyword...",
-        label_visibility="collapsed"
-    )
-    st.markdown('</div>', unsafe_allow_html=True)
+    with search_col:
+        st.markdown('<div class="search-container">', unsafe_allow_html=True)
+        search = st.text_input(
+            "Search",
+            placeholder="🔍 Search by company, title, or keyword...",
+            label_visibility="collapsed",
+            key="flt_search",
+        )
+        st.markdown('</div>', unsafe_allow_html=True)
 
     # Load all events
     df = load_events(days=days, search=search if search else None)
