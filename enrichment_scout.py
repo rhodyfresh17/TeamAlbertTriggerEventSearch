@@ -783,6 +783,16 @@ def enrich_events(
         if col_ok.get('enriched_at'):
             payload['enriched_at'] = datetime.utcnow().isoformat()
 
+        # Upgrade event_type to cfo_hire if we detected finance leadership in
+        # the text. Never downgrades — only changes executive_hire/other → cfo_hire.
+        # This backfills correct classification on existing events when re-enriched,
+        # and ensures dashboard CFO tab populates correctly.
+        current_etype = (event.get('event_type') or '').lower()
+        if (current_etype != 'cfo_hire'
+                and _has_finance_leadership_trigger(event)):
+            payload['event_type'] = 'cfo_hire'
+            log.info(f'    Reclassifying event_type {current_etype!r} → cfo_hire')
+
         try:
             client.table('events').update(payload).eq('id', eid).execute()
             ok += 1

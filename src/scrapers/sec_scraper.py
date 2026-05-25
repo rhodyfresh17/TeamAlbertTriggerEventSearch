@@ -87,6 +87,12 @@ class SECScraper(BaseScraper):
         # Per-CIK address cache so we don't repeatedly look up the same filer
         self._cik_state_cache: Dict[str, str] = {}
 
+        # Set of accession numbers (adsh) for Item 5.02 filings that also
+        # mention "Chief Financial Officer" — pre-fetched once per scrape
+        # to correctly route CFO-related officer changes to event_type=CFO_HIRE
+        # (vs EXECUTIVE_HIRE for non-CFO officer departures/elections).
+        self._cfo_adsh_set: set = set()
+
         # Track source status for the dashboard
         self.source_statuses: List[Dict[str, Any]] = []
 
@@ -96,6 +102,10 @@ class SECScraper(BaseScraper):
         self.source_statuses = []
         if not self.enabled:
             return []
+
+        # Prefetch CFO-related Item 5.02 filing accession numbers so we can
+        # correctly classify them at hit-conversion time. One extra EFTS call.
+        self._cfo_adsh_set = self._fetch_cfo_filing_adsh_set()
 
         all_events: List[TriggerEvent] = []
         for item_code, item_def in ITEM_DEFINITIONS.items():
@@ -142,6 +152,43 @@ class SECScraper(BaseScraper):
                 continue
 
         return events
+
+    def _fetch_cfo_filing_adsh_set(self) -> set:
+        """Pre-fetch the accession numbers of Item 5.02 filings that mention
+        'Chief Financial Officer' so we can route them to event_type=CFO_HIRE.
+
+        One EFTS call per scrape — cheap, and avoids per-filing HTTP fetches
+        to determine whether each officer-change is CFO-related.
+        """
+        startdt = (date.today() - timedelta(days=self.lookback_days)).isoformat()
+        enddt   = date.today().isoformat()
+
+        params = {
+            # EFTS treats quoted phrases as required; space = AND.
+            'q':         '"Chief Financial Officer" "Item 5.02"',
+            'forms':     '8-K',
+            'dateRange': 'custom',
+            'startdt':   startdt,
+            'enddt':     enddt,
+        }
+        try:
+            resp = self.session.get(
+                self.EFTS_URL, params=params, timeout=self.timeout
+            )
+            resp.raise_for_status()
+            hits = resp.json().get('hits', {}).get('hits', []) or []
+            adsh_set = set()
+            for h in hits:
+                adsh = (h.get('_source') or {}).get('adsh', '')
+                if adsh:
+                    adsh_set.add(adsh)
+            self.delay_request()
+            print(f'  - SEC CFO prefetch: {len(adsh_set)} Item 5.02 filings '
+                  f'mention "Chief Financial Officer"')
+            return adsh_set
+        except Exception as e:
+            print(f'  - SEC CFO prefetch failed (defaulting to EXEC for all): {e}')
+            return set()
 
     def _search_efts(self, item_code: str) -> List[Dict[str, Any]]:
         """Query SEC EFTS for 8-K filings tagged with a specific item."""
@@ -213,13 +260,15 @@ class SECScraper(BaseScraper):
         if matches_excluded:
             return None
 
-        # If Item 5.02, try to detect whether this is specifically a CFO change
+        # Classify event_type. For Item 5.02 (officer changes), route to
+        # CFO_HIRE if the pre-fetched CFO set contains this filing's adsh,
+        # else EXECUTIVE_HIRE for other officer changes.
         event_type = item_def['event_type']
         if item_code == '5.02':
-            event_type = EventType.CFO_HIRE  # default; we'll downgrade if not CFO-shaped
-            # Without fetching the actual 8-K text we can't be 100% sure;
-            # mark as EXECUTIVE_HIRE so downstream filters/UI can refine.
-            event_type = EventType.EXECUTIVE_HIRE
+            if adsh in self._cfo_adsh_set:
+                event_type = EventType.CFO_HIRE
+            else:
+                event_type = EventType.EXECUTIVE_HIRE
 
         title = (
             f'SEC 8-K Item {item_code} ({item_def["name"]}) — {company_name}'
