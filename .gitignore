@@ -10,6 +10,9 @@ trigger_events.db
 # Alerts output
 alerts/
 
+# Runtime logs (enrichment, launchd)
+logs/
+
 # Python
 __pycache__/
 *.py[cod]
