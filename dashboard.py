@@ -1042,6 +1042,59 @@ def main():
     if not check_password():
         return
 
+    # Floating "Filters" button — fallback for cases where the native Streamlit
+    # sidebar toggle (which lives in the header chrome) isn't visible. This
+    # button programmatically clicks the underlying Streamlit toggle when
+    # pressed, so the sidebar opens/closes regardless of which testid the
+    # current Streamlit version uses.
+    st.markdown("""
+    <style>
+      .ta-filters-fab {
+        position: fixed;
+        top: 0.75rem;
+        left: 0.75rem;
+        z-index: 999999;
+        background: linear-gradient(135deg, #4e8caa 0%, #3a6e87 100%);
+        color: #fff;
+        border: 1px solid rgba(255,255,255,0.25);
+        border-radius: 10px;
+        padding: 0.45rem 0.85rem;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+        font-size: 0.82rem;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        cursor: pointer;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.35);
+        transition: transform 0.12s, box-shadow 0.12s;
+      }
+      .ta-filters-fab:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 6px 16px rgba(0,0,0,0.45);
+      }
+      .ta-filters-fab:active { transform: translateY(0); }
+    </style>
+    <button class="ta-filters-fab" onclick="
+      const sels = [
+        '[data-testid=stSidebarCollapsedControl]',
+        '[data-testid=collapsedControl]',
+        '[data-testid=stSidebarNavCollapseButton]',
+        '[data-testid=stSidebarHeader] button',
+        '[data-testid=stExpandSidebarButton]',
+        'button[kind=header]',
+        'button[kind=headerNoPadding]'
+      ];
+      // Search inside both the main document and Streamlit's iframe parent
+      const roots = [document, window.parent && window.parent.document].filter(Boolean);
+      for (const root of roots) {
+        for (const s of sels) {
+          const btn = root.querySelector(s);
+          if (btn) { btn.click(); return; }
+        }
+      }
+      console.warn('Sidebar toggle not found via any known selector');
+    ">☰ Filters</button>
+    """, unsafe_allow_html=True)
+
     # Header
     logo_b64 = get_logo_base64()
     logo_html = f'<img src="data:image/png;base64,{logo_b64}" class="header-logo">' if logo_b64 else ""
