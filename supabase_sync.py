@@ -92,15 +92,36 @@ def sync_to_supabase():
         return True
 
     # Upsert events (insert or update based on id)
+    # Pre-fetch existing event IDs + their user-set fields from Supabase so
+    # we can preserve user state (lead_status / notes / grading) on upsert.
+    # WITHOUT this, every 4-hour scrape cycle silently wipes the user's
+    # "REVIEWED — NetSuite Customer" markers + notes back to default NEW.
+    existing_state: dict = {}
+    try:
+        existing = client.table('events').select(
+            'id, lead_status, notes, grade, hashtags, grade_justification, '
+            'cfo_status, research_notes, companies_data, enriched_at'
+        ).execute()
+        for row in (existing.data or []):
+            existing_state[str(row['id'])] = row
+    except Exception as e:
+        # Some columns may not exist yet (pre-grading deployments); fall back
+        # to just lead_status + notes preservation
+        try:
+            existing = client.table('events').select('id, lead_status, notes').execute()
+            for row in (existing.data or []):
+                existing_state[str(row['id'])] = row
+        except Exception:
+            print(f"Warning: could not fetch existing event state ({e}); "
+                  f"sync will preserve nothing — user lead_status/notes may be wiped")
+
     synced = 0
     for event in events:
         try:
-            # Normalize lead_status (SQLite uses lowercase 'new', dashboard expects 'NEW')
-            lead_status = event.get('lead_status', '') or ''
-            if lead_status.lower() == 'new' or lead_status == '':
-                lead_status = 'NEW'
+            event_id = str(event['id'])
+            existing = existing_state.get(event_id) or {}
 
-            # Clean up data for Supabase
+            # Clean up matched_regions
             matched_regions = event.get('matched_regions', [])
             if isinstance(matched_regions, str):
                 try:
@@ -108,8 +129,9 @@ def sync_to_supabase():
                 except Exception:
                     matched_regions = []
 
+            # Build payload from local SQLite (the source of truth for SCRAPED data)
             data = {
-                'id': str(event['id']),
+                'id': event_id,
                 'title': event.get('title', ''),
                 'company_name': event.get('company_name', ''),
                 'event_type': event.get('event_type', ''),
@@ -117,10 +139,33 @@ def sync_to_supabase():
                 'source_url': event.get('url', ''),
                 'published_date': event.get('published_date', ''),
                 'discovered_at': event.get('discovered_date', datetime.now().isoformat()),
-                'lead_status': lead_status,
-                'notes': event.get('notes', ''),
                 'matched_regions': json.dumps(matched_regions)
             }
+
+            # PRESERVE user-set lead_status. SQLite always carries the default
+            # 'new' — only overwrite Supabase if user hasn't touched it.
+            existing_status = (existing.get('lead_status') or '').strip()
+            if not existing_status or existing_status.lower() == 'new':
+                # First sync (no existing row) OR user hasn't classified yet
+                # → write NEW so dashboard renders correctly
+                data['lead_status'] = 'NEW'
+            # else: skip the field entirely so upsert preserves user's "REVIEWED",
+            # "NOT RELEVANT", etc.
+
+            # PRESERVE user notes — SQLite typically has no notes; only write
+            # if Supabase doesn't already have notes from dashboard edits.
+            existing_notes = (existing.get('notes') or '').strip()
+            if not existing_notes:
+                data['notes'] = event.get('notes', '') or ''
+
+            # PRESERVE Supabase-only enrichment + grading fields. These are
+            # written by enrichment_scout.py (which writes directly to
+            # Supabase) and don't exist in SQLite. If we upsert without
+            # them, we'd wipe all firmographics + grades every scrape.
+            # Solution: only include them if they're already present (no-op)
+            # — do NOT write them from SQLite (which has no values).
+            # We simply don't include these keys in data, so upsert preserves
+            # the existing JSONB/grade values via PostgreSQL semantics.
 
             client.table('events').upsert(data, on_conflict='id').execute()
             synced += 1

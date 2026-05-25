@@ -629,8 +629,11 @@ def enrich_events(
              f'({"claude-3-5-haiku" if backend == "anthropic" else OLLAMA_MODEL})')
 
     # ── Fetch events ──────────────────────────────────────────────────────
+    # Include source_url so grade_event() can cite the original article in
+    # research_notes. Without it, the TAL prompt receives empty article_url
+    # and the LLM has no primary source to reference.
     query = client.table('events').select(
-        'id, company_name, event_type, title, description'
+        'id, company_name, event_type, title, description, source_url'
     )
     if not re_enrich and col_ok.get('enriched_at'):
         query = query.is_('enriched_at', 'null')
@@ -690,11 +693,15 @@ def enrich_events(
             role      = co['role']
             cache_key = name.lower().strip()
 
-            # Build an industry hint from the event type + role to disambiguate
+            # Build an industry hint from the event type + role to disambiguate.
+            # event_type is stored LOWERCASE per src/models.py (EventType enum
+            # values are 'merger_acquisition', 'funding', 'cfo_hire', etc.) —
+            # this check was previously wrong-cased so hints were never applied.
+            etype_l = (etype or '').lower()
             hint_parts = []
-            if etype in ('MERGER_ACQUISITION', 'FUNDING'):
+            if etype_l in ('merger_acquisition', 'funding'):
                 hint_parts.append('financial services private equity')
-            if etype == 'EXECUTIVE_HIRE':
+            if etype_l in ('executive_hire', 'cfo_hire'):
                 hint_parts.append('B2B company')
             # Add the role context too
             if role in ('Acquirer', 'Target', 'Portfolio Company', 'Hiring Company'):

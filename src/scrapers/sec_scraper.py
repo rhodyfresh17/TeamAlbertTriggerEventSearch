@@ -157,38 +157,46 @@ class SECScraper(BaseScraper):
         """Pre-fetch the accession numbers of Item 5.02 filings that mention
         'Chief Financial Officer' so we can route them to event_type=CFO_HIRE.
 
-        One EFTS call per scrape — cheap, and avoids per-filing HTTP fetches
-        to determine whether each officer-change is CFO-related.
+        Paginates through up to MAX_PAGES of results — EFTS returns ~100 hits
+        per page, and busy weeks easily exceed that for CFO-related Item 5.02
+        filings nationwide.
         """
         startdt = (date.today() - timedelta(days=self.lookback_days)).isoformat()
         enddt   = date.today().isoformat()
+        MAX_PAGES = 5  # 500 hits max — covers typical 7-day window with headroom
 
-        params = {
-            # EFTS treats quoted phrases as required; space = AND.
-            'q':         '"Chief Financial Officer" "Item 5.02"',
-            'forms':     '8-K',
-            'dateRange': 'custom',
-            'startdt':   startdt,
-            'enddt':     enddt,
-        }
+        adsh_set: set = set()
         try:
-            resp = self.session.get(
-                self.EFTS_URL, params=params, timeout=self.timeout
-            )
-            resp.raise_for_status()
-            hits = resp.json().get('hits', {}).get('hits', []) or []
-            adsh_set = set()
-            for h in hits:
-                adsh = (h.get('_source') or {}).get('adsh', '')
-                if adsh:
-                    adsh_set.add(adsh)
-            self.delay_request()
+            for page in range(MAX_PAGES):
+                params = {
+                    # EFTS treats quoted phrases as required; space = AND.
+                    'q':         '"Chief Financial Officer" "Item 5.02"',
+                    'forms':     '8-K',
+                    'dateRange': 'custom',
+                    'startdt':   startdt,
+                    'enddt':     enddt,
+                    'from':      page * 100,  # EFTS pagination: 100 per page
+                }
+                resp = self.session.get(
+                    self.EFTS_URL, params=params, timeout=self.timeout
+                )
+                resp.raise_for_status()
+                hits = resp.json().get('hits', {}).get('hits', []) or []
+                if not hits:
+                    break  # exhausted — stop early
+                for h in hits:
+                    adsh = (h.get('_source') or {}).get('adsh', '')
+                    if adsh:
+                        adsh_set.add(adsh)
+                self.delay_request()
+                if len(hits) < 100:
+                    break  # last page (partial) — done
             print(f'  - SEC CFO prefetch: {len(adsh_set)} Item 5.02 filings '
                   f'mention "Chief Financial Officer"')
             return adsh_set
         except Exception as e:
             print(f'  - SEC CFO prefetch failed (defaulting to EXEC for all): {e}')
-            return set()
+            return adsh_set  # return whatever we got before the error
 
     def _search_efts(self, item_code: str) -> List[Dict[str, Any]]:
         """Query SEC EFTS for 8-K filings tagged with a specific item."""
