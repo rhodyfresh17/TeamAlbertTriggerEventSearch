@@ -697,6 +697,20 @@ territory:
     - "Gold Inc"
     - "Silver Corp"
     - "Silver Inc"
+    # Mineral-specific Corp/Inc/Ltd suffixes (catches Chilean Cobalt Corp etc.)
+    - "Cobalt Corp"
+    - "Cobalt Inc"
+    - "Cobalt Ltd"
+    - "Lithium Corp"
+    - "Lithium Inc"
+    - "Lithium Ltd"
+    - "Uranium Corp"
+    - "Uranium Inc"
+    - "Uranium Ltd"
+    - "Critical Minerals"
+    - "Rare Earth"
+    - "Battery Metals"
+    - "Mining Resources"
 
     # Steel / Heavy industry (Sault Ste. Marie steel leak → fixed here)
     - "Steelworker"

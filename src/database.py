@@ -122,6 +122,35 @@ class DatabaseManager:
             ''', (url_hash, url, datetime.now().isoformat()))
             conn.commit()
 
+    def has_recent_event_title(self, title_lower: str, hours: int = 72) -> bool:
+        """Check if an event with this normalized title was seen in the last
+        N hours. Used to deduplicate syndicated press releases — same article
+        from Globe Newswire + Financial Post arrives at different URLs but
+        with identical titles.
+
+        title_lower: title string already lowercased + stripped.
+        Returns True if a matching event exists in the events table within
+        the recent window.
+        """
+        if not title_lower:
+            return False
+        from datetime import timedelta
+        cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    '''SELECT 1 FROM events
+                       WHERE LOWER(TRIM(title)) = ?
+                         AND discovered_date >= ?
+                       LIMIT 1''',
+                    (title_lower, cutoff)
+                )
+                return cursor.fetchone() is not None
+            except sqlite3.OperationalError:
+                # Table may not exist yet on first run
+                return False
+
     def save_event(self, event: TriggerEvent):
         """Save a trigger event to the database."""
         with sqlite3.connect(self.db_path) as conn:

@@ -109,21 +109,57 @@ def classify_event(scraper: BaseScraper, event: dict):
     return True, ''
 
 
+def find_title_duplicates(events: list) -> list:
+    """Find groups of events that share the same normalized title (syndicated
+    press releases). Returns [(title, [events_to_delete])] — keeps the most
+    enriched/oldest copy and marks the rest for deletion."""
+    from collections import defaultdict
+    by_title = defaultdict(list)
+    for e in events:
+        t = (e.get('title') or '').strip().lower()
+        if t:
+            by_title[t].append(e)
+
+    drops = []
+    for title, evs in by_title.items():
+        if len(evs) < 2:
+            continue
+        # Pick the BEST one to keep:
+        #   1. Prefer events that have been enriched (companies_data + grade)
+        #   2. Among those, prefer oldest (already had time in DB)
+        def quality_score(e):
+            has_companies = bool(e.get('companies_data'))
+            has_grade = bool(e.get('grade'))
+            return (int(has_companies), int(has_grade))
+        evs_sorted = sorted(evs, key=lambda e: (
+            -quality_score(e)[0],         # most companies_data first
+            -quality_score(e)[1],         # then most graded
+            (e.get('discovered_at') or '') # then oldest
+        ))
+        keep = evs_sorted[0]
+        to_delete = evs_sorted[1:]
+        drops.append((title, keep, to_delete))
+    return drops
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--apply', action='store_true',
                    help='Actually delete (default: dry-run, no changes)')
     p.add_argument('--limit', type=int, default=None,
                    help='Process at most N events (default: all)')
+    p.add_argument('--skip-dedup', action='store_true',
+                   help='Skip title-based dedup pass (default: dedupe enabled)')
     args = p.parse_args()
 
     cfg = load_config()
     scraper = _FilterOnlyScraper(cfg)
     client = get_supabase()
 
-    # Fetch all events
+    # Fetch all events (full record — needed for dedup quality scoring)
     response = client.table('events').select(
-        'id, title, description, company_name, event_type, discovered_at'
+        'id, title, description, company_name, event_type, discovered_at, '
+        'companies_data, grade, source_url'
     ).order('discovered_at', desc=True).execute()
     events = response.data or []
     if args.limit:
@@ -140,12 +176,29 @@ def main():
     drops = []
     reason_counts = Counter()
 
+    # ── Pass 1: industry / public-company exclusions ────────────────────
     for ev in events:
         keep, reason = classify_event(scraper, ev)
         if not keep:
             drops.append((ev, reason))
-            # Bucket reason for summary (just the prefix, not the keyword)
             reason_counts[reason.split(':')[0]] += 1
+
+    drop_ids = {ev['id'] for ev, _ in drops}
+
+    # ── Pass 2: title-based dedup (syndicated press releases) ───────────
+    dedup_drops = []
+    if not args.skip_dedup:
+        survivors = [e for e in events if e['id'] not in drop_ids]
+        dup_groups = find_title_duplicates(survivors)
+        for title, keep, to_delete in dup_groups:
+            for d in to_delete:
+                reason = (
+                    f'duplicate_title: kept id={keep["id"][:10]}… '
+                    f'(more enriched), dropping this copy'
+                )
+                dedup_drops.append((d, reason))
+                reason_counts['duplicate_title'] += 1
+        drops.extend(dedup_drops)
 
     log.info(f'Result: {len(drops)} of {len(events)} events would be dropped')
     if reason_counts:
@@ -154,11 +207,11 @@ def main():
             log.info(f'  {n:4d}  {r}')
 
     if drops:
-        log.info('\nSample of drops (first 15):')
-        for ev, reason in drops[:15]:
+        log.info('\nSample of drops (first 20):')
+        for ev, reason in drops[:20]:
             title = (ev.get('title') or '')[:65]
             company = ev.get('company_name') or '?'
-            log.info(f'  - [{ev.get("event_type",""):6}] {company[:24]:24}  '
+            log.info(f'  - [{ev.get("event_type","")[:6]:6}] {company[:24]:24}  '
                      f'{title}  ({reason})')
 
     if not args.apply:

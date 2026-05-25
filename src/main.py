@@ -114,8 +114,16 @@ class TriggerEventMonitor:
             except Exception as e:
                 print(f"  Error: {e}")
 
-        # Filter for new events (not seen before) and recent events only
+        # Filter for new events (not seen before) and recent events only.
+        # Two-pass dedup:
+        #   1. URL-based (existing) — catches scraping the same URL twice
+        #   2. Title-based (new) — catches syndicated press releases that
+        #      appear at different URLs (e.g. Globe Newswire + Financial Post
+        #      both publishing the same release with different URLs)
         old_events_skipped = 0
+        title_dupes_skipped = 0
+        seen_titles_this_run: set = set()
+
         for event in all_events:
             # Check if event is too old
             event_date = event.published_date
@@ -126,14 +134,29 @@ class TriggerEventMonitor:
                 old_events_skipped += 1
                 continue
 
-            if not self.db.has_seen_url(event.url):
-                new_events.append(event)
-                self.db.mark_url_seen(event.url)
-                self.db.save_event(event)
+            # URL dedup (persistent across runs)
+            if self.db.has_seen_url(event.url):
+                continue
+
+            # Title dedup — normalize, then check both in-run set and recent DB
+            title_key = (event.title or '').strip().lower()
+            if title_key:
+                if title_key in seen_titles_this_run:
+                    title_dupes_skipped += 1
+                    continue
+                if self.db.has_recent_event_title(title_key, hours=max_age_hours):
+                    title_dupes_skipped += 1
+                    continue
+                seen_titles_this_run.add(title_key)
+
+            new_events.append(event)
+            self.db.mark_url_seen(event.url)
+            self.db.save_event(event)
 
         print(f"\n{'-'*40}")
         print(f"Total potential events: {len(all_events)}")
         print(f"Skipped (older than {max_age_hours}h): {old_events_skipped}")
+        print(f"Skipped (duplicate titles, syndicated): {title_dupes_skipped}")
         print(f"New events (not seen before): {len(new_events)}")
 
         # Send alerts for all new events (no company verification)
