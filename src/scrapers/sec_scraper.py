@@ -1,216 +1,269 @@
-"""SEC EDGAR scraper for M&A filings and corporate events."""
+"""SEC EDGAR 8-K scraper for officer changes and M&A events.
+
+Uses SEC's EFTS full-text search API to find 8-K filings with specific
+"items" (5.02 officer changes, 2.01 M&A completions, 1.01 material agreements).
+For each filing, fetches the filer's business address to filter by territory.
+
+SEC requires a descriptive User-Agent. Be polite: max 10 req/sec.
+Docs: https://www.sec.gov/os/accessing-edgar-data
+"""
 
 import re
-import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional
+import time
+from datetime import datetime, timedelta, timezone, date
+from typing import List, Dict, Any, Optional, Set
 
 from .base import BaseScraper
 from ..models import TriggerEvent, EventType, EventSource
 
 
+# SEC EDGAR uses standard 2-letter codes for US states and Canadian provinces
+TERRITORY_STATE_CODES: Set[str] = {
+    # New England
+    'ME', 'NH', 'VT', 'MA', 'RI', 'CT',
+    # Mid-Atlantic
+    'NY', 'NJ', 'PA', 'DE', 'MD', 'VA', 'WV', 'DC',
+    # South East
+    'NC', 'SC', 'GA', 'FL', 'AL', 'TN', 'KY',
+    # Rust Belt
+    'OH', 'MI', 'IN',
+    # Canadian provinces
+    'A0',  # Newfoundland
+    'A1',  # Nova Scotia
+    'A2',  # Prince Edward Island
+    'A3',  # New Brunswick
+    'A4',  # Quebec
+    'A5',  # Ontario
+    # (BC=A6, AB=A0, etc. — Canadian SEC codes vary; include only territory)
+    'ON', 'QC', 'NB', 'NS', 'PE', 'NL',  # in case standard codes appear
+}
+
+
+# 8-K Item codes we care about, mapped to event types
+ITEM_DEFINITIONS: Dict[str, Dict[str, Any]] = {
+    '5.02': {
+        'name':       'Departure/Election of Directors or Officers',
+        'event_type': EventType.EXECUTIVE_HIRE,  # may be promoted to CFO_HIRE
+    },
+    '2.01': {
+        'name':       'Completion of Acquisition or Disposition',
+        'event_type': EventType.MERGER_ACQUISITION,
+    },
+    '1.01': {
+        'name':       'Entry into a Material Definitive Agreement',
+        'event_type': EventType.MERGER_ACQUISITION,
+    },
+}
+
+
 class SECScraper(BaseScraper):
-    """Scraper for SEC EDGAR filings related to M&A and corporate events."""
+    """Scraper for SEC EDGAR 8-K filings (officer changes + M&A)."""
 
-    # SEC EDGAR RSS feed for 8-K filings (material events)
-    SEC_8K_FEED = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-K&company=&dateb=&owner=include&count=100&output=atom"
-
-    # 8-K item codes related to M&A and leadership
-    RELEVANT_ITEMS = {
-        '1.01': 'Entry into Material Agreement',
-        '2.01': 'Completion of Acquisition or Disposition',
-        '5.02': 'Departure/Election of Directors or Officers',
-        '8.01': 'Other Events',
-    }
-
-    # Atom namespace
-    ATOM_NS = '{http://www.w3.org/2005/Atom}'
+    EFTS_URL = 'https://efts.sec.gov/LATEST/search-index'
+    SUBMISSIONS_URL = 'https://data.sec.gov/submissions/CIK{cik:010d}.json'
 
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
 
-        # Check if SEC feed is enabled
-        self.enabled = False
-        feeds = config.get('sources', {}).get('rss_feeds', [])
-        for feed in feeds:
-            if 'sec' in feed.get('name', '').lower():
-                self.enabled = feed.get('enabled', True)
-                break
+        sec_config = config.get('sec_filings', {}) or {}
+        self.enabled = sec_config.get('enabled', True)
+        self.lookback_days = int(sec_config.get('lookback_days', 7))
+        self.max_per_item = int(sec_config.get('max_per_item', 60))
+
+        # Default territory states can be overridden in config
+        territory_codes = sec_config.get('territory_state_codes')
+        if territory_codes:
+            self.territory_codes = {c.upper() for c in territory_codes}
+        else:
+            self.territory_codes = TERRITORY_STATE_CODES
+
+        # SEC requires a descriptive User-Agent. Use scraper config if available.
+        self.sec_user_agent = sec_config.get(
+            'user_agent',
+            'TeamAlbert Sales Intelligence (sales-leads@teamalbert.local)'
+        )
+        self.session.headers.update({'User-Agent': self.sec_user_agent})
+
+        # Per-CIK address cache so we don't repeatedly look up the same filer
+        self._cik_state_cache: Dict[str, str] = {}
+
+        # Track source status for the dashboard
+        self.source_statuses: List[Dict[str, Any]] = []
+
+    # ── Public entry point ────────────────────────────────────────────────
 
     def scrape(self) -> List[TriggerEvent]:
-        """Scrape SEC EDGAR for relevant filings."""
+        self.source_statuses = []
         if not self.enabled:
             return []
 
-        events = []
+        all_events: List[TriggerEvent] = []
+        for item_code, item_def in ITEM_DEFINITIONS.items():
+            source_label = f'SEC 8-K Item {item_code}'
+            try:
+                events = self._scrape_one_item(item_code, item_def)
+                all_events.extend(events)
+                self.source_statuses.append({
+                    'source_name':   source_label,
+                    'source_type':   'sec_edgar',
+                    'status':        'success' if events else 'partial',
+                    'error_message': None if events else 'No matching filings in territory',
+                    'events_found':  len(events),
+                })
+                print(f'  - {source_label}: {len(events)} in territory')
+            except Exception as e:
+                self.source_statuses.append({
+                    'source_name':   source_label,
+                    'source_type':   'sec_edgar',
+                    'status':        'error',
+                    'error_message': str(e)[:200],
+                    'events_found':  0,
+                })
+                print(f'  - {source_label}: ERROR {e}')
 
-        try:
-            response = self.session.get(self.SEC_8K_FEED, timeout=self.timeout)
-            response.raise_for_status()
+        return all_events
 
-            root = ET.fromstring(response.content)
-            entries = root.findall(f'.//{self.ATOM_NS}entry')
+    # ── Per-item scrape ───────────────────────────────────────────────────
 
-            for entry in entries:
-                event = self._process_filing(entry)
-                if event:
-                    events.append(event)
+    def _scrape_one_item(
+        self, item_code: str, item_def: Dict[str, Any]
+    ) -> List[TriggerEvent]:
+        hits = self._search_efts(item_code)
+        events: List[TriggerEvent] = []
 
-            self.delay_request()
-
-        except Exception as e:
-            print(f"Error scraping SEC EDGAR: {e}")
+        for hit in hits[: self.max_per_item]:
+            try:
+                ev = self._hit_to_event(hit, item_code, item_def)
+                if ev:
+                    events.append(ev)
+            except Exception as e:
+                # Don't let one bad filing stop the rest
+                print(f'    skipping malformed hit: {e}')
+                continue
 
         return events
 
-    def _process_filing(self, entry: ET.Element) -> Optional[TriggerEvent]:
-        """Process a single SEC filing entry."""
-        title_elem = entry.find(f'{self.ATOM_NS}title')
-        link_elem = entry.find(f'{self.ATOM_NS}link')
-        summary_elem = entry.find(f'{self.ATOM_NS}summary')
+    def _search_efts(self, item_code: str) -> List[Dict[str, Any]]:
+        """Query SEC EFTS for 8-K filings tagged with a specific item."""
+        startdt = (date.today() - timedelta(days=self.lookback_days)).isoformat()
+        enddt   = date.today().isoformat()
 
-        title = title_elem.text if title_elem is not None else ''
-        link = link_elem.get('href', '') if link_elem is not None else ''
-        summary = summary_elem.text if summary_elem is not None else ''
+        params = {
+            'q':         f'"Item {item_code}"',
+            'forms':     '8-K',
+            'dateRange': 'custom',
+            'startdt':   startdt,
+            'enddt':     enddt,
+        }
+        resp = self.session.get(self.EFTS_URL, params=params, timeout=self.timeout)
+        resp.raise_for_status()
+        data = resp.json()
+        self.delay_request()
+        return data.get('hits', {}).get('hits', [])
 
-        # Parse company info from title
-        # Format typically: "8-K - COMPANY NAME (0001234567) (Filer)"
-        company_match = re.search(r'8-K\s*-\s*(.+?)\s*\(', title)
-        company_name = company_match.group(1).strip() if company_match else None
+    # ── Convert one EFTS hit into a TriggerEvent ──────────────────────────
 
-        # Check if this matches our industries (skip excluded)
-        full_text = f"{title} {summary} {company_name or ''}"
-        matches_target_industry, matches_excluded = self.matches_industry(full_text)
+    def _hit_to_event(
+        self,
+        hit: Dict[str, Any],
+        item_code: str,
+        item_def: Dict[str, Any],
+    ) -> Optional[TriggerEvent]:
+        source = hit.get('_source', {}) or {}
 
+        # CIK + display name
+        ciks = source.get('ciks') or []
+        if not ciks:
+            return None
+        cik = str(ciks[0])
+
+        display_names = source.get('display_names') or []
+        if not display_names:
+            return None
+        # "ACME CORP  (0001234567) (Filer)" → "ACME CORP"
+        company_name = re.split(r'\s*\(', display_names[0])[0].strip()
+
+        # Date filed
+        file_date_str = source.get('file_date') or ''
+        try:
+            published = datetime.fromisoformat(file_date_str).replace(tzinfo=timezone.utc)
+        except Exception:
+            published = datetime.now(timezone.utc)
+
+        # adsh = accession number, used to construct URL
+        adsh = source.get('adsh') or ''
+        if not adsh:
+            return None
+        adsh_clean = adsh.replace('-', '')
+        url = (
+            f'https://www.sec.gov/Archives/edgar/data/'
+            f'{int(cik)}/{adsh_clean}/{adsh}-index.htm'
+        )
+
+        # Filer's business state — used for territory filter
+        state = self._lookup_filer_state(cik)
+        if not state:
+            return None
+        if state.upper() not in self.territory_codes:
+            return None
+
+        # Skip industry-excluded targets where applicable
+        full_text = ' '.join([company_name, source.get('file_type', '')])
+        _matches_target, matches_excluded = self.matches_industry(full_text)
         if matches_excluded:
             return None
 
-        # Check target company
-        matches_company, matched_company = self.matches_target_company(full_text)
+        # If Item 5.02, try to detect whether this is specifically a CFO change
+        event_type = item_def['event_type']
+        if item_code == '5.02':
+            event_type = EventType.CFO_HIRE  # default; we'll downgrade if not CFO-shaped
+            # Without fetching the actual 8-K text we can't be 100% sure;
+            # mark as EXECUTIVE_HIRE so downstream filters/UI can refine.
+            event_type = EventType.EXECUTIVE_HIRE
 
-        # Determine event type from content
-        event_type = self._determine_filing_type(summary, title)
-        if not event_type:
-            return None
-
-        # Check territory (SEC filings often don't have location, so be lenient)
-        in_territory, matched_regions = self.matches_territory(full_text)
-
-        # For SEC filings, we're more lenient - accept if it matches event type
-        # and either matches industry, company, or territory
-        if not (matches_target_industry or matches_company or in_territory):
-            # If no direct match, still include high-value M&A events
-            if event_type != EventType.MERGER_ACQUISITION:
-                return None
-
-        # Calculate relevance
-        relevance = self.calculate_relevance_score(
-            event_type,
-            matched_regions,
-            matches_target_industry,
-            matches_company
+        title = (
+            f'SEC 8-K Item {item_code} ({item_def["name"]}) — {company_name}'
         )
-
-        # Parse date
-        published = self._parse_date(entry)
-
-        # Extract deal info if M&A
-        acquirer, target, deal_value = self._extract_deal_info(summary)
+        description = (
+            f'SEC 8-K filing by {company_name} ({state}) — Item {item_code}: '
+            f'{item_def["name"]}. Filing date: {file_date_str}.'
+        )
 
         return TriggerEvent(
-            id=self.generate_event_id(link, title),
-            title=f"SEC 8-K: {company_name or 'Unknown Company'}",
+            id=self.generate_event_id(url, company_name),
+            title=title,
             event_type=event_type,
             source=EventSource.SEC_EDGAR,
-            url=link,
+            source_name='SEC EDGAR',
+            url=url,
             published_date=published,
-            company_name=matched_company or company_name,
-            description=summary[:500] if summary else None,
-            acquirer=acquirer,
-            target=target,
-            deal_value=deal_value,
-            matched_keywords=self._get_matched_keywords(full_text, event_type),
-            matched_regions=matched_regions,
-            relevance_score=relevance
+            company_name=company_name,
+            company_location=state,
+            description=description,
+            relevance_score=75.0,  # SEC filings are high-signal/structured
+            matched_regions=[state],
         )
 
-    def _determine_filing_type(self, summary: str, title: str) -> Optional[EventType]:
-        """Determine the event type from SEC filing content."""
-        text = f"{summary} {title}".lower()
+    # ── Helper: look up filer's business state ────────────────────────────
 
-        # Check for acquisition/disposition (Item 2.01)
-        acquisition_keywords = [
-            'acquisition', 'acquired', 'merger', 'disposition',
-            'purchase', 'sale of assets', 'business combination'
-        ]
-        if any(kw in text for kw in acquisition_keywords):
-            return EventType.MERGER_ACQUISITION
+    def _lookup_filer_state(self, cik: str) -> str:
+        """Look up a filer's business state from EDGAR submissions JSON.
+        Cached per-run. Returns empty string if unavailable."""
+        if cik in self._cik_state_cache:
+            return self._cik_state_cache[cik]
 
-        # Check for officer changes (Item 5.02)
-        officer_keywords = [
-            'cfo', 'chief financial', 'departure', 'appointment',
-            'resignation', 'election', 'officer', 'director'
-        ]
-        if any(kw in text for kw in officer_keywords):
-            if 'cfo' in text or 'chief financial' in text:
-                return EventType.CFO_HIRE
-            return EventType.EXECUTIVE_HIRE
-
-        # Check for material agreements that might indicate M&A
-        agreement_keywords = [
-            'definitive agreement', 'merger agreement', 'asset purchase',
-            'stock purchase', 'material agreement'
-        ]
-        if any(kw in text for kw in agreement_keywords):
-            return EventType.MERGER_ACQUISITION
-
-        return None
-
-    def _extract_deal_info(self, text: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
-        """Extract M&A deal information from text."""
-        acquirer = None
-        target = None
-        deal_value = None
-
-        # Try to extract deal value
-        value_patterns = [
-            r'\$[\d,]+(?:\.\d+)?\s*(?:million|billion|M|B)',
-            r'(?:approximately|about|nearly)\s*\$[\d,]+(?:\.\d+)?',
-        ]
-        for pattern in value_patterns:
-            match = re.search(pattern, text, re.IGNORECASE)
-            if match:
-                deal_value = match.group(0)
-                break
-
-        # Try to extract acquirer and target
-        acquire_pattern = r'([A-Z][A-Za-z\s&]+)\s+(?:to acquire|acquiring|acquired|will acquire)\s+([A-Z][A-Za-z\s&]+)'
-        match = re.search(acquire_pattern, text)
-        if match:
-            acquirer = match.group(1).strip()
-            target = match.group(2).strip()
-
-        return acquirer, target, deal_value
-
-    def _parse_date(self, entry: ET.Element) -> datetime:
-        """Parse date from SEC filing entry."""
-        updated_elem = entry.find(f'{self.ATOM_NS}updated')
-        if updated_elem is not None and updated_elem.text:
-            try:
-                return datetime.fromisoformat(updated_elem.text.replace('Z', '+00:00'))
-            except Exception:
-                pass
-
-        return datetime.now(timezone.utc)
-
-    def _get_matched_keywords(self, text: str, event_type: EventType) -> List[str]:
-        """Get matched keywords from text."""
-        text_lower = text.lower()
-        matched = []
-
-        all_keywords = self.ma_keywords + self.exec_hire_keywords
-        for kw in all_keywords:
-            if kw in text_lower:
-                matched.append(kw)
-
-        return matched[:5]
+        try:
+            url = self.SUBMISSIONS_URL.format(cik=int(cik))
+            resp = self.session.get(url, timeout=self.timeout)
+            resp.raise_for_status()
+            data = resp.json()
+            addresses = data.get('addresses') or {}
+            business = addresses.get('business') or {}
+            state = (business.get('stateOrCountry') or '').strip().upper()
+            self._cik_state_cache[cik] = state
+            # SEC rate-limit politeness
+            time.sleep(0.12)
+            return state
+        except Exception as e:
+            self._cik_state_cache[cik] = ''
+            return ''

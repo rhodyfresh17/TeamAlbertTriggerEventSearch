@@ -857,16 +857,28 @@ keywords:
 
 sources:
   rss_feeds:
-    - name: "Business Wire"
-      url: "https://feed.businesswire.com/rss/home/?rss=G1QFDERJXkJeEFpRWQ=="
+    # ── HIGH-SIGNAL personnel & executive announcements ──────────────────
+    # PR Newswire's dedicated Personnel Announcements feed: best single
+    # source for new CFO/CEO/exec hires across public & private companies.
+    - name: "PR Newswire - Personnel Announcements"
+      url: "https://www.prnewswire.com/rss/personnel-announcements-list.rss"
       enabled: true
 
-    - name: "PR Newswire"
-      url: "https://www.prnewswire.com/rss/news-releases-list.rss"
+    - name: "PR Newswire - Mergers & Acquisitions"
+      url: "https://www.prnewswire.com/rss/financial-services/mergers-acquisitions-list.rss"
       enabled: true
 
     - name: "PR Newswire - Financial Services"
-      url: "https://www.prnewswire.com/rss/financial-services-latest-news.rss"
+      url: "https://www.prnewswire.com/rss/financial-services-latest-news/financial-services-latest-news-list.rss"
+      enabled: true
+
+    # Note: Business Wire RSS now requires a registered channel ID. To enable,
+    # sign up free at https://services.businesswire.com → My Settings → RSS,
+    # generate a feed for the topics you want, and paste the URL here.
+    # The legacy unauthenticated feed was removed because it returns no items.
+
+    - name: "PR Newswire"
+      url: "https://www.prnewswire.com/rss/news-releases-list.rss"
       enabled: true
 
     - name: "Globe Newswire"
@@ -1067,6 +1079,18 @@ scraper:
   user_agent: "Mozilla/5.0 (compatible; SalesTerritoryBot/1.0)"
   max_age_hours: 168
   database: "trigger_events.db"
+
+# ── SEC EDGAR 8-K filings ──────────────────────────────────────────────
+# Public-company filings for officer changes (Item 5.02), M&A completions
+# (Item 2.01), and material agreements (Item 1.01). Filtered to territory
+# states via each filer's SEC business address.
+sec_filings:
+  enabled: true
+  lookback_days: 7
+  max_per_item: 60
+  # SEC requires a descriptive User-Agent (your name + email).
+  # Update this to YOUR contact info to be a good API citizen.
+  user_agent: "TeamAlbert Sales Intelligence (sales-leads@teamalbert.local)"
 
 job_search:
   enabled: true
