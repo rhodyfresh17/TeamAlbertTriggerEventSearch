@@ -266,31 +266,55 @@ def filter_by_region(df: pd.DataFrame, selected_regions: list) -> pd.DataFrame:
     return df[mask]
 
 
-# Ordered low → high. Used to compare revenue bands.
+# Revenue buckets, ordered low → high. Used for filter UI + comparisons.
 REVENUE_BANDS = [
-    '<$10M', '$10M-50M', '$50M-100M', '$100M-200M',
-    '$200M-500M', '$500M-1B', '$1B+',
+    '<$5M', '$5M-10M', '$10M-25M', '$25M-50M', '$50M-100M',
+    '$100M-200M', '$200M-500M', '$500M-1B', '$1B+',
 ]
 
+# Map LEGACY buckets (from older enriched events) → current canonical buckets.
+# We pick the LOWER end of the equivalent range so legacy data is treated
+# conservatively (more likely to be shown to small-co reps).
+LEGACY_BUCKET_MAP = {
+    '<$10M':    '<$5M',
+    '$10M-50M': '$10M-25M',
+}
+
+# Quick presets for the sidebar
+REVENUE_PRESETS = {
+    'NetSuite Up-Market ($0-$200M)': ['<$5M', '$5M-10M', '$10M-25M', '$25M-50M',
+                                       '$50M-100M', '$100M-200M'],
+    'SMB only (< $25M)':              ['<$5M', '$5M-10M', '$10M-25M'],
+    'Mid-market ($25M-$200M)':        ['$25M-50M', '$50M-100M', '$100M-200M'],
+    'Enterprise ($200M+)':            ['$200M-500M', '$500M-1B', '$1B+'],
+    'All bands':                       list(REVENUE_BANDS),
+}
+
+
 def _coerce_revenue_band(raw) -> str:
-    """Map any revenue string (including free-form like '$27.9B' or '$50M') to
-    our canonical bucket. Returns '' if not parseable. Defense-in-depth for
-    when the LLM ignores the bucket constraint."""
+    """Map any revenue string (including free-form like '$27.9B', '$50M',
+    or legacy buckets '$10M-50M') to a current canonical bucket. Returns ''
+    if not parseable. Defense-in-depth for LLM deviations + legacy data."""
     import re
     if not raw or not isinstance(raw, str):
         return ''
     s = raw.strip()
-    # If already a canonical bucket, return as-is
+    # Already a canonical bucket
     if s in REVENUE_BANDS:
         return s
-    # Try to parse a single dollar figure like "$27.9B" or "$50M"
+    # Legacy bucket from older enrichment runs
+    if s in LEGACY_BUCKET_MAP:
+        return LEGACY_BUCKET_MAP[s]
+    # Try to parse a single dollar figure like "$27.9B", "$50M", "18M"
     m = re.search(r'\$?\s*(\d+(?:\.\d+)?)\s*([MBK])', s, re.IGNORECASE)
     if not m:
         return ''
     val, unit = float(m.group(1)), m.group(2).upper()
     millions = val * (1000 if unit == 'B' else (0.001 if unit == 'K' else 1))
-    if millions < 10:    return '<$10M'
-    if millions < 50:    return '$10M-50M'
+    if millions < 5:     return '<$5M'
+    if millions < 10:    return '$5M-10M'
+    if millions < 25:    return '$10M-25M'
+    if millions < 50:    return '$25M-50M'
     if millions < 100:   return '$50M-100M'
     if millions < 200:   return '$100M-200M'
     if millions < 500:   return '$200M-500M'
@@ -300,7 +324,7 @@ def _coerce_revenue_band(raw) -> str:
 
 def _band_idx(b) -> int:
     """Return ordinal index of a revenue band, or -1 if not recognised.
-    Tolerates free-form revenue strings via _coerce_revenue_band."""
+    Tolerates free-form strings + legacy buckets via _coerce_revenue_band."""
     if not b:
         return -1
     canonical = b if b in REVENUE_BANDS else _coerce_revenue_band(b)
@@ -310,12 +334,16 @@ def _band_idx(b) -> int:
         return -1
 
 
-def filter_by_revenue_band(df: pd.DataFrame, max_band: str = '$100M-200M') -> pd.DataFrame:
-    """Drop events where the primary company has CONFIRMED revenue above max_band.
-    Events with unknown revenue are kept (don't punish missing data)."""
-    max_idx = _band_idx(max_band)
-    if max_idx < 0:
-        return df
+def filter_by_revenue_bands(
+    df: pd.DataFrame,
+    allowed_bands: list,
+    include_unknown: bool = True,
+) -> pd.DataFrame:
+    """Keep events whose primary company has revenue in `allowed_bands`.
+    Events with unknown revenue are kept iff `include_unknown=True`."""
+    if not allowed_bands:
+        return df  # No filter applied
+    allowed_set = set(allowed_bands)
 
     # Primary roles we care about (the actual subject of the event)
     primary_roles = {
@@ -327,15 +355,15 @@ def filter_by_revenue_band(df: pd.DataFrame, max_band: str = '$100M-200M') -> pd
         cd = row.get('companies_data')
         # NaN-safe unwrap
         if cd is None or (isinstance(cd, float) and cd != cd):
-            return True
+            return include_unknown
         if isinstance(cd, str):
             try:
                 import json as _json
                 cd = _json.loads(cd) if cd.strip() else []
             except Exception:
-                return True
+                return include_unknown
         if not isinstance(cd, list) or not cd:
-            return True
+            return include_unknown
 
         # Find primary company; fall back to first company in the list
         primary = next(
@@ -343,11 +371,13 @@ def filter_by_revenue_band(df: pd.DataFrame, max_band: str = '$100M-200M') -> pd
              if str(c.get('role', '')).lower() in primary_roles),
             cd[0]
         )
-        rev_idx = _band_idx(primary.get('revenue') or '')
-        # rev_idx < 0  → unknown revenue, keep
-        # rev_idx <= max_idx → in or below target band, keep
-        # rev_idx > max_idx  → confirmed too big, drop
-        return rev_idx < 0 or rev_idx <= max_idx
+        raw_rev = primary.get('revenue') or ''
+        if not raw_rev:
+            return include_unknown
+        canonical = raw_rev if raw_rev in REVENUE_BANDS else _coerce_revenue_band(raw_rev)
+        if not canonical:
+            return include_unknown
+        return canonical in allowed_set
 
     return df[df.apply(keep, axis=1)]
 
@@ -635,10 +665,10 @@ def render_event_card(row, event_config):
                         if co_industry: chips.append(f"🏭 {co_industry}")
                         if co_size:     chips.append(f"👥 {co_size}")
                         if co_revenue:
-                            in_band = co_revenue in (
-                                '<$10M', '$10M-50M', '$50M-100M', '$100M-200M'
-                            )
-                            rev_emoji = '💵' if in_band else '🏛️'
+                            # Green for in-band (NetSuite up-market ≤ $200M),
+                            # grey for above. Tolerates legacy bucket names
+                            # and free-form values via _band_idx.
+                            rev_emoji = '💵' if _band_idx(co_revenue) <= 5 and _band_idx(co_revenue) >= 0 else '🏛️'
                             chips.append(f"{rev_emoji} {co_revenue}")
                         if co_hq:       chips.append(f"📍 {co_hq}")
                         if chips:
@@ -953,14 +983,35 @@ def main():
         label_visibility="collapsed"
     )
 
-    # Revenue band filter — NetSuite up-market sweet spot is $0-$200M.
-    # When enabled, hide events whose primary company has KNOWN revenue >$200M.
-    # Events with no known revenue are always shown (so we don't lose new leads).
-    st.sidebar.markdown('<p class="sidebar-section-title">💵 Revenue Band</p>', unsafe_allow_html=True)
-    hide_megacaps = st.sidebar.checkbox(
-        "Hide companies > $200M",
+    # Revenue band filter — pick the specific bands you target.
+    # Each rep can dial this in: SMB-only reps select only <$25M bands,
+    # mid-market reps select $25M-200M, etc. Quick presets handle the
+    # common patterns; multiselect below lets you fine-tune.
+    st.sidebar.markdown('<p class="sidebar-section-title">💵 Revenue Bands</p>', unsafe_allow_html=True)
+
+    preset = st.sidebar.selectbox(
+        "Preset",
+        options=list(REVENUE_PRESETS.keys()),
+        index=0,  # NetSuite Up-Market ($0-$200M)
+        help="Quick presets. Use the multiselect below to fine-tune.",
+        label_visibility="collapsed"
+    )
+    default_bands = REVENUE_PRESETS[preset]
+
+    selected_bands = st.sidebar.multiselect(
+        "Bands to include",
+        options=REVENUE_BANDS,
+        default=default_bands,
+        placeholder="Select revenue bands…",
+        help="Only show companies whose confirmed revenue falls in these bands.",
+        label_visibility="collapsed",
+        key=f"rev_bands_{preset}",  # Reset multiselect when preset changes
+    )
+
+    include_unknown = st.sidebar.checkbox(
+        "Also include companies with unknown revenue",
         value=True,
-        help="Filter out events whose primary company has confirmed revenue above $200M (out of NetSuite up-market band). Leads with unknown revenue are always shown."
+        help="Most newly-discovered leads don't have revenue data yet. Keep this ON to surface them; turn OFF to see only confirmed sized companies."
     )
 
     # Modern search bar
@@ -981,8 +1032,11 @@ def main():
 
     df = filter_by_region(df, selected_regions)
 
-    if hide_megacaps:
-        df = filter_by_revenue_band(df, max_band='$100M-200M')
+    df = filter_by_revenue_bands(
+        df,
+        allowed_bands=selected_bands,
+        include_unknown=include_unknown,
+    )
 
     # Stats
     stats = get_stats(df)

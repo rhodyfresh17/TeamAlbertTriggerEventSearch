@@ -282,10 +282,11 @@ Return ONLY a JSON object (no markdown, no explanation) with these keys \
   "size":     "one of: '1-50', '51-200', '201-500', '501-1000', \
 '1001-5000', '5001-10000', '10000+', or null",
   "revenue":  "STRICT BUCKET. Must be EXACTLY one of these strings: \
-'<$10M', '$10M-50M', '$50M-100M', '$100M-200M', '$200M-500M', '$500M-1B', \
-'$1B+', or null. DO NOT return free-form values like '$27.9B' or '$50M' — \
-map them to the bucket they fall into ($27.9B → '$1B+', $50M → '$50M-100M'). \
-Use null if revenue is not explicitly stated in the search results.",
+'<$5M', '$5M-10M', '$10M-25M', '$25M-50M', '$50M-100M', '$100M-200M', \
+'$200M-500M', '$500M-1B', '$1B+', or null. DO NOT return free-form values \
+like '$27.9B' or '$50M' — map them to the bucket they fall into \
+($27.9B → '$1B+', $50M → '$50M-100M', $18M → '$10M-25M'). Use null if \
+revenue is not explicitly stated in the search results.",
   "hq":       "City, ST abbreviation (e.g. 'Boston, MA' or 'Toronto, ON'), \
 US/Canada only unless clearly elsewhere — or null",
   "linkedin": "full https://www.linkedin.com/company/... URL or null"
