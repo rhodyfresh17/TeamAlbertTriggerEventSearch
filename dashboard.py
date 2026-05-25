@@ -574,11 +574,45 @@ def update_lead_status(event_id: str, status: str, notes: str = None):
         return False
 
 
+def _resolve_display_company(row) -> str:
+    """Pick the best company name to show in the card header.
+    Prefer scrape-time company_name when it's a real value; fall back to the
+    primary enriched company (companies_data[0].name) so events with the
+    old "?" or null company_name still get a real label."""
+    scraped = str(row.get('company_name') or '').strip()
+    bad = {'', '?', 'unknown', 'unknown company', 'nan', 'none', 'n/a'}
+    if scraped and scraped.lower() not in bad:
+        return scraped
+
+    cd = row.get('companies_data')
+    if cd is None or (isinstance(cd, float) and cd != cd):
+        return 'Unknown Company'
+    if isinstance(cd, str):
+        try:
+            import json as _json
+            cd = _json.loads(cd) if cd.strip() else []
+        except Exception:
+            return 'Unknown Company'
+    if not isinstance(cd, list) or not cd:
+        return 'Unknown Company'
+
+    primary_roles = {
+        'acquirer', 'portfolio company',
+        'hiring company', 'primary', 'target',
+    }
+    primary = next(
+        (c for c in cd if str(c.get('role','')).lower() in primary_roles),
+        cd[0]
+    )
+    name = (primary.get('name') or '').strip()
+    return name if name else 'Unknown Company'
+
+
 def render_event_card(row, event_config):
     """Render a single event card with modern styling."""
     status = row.get('lead_status', 'NEW') or 'NEW'
     title = str(row.get('title', ''))[:100]
-    company = row.get('company_name') or 'Unknown Company'
+    company = _resolve_display_company(row)
     published = row.get('published_date', '')
 
     # Format date

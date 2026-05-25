@@ -339,20 +339,113 @@ class BaseScraper(ABC):
         return min(score, 100)
 
     def extract_company_name(self, text: str) -> Optional[str]:
-        """Try to extract company name from text."""
-        # Common patterns for company mentions
+        """Extract the primary company name from a news title/text.
+
+        Designed for the common shapes:
+          - Funding rounds:  "Blink Grabs $17M Financing Round"
+          - PE-backed M&A:   "Nautic-backed Integrated Home Care Services
+                              scoops up Dina Care"  (returns the active company)
+          - Exec hires:      "MikeWorldWide Appoints Dave Aglar as CIO"
+          - SEC-style:       "Acme Corp Announces..."
+          - With prefix:     "Deals & Moves: Beacon Pointe Acquires..."
+
+        Returns None for roundups, all-caps datelines, and other false positives.
+        """
+        if not text:
+            return None
+
+        # 1. Strip common headline prefixes that hide the actual subject
+        cleaned = text
+        prefixes_to_strip = [
+            r'^Deals?\s*(?:&|and)\s*Moves?:\s*',
+            r'^Today\'s\s+\w+:\s*',
+            r'^(?:Updated|Update|Exclusive|Breaking|Just\s+In):\s*',
+            r'^\d+\.\s+',                # numbered list items
+            r'^[A-Z]{3,}:\s*',           # "ATLANTA:" datelines
+        ]
+        for p in prefixes_to_strip:
+            cleaned = re.sub(p, '', cleaned, flags=re.IGNORECASE)
+
+        # 2. Bail on roundup / digest headlines (no single subject company)
+        if re.match(
+            r'^\d+\s+(?:Press|Releases|Stories|Headlines|Hires|Deals|Moves)\b',
+            cleaned, re.IGNORECASE
+        ):
+            return None
+
+        # 3. Verbs that signal a company is the active subject.
+        # Case-insensitive (inline scoped flag) so we catch both "Grabs" and
+        # "grabs" — VC News Daily uses Title Case, but other sources mix it.
+        # The company portion of the pattern keeps required leading capital
+        # via [A-Z] so we don't false-match common words.
+        funding_verbs = (
+            r'(?i:grabs?|secures?|raises?|receives?|pulls?\s+in|closes?|lands?|'
+            r'completes?|nabs?|scoops?\s+up|snags?|snaps?\s+up|bags?|picks?\s+up|'
+            r'hauls?\s+in|racks?\s+up|wraps?|tops?\s+off|gets?|acquires?|buys?|'
+            r'merges?\s+with|announces?|names?|appoints?|hires?|welcomes?|adds?|'
+            r'brings?\s+on|adopts?|files?|reports?|reveals?|unveils?|launches?|'
+            r'forms?|joins?|bets?|inks?|taps|promotes?|elevates?|selects?)'
+        )
+
+        company_chars = r"[A-Z][\w\s&\.\-'’]"  # caps-start, then letters/space/punct
+
+        # Preprocess: strip "{PE}-backed " prefix so the active company
+        # becomes the leading subject. Handles "EIG-backed MidOcean racks up..."
+        cleaned = re.sub(
+            rf"^{company_chars}{{1,40}}?-backed\s+",
+            '',
+            cleaned,
+        )
+
         patterns = [
-            r'([A-Z][A-Za-z0-9\s&]+(?:Inc\.|Corp\.|LLC|Ltd\.|Co\.))',
-            r'([A-Z][A-Za-z0-9\s&]+) (?:announces|appoints|names|hires)',
-            r'(?:at|joins|of) ([A-Z][A-Za-z0-9\s&]+)',
+            # "{Company} <funding_verb> ..."
+            (rf"^({company_chars}{{1,60}}?)\s+{funding_verbs}\b", 1),
+            # Corporate suffix anywhere in text
+            (
+                r"\b("
+                r"[A-Z][\w&\.\-'’]+(?:\s+[A-Z][\w&\.\-'’]+){0,5}"
+                r"(?:\s+(?:Inc\.?|Corp\.?|LLC|Ltd\.?|Co\.?|Holdings|Group|"
+                r"Partners|Capital|Ventures|Bank|Trust|Foundation|"
+                r"Healthcare|Health|Energy|Technologies|Tech|Solutions))"
+                r")\b",
+                1,
+            ),
+            # Legacy: "{Company} announces|appoints|..." (case-insensitive)
+            (rf"({company_chars}{{1,60}}) (?:announces?|appoints?|names?|hires?)", 1),
+            # "at/joins/of {Company}"
+            (rf"(?:at|joins|of) ({company_chars}{{1,60}}?)(?:\.|,|$|\s+for\s+|\s+as\s+)", 1),
         ]
 
-        for pattern in patterns:
-            match = re.search(pattern, text)
-            if match:
-                company = match.group(1).strip()
-                if len(company) > 3 and len(company) < 100:
-                    return company
+        for pattern, group_idx in patterns:
+            match = re.search(pattern, cleaned)
+            if not match:
+                continue
+
+            company = match.group(group_idx).strip()
+            # Strip trailing punctuation
+            company = re.sub(r'[,;:\.\s]+$', '', company)
+            # Strip "the " prefix
+            company = re.sub(r'^[Tt]he\s+', '', company)
+
+            # Sanity checks
+            if not (2 < len(company) < 80):
+                continue
+            # Reject all-caps datelines like "NEW YORK", "ATLANTA"
+            if company.isupper() and len(company.split()) <= 3:
+                continue
+            # Reject common false positives
+            if company.lower() in {
+                'the', 'today', 'breaking', 'news', 'press', 'press release',
+                'new york', 'boston', 'chicago', 'los angeles', 'san francisco',
+                'company', 'companies', 'corp', 'inc', 'group', 'partners',
+                'this week', 'this morning', 'this year',
+            }:
+                continue
+            # Reject if mostly digits (e.g. "5 Million")
+            if sum(c.isdigit() for c in company) > len(company) / 2:
+                continue
+
+            return company
 
         return None
 
