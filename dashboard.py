@@ -686,16 +686,36 @@ def render_event_card(row, event_config):
         'C': '#f59e0b',  # amber
         'D': '#6b7280',  # slate
     }
+    # V11 grade descriptions (point-based scoring)
     grade_descriptions = {
-        'A': 'Grade A — Hot lead (3+ hashtags + 2 triggers)',
-        'B': 'Grade B — Strong lead (2 hashtags + 1 trigger, or finance leadership hire)',
-        'C': 'Grade C — Warm lead (1 hashtag)',
-        'D': 'Grade D — Cold lead (0 hashtags)',
+        'A': 'Grade A — Hot lead (score 8+ with high-intent trigger)',
+        'B': 'Grade B — Strong lead (score 5-7)',
+        'C': 'Grade C — Warm lead (score 2-4)',
+        'D': 'Grade D — Cold lead (score 0-1)',
     }
+
+    # V11 fields — score + confidence shown in tooltip; NaN-safe.
+    score_raw = row.get('numeric_score')
+    try:
+        score = int(score_raw) if score_raw is not None and (
+            not isinstance(score_raw, float) or score_raw == score_raw
+        ) else None
+    except (TypeError, ValueError):
+        score = None
+    conf_raw = row.get('confidence_level')
+    conf = (str(conf_raw).strip() if conf_raw and (
+        not isinstance(conf_raw, float) or conf_raw == conf_raw
+    ) else None)
+
     grade_html = ""
     if grade in grade_colors:
         color = grade_colors[grade]
         desc = grade_descriptions[grade]
+        # Append V11 metadata to the tooltip if present
+        if score is not None:
+            desc += f"  ·  Score: {score}"
+        if conf:
+            desc += f"  ·  Confidence: {conf}"
         grade_html = (
             f'<span title="{desc}" '
             f'style="display:inline-flex;align-items:center;justify-content:center;'
@@ -706,6 +726,34 @@ def render_event_card(row, event_config):
             f'margin-right:0.55rem;text-transform:uppercase;'
             f'cursor:help;">Grade {grade}</span>'
         )
+        # Small score chip next to the grade if V11 data is present
+        if score is not None:
+            score_color = "rgba(255,255,255,0.85)"
+            grade_html += (
+                f'<span title="Numeric score (TAL V11). Hashtag points sum to {score}." '
+                f'style="display:inline-flex;align-items:center;justify-content:center;'
+                f'padding:0.25rem 0.5rem;border-radius:4px;'
+                f'background:rgba(78,140,170,0.15);color:{score_color};'
+                f'font-size:0.72rem;font-weight:700;'
+                f'margin-right:0.4rem;cursor:help;">'
+                f'Score {score}</span>'
+            )
+        if conf:
+            conf_colors_chip = {
+                'High':   ('#10b981', 'rgba(16,185,129,0.15)'),
+                'Medium': ('#f59e0b', 'rgba(245,158,11,0.15)'),
+                'Low':    ('#6b7280', 'rgba(107,114,128,0.18)'),
+            }
+            fg, bg = conf_colors_chip.get(conf.title(), ('#9ca3af', 'rgba(156,163,175,0.15)'))
+            grade_html += (
+                f'<span title="Grading confidence (TAL V11)" '
+                f'style="display:inline-flex;align-items:center;justify-content:center;'
+                f'padding:0.25rem 0.5rem;border-radius:4px;'
+                f'background:{bg};color:{fg};'
+                f'font-size:0.72rem;font-weight:700;'
+                f'margin-right:0.4rem;cursor:help;">'
+                f'{conf}</span>'
+            )
 
     # Hashtag chips (max 6, from companies_data grading step)
     hashtags_raw = row.get('hashtags') or []

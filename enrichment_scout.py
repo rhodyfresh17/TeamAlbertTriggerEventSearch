@@ -76,7 +76,10 @@ MIGRATION_SQL = (
     "  ALTER TABLE events ADD COLUMN IF NOT EXISTS hashtags             JSONB;\n"
     "  ALTER TABLE events ADD COLUMN IF NOT EXISTS grade_justification  TEXT;\n"
     "  ALTER TABLE events ADD COLUMN IF NOT EXISTS cfo_status           TEXT;\n"
-    "  ALTER TABLE events ADD COLUMN IF NOT EXISTS research_notes       JSONB;"
+    "  ALTER TABLE events ADD COLUMN IF NOT EXISTS research_notes       JSONB;\n"
+    "  -- TAL V11 (added 2026-06-09):\n"
+    "  ALTER TABLE events ADD COLUMN IF NOT EXISTS confidence_level     TEXT;\n"
+    "  ALTER TABLE events ADD COLUMN IF NOT EXISTS numeric_score        INTEGER;"
 )
 
 # Post-enrichment industry exclusions — applied AFTER firmographic extraction
@@ -426,11 +429,21 @@ def enrich_one_company(company_name: str, industry_hint: str = '') -> dict:
     }
 
 
-# ── Step 4 — TAL grading (TAL V10.2 system, adapted for our flow) ───────────
+# ── Step 4 — TAL grading (TAL V11 system, adapted for our pipeline flow) ────
+#
+# V11 replaces V10.2's "count hashtags + triggers" with a POINT-BASED scoring
+# rubric. Each hashtag has explicit points; sum = numeric_score; score maps
+# to grade (A=8+, B=5-7, C=2-4, D=0-1). New fields: confidence_level,
+# numeric_score. New hashtag: #NewController.
+#
+# Important behavior change: solo CFO hires drop from B → C under V11 (vs
+# V10.2 which auto-bumped to B). The previous code-side "finance leadership
+# override" is REMOVED — scoring handles it naturally and more nuanced
+# (CFO + 100EE = 6 = B, CFO + funding = 7 = B, CFO + PE + funding = 10 = A).
 
 TAL_GRADING_PROMPT = '''\
-You are an AI research analyst for Oracle NetSuite sales applying the TAL V10.2 \
-grading system. Be CONSERVATIVE — do NOT inflate hashtags or grades.
+You are a lead-grading assistant for Oracle NetSuite sales applying TAL V11. \
+Be CONSERVATIVE and evidence-driven — never invent missing information.
 
 EVENT
 Title: {title}
@@ -441,74 +454,100 @@ Description: {description}
 COMPANIES (pre-researched firmographics)
 {companies_block}
 
-HASHTAG RULES — apply ONLY when evidence is unambiguous. Each requires \
-explicit support from the input above. Never apply by inference. Max 6.
+CORE RULES
+- Prefer evidence over assumptions.
+- If a fact cannot be verified from the input above, treat it as missing.
+- Missing evidence lowers confidence but does not block grading.
+- Use "Unable to Grade" ONLY if the company cannot be reasonably identified.
+- Evaluate the PRIMARY company (Acquirer / Hiring Company / Portfolio Company \
+/ Primary role). Do not inherit attributes across companies in this event.
 
-- #NewCFO: event_type is "cfo_hire" OR title explicitly states a new CFO/Chief \
-Financial Officer announcement. DO NOT apply for general "officer" departures.
-- #Funding: event_type is "funding" AND company is for-profit. DO NOT apply to \
-nonprofit grants/donations or to companies BEING acquired.
-- #Acquisitions: event_type is "merger_acquisition" AND the company being \
-graded has role "Acquirer". DO NOT apply for Target role.
-- #PEBacked: a company in the event has role "Lead Investor" or "Investor" AND \
-the investor name signals a PE firm (contains "Capital"/"Partners"/"Equity" OR \
-matches known names: Bain, KKR, Blackstone, Carlyle, Apollo, TPG, Vista, \
-Thoma Bravo, Nautic, EIG, Roark, Hellman & Friedman, Silver Lake). DO NOT \
-apply for VC funding alone (General Catalyst, Sequoia, a16z = VC, not PE).
-- #HoldCo: name contains "Holdings" OR industry is "Holding Companies & \
-Conglomerates" OR description explicitly mentions multiple operating subsidiaries.
-- #100EE: firmographic size is 201-500 or larger. NOT 1-50 or 51-200.
-- #Locations: explicit mention of 3+ physical locations/stores/branches/offices. \
-DO NOT apply for HAVING a HQ city.
-- #Entities: explicit mention of multiple legal entities/subsidiaries/EINs. \
-DO NOT apply by inference.
-- #Global: documented operations in 3+ countries OR HQ outside US/Canada. DO \
-NOT apply for a single international partnership.
-- #HyperGrowth: documented >50% YoY revenue growth or 100+ headcount expansion \
-in <12 months. DO NOT apply for routine funding rounds.
-- #Franchisor: company franchises its brand to others. Explicit only.
-- #Franchisee: company operates franchised locations. Explicit only.
-- #FormerUser: explicitly mentioned as former NetSuite customer. SKIP otherwise.
-- #PrevConvo: explicit prior sales conversation. SKIP otherwise.
-- #Legacy: explicit mention of legacy ERP (QuickBooks, Sage 50, Dynamics GP). \
-SKIP otherwise.
+HASHTAGS — use ONLY these and ONLY when evidence supports them. Each has \
+a fixed point value. Sum all applicable points = numeric_score.
+
+HIGH-INTENT TRIGGERS:
+- **#NewCFO (+4)** — CFO or CFO-equivalent (Chief Financial Officer, VP \
+Finance, Head of Finance, Director of Finance, Chief Financial) hired \
+within last 18 months. Apply if event_type=cfo_hire OR title/description \
+states a new CFO/VP Finance/Director Finance hire. NOT for Controllers — \
+use #NewController instead.
+- **#NewController (+3)** — Controller, VP Accounting, or Chief Accounting \
+Officer hired within last 18 months. Use this INSTEAD of #NewCFO when the \
+role is Controller / VP Accounting / Chief Accounting (not CFO-track).
+- **#Funding (+3)** — Verified funding/financing/recapitalization within \
+last 18 months for a FOR-PROFIT company. Apply if event_type=funding. DO \
+NOT apply to nonprofit grants/donations or companies BEING acquired.
+- **#PEBacked (+3)** — Verified PE ownership/sponsorship. The investor \
+must be a PE firm (Bain, KKR, Blackstone, Carlyle, Apollo, TPG, Vista, \
+Thoma Bravo, Nautic, EIG, Roark, Hellman & Friedman, Silver Lake, etc.) — \
+NOT a VC firm (General Catalyst, Sequoia, a16z, etc. = VC, not PE).
+- **#Acquisitions (+3)** — Acquisition activity within last 36 months. \
+Apply if event_type=merger_acquisition AND the company being graded has \
+role "Acquirer". DO NOT apply for Target role.
+- **#FormerUser (+3)** — Verified former Oracle/NetSuite customer. SKIP \
+unless EXPLICITLY mentioned in the input.
+- **#PrevConvo (+3)** — Verified prior sales conversation/demo/opportunity. \
+SKIP unless EXPLICITLY mentioned in the input.
+
+COMPLEXITY SIGNALS:
+- **#HyperGrowth (+2)** — Documented rapid growth, major hiring, Inc. 5000, \
+or expansion. DO NOT apply for routine funding rounds.
+- **#100EE (+2)** — Firmographic size 201-500 or larger. NOT 1-50 or 51-200.
+- **#Locations (+2)** — Verified 3+ physical locations/offices/branches. \
+DO NOT apply for HAVING a single HQ city.
+- **#Entities (+2)** — Verified multiple subsidiaries/brands/legal entities.
+- **#HoldCo (+2)** — Name contains "Holdings" OR industry is "Holding \
+Companies & Conglomerates" OR description mentions multiple operating \
+subsidiaries.
+- **#Global (+2)** — Operations in 3+ countries OR HQ outside US/Canada.
+- **#Franchisor (+2)** — Company franchises its brand to others.
+- **#Franchisee (+2)** — Company operates franchised locations.
+- **#Legacy (+2)** — Verified legacy ERP in use (QuickBooks, Sage 50, \
+Dynamics GP, etc.). SKIP unless EXPLICITLY mentioned.
 
 When in doubt, DROP the hashtag.
 
-GRADE — conservative, do NOT inflate:
-- A = 3+ hashtags AND 2 triggers (the event itself counts as 1 trigger; a 2nd \
-trigger needs another distinct hashtag-worthy signal beyond the base event)
-- B = 2 hashtags AND at least 1 trigger
-- C = 1 hashtag (a single trigger from event_type alone is C, not B)
-- D = 0 hashtags
+GRADE MAPPING (based on numeric_score):
+- **A = 8+**
+- **B = 5-7**
+- **C = 2-4**
+- **D = 0-1**
 
-SPECIAL RULE — FINANCE LEADERSHIP HIRE OVERRIDE:
-If the event involves hiring a CFO, Controller, VP Finance, Vice President of \
-Finance, Head of Finance, Director of Finance, Chief Financial Officer, or \
-Chief Accounting Officer, this is the HIGHEST-VALUE trigger in NetSuite sales \
-and overrides the standard 1-hashtag = C rule:
-- Apply #NewCFO hashtag (even if title says Controller / VP Finance)
-- MINIMUM grade is B (never C or D) even when #NewCFO is the only hashtag
-- If #NewCFO PLUS one other distinct hashtag (e.g. #PEBacked, #HoldCo, \
-#Acquisitions, #HyperGrowth) → grade A
+GRADE RULES (these can OVERRIDE the score mapping):
+1. Grade A REQUIRES at least one verified high-intent trigger AND score 8+.
+2. Without any high-intent trigger, grade cannot exceed C — EXCEPT: if \
+complexity-only score is 8+, grade can be B (high-complexity exception).
+3. Low confidence cannot exceed C regardless of score.
+
+CONFIDENCE LEVEL:
+- **High** — strong evidence from multiple reliable sources in the input.
+- **Medium** — partial evidence or moderate estimation required.
+- **Low** — weak/conflicting evidence, limited validation, or CFO status \
+not verifiable.
 
 CFO STATUS:
-- "New" if event_type is "cfo_hire" OR title/description mentions hiring a \
-CFO/Controller/VP Finance/Head of Finance/Director of Finance
-- "Unable to verify" otherwise
+- "New" if event_type=cfo_hire OR title/description mentions hiring a \
+CFO/Controller/VP Finance/Director Finance/Chief Accounting.
+- "Unable to verify" otherwise.
 
-For research_notes, use ONLY URLs that appear in the input above (article URL, \
-company URLs, revenue source URLs). NEVER invent sources.
+For research_notes, use ONLY URLs that appear in the input above (article \
+URL, company URLs, revenue_source URLs). NEVER invent sources. Cap total \
+research_notes content at <1000 characters.
+
+Cap grade_justification at <1000 characters. The justification must show \
+the math: which hashtags applied, points each, total score, how that maps \
+to the grade.
 
 OUTPUT — return ONLY valid JSON (no markdown fences, no preamble):
 {{
-  "grade": "A|B|C|D",
-  "hashtags": ["#X", "#Y"],
+  "grade": "A|B|C|D|Unable to Grade",
+  "confidence": "High|Medium|Low",
+  "numeric_score": <integer sum of hashtag points>,
+  "hashtags": ["#X", "#Y", ...],
   "cfo_status": "New|Unable to verify",
-  "grade_justification": "one sentence",
+  "grade_justification": "<1000 chars — show the math (which hashtags + points + total + grade rule applied)",
   "research_notes": [
     {{"finding": "what was found", "source_url": "URL from input"}},
-    {{"finding": "...", "source_url": "..."}},
     {{"finding": "...", "source_url": "..."}}
   ]
 }}'''
@@ -563,11 +602,22 @@ def _has_finance_leadership_trigger(event: dict) -> bool:
 
 
 def grade_event(event: dict, companies_data: list) -> dict:
-    """Apply TAL V10.2 grading rules. Returns dict with grade/hashtags/etc.
-    On any failure returns an empty-graded record so the rest of the pipeline
-    can still write the event."""
+    """Apply TAL V11 grading rules. Returns dict with grade/hashtags/confidence/
+    numeric_score/etc. On any failure returns an empty-graded record so the
+    rest of the pipeline can still write the event.
+
+    V11 NOTES:
+    - Point-based scoring (vs V10.2's hashtag counting). LLM computes the sum.
+    - No code-side finance leadership override — the scoring rubric handles
+      it (CFO + 100EE = 6 = B, etc.).
+    - New fields: confidence (High/Medium/Low), numeric_score (int).
+    - Hashtag list is no longer capped at 6 — V11 says "use as many as
+      evidence supports" — but defense-in-depth, we still cap at 8 to prevent
+      runaway output."""
     empty = {
         'grade': None,
+        'confidence': None,
+        'numeric_score': None,
         'hashtags': [],
         'cfo_status': None,
         'grade_justification': None,
@@ -583,53 +633,65 @@ def grade_event(event: dict, companies_data: list) -> dict:
         description=(event.get('description') or '')[:600],
         companies_block=_build_companies_block(companies_data),
     )
-    data = llm_json(prompt, max_tokens=800)
+    data = llm_json(prompt, max_tokens=900)  # +100 for new fields
     if not data:
         return empty
 
-    # Validate + coerce
-    grade = (data.get('grade') or '').strip().upper()
-    if grade not in ('A', 'B', 'C', 'D'):
+    # ── Validate + coerce ────────────────────────────────────────────────
+    grade_raw = (data.get('grade') or '').strip()
+    # Accept the V11 letter grades + "Unable to Grade"
+    if grade_raw.upper() in ('A', 'B', 'C', 'D'):
+        grade = grade_raw.upper()
+    elif grade_raw.lower() == 'unable to grade':
+        grade = 'Unable to Grade'
+    else:
         grade = None
+
+    confidence = (data.get('confidence') or '').strip().title()  # "High"/"Medium"/"Low"
+    if confidence not in ('High', 'Medium', 'Low'):
+        confidence = None
+
+    # numeric_score should be an integer >= 0
+    try:
+        numeric_score = int(data.get('numeric_score') or 0)
+        if numeric_score < 0:
+            numeric_score = None
+    except (TypeError, ValueError):
+        numeric_score = None
 
     hashtags = data.get('hashtags') or []
     if isinstance(hashtags, str):
-        # Defensive: model returned a string instead of array
         hashtags = [h.strip() for h in hashtags.split() if h.strip().startswith('#')]
-    hashtags = [h for h in hashtags if isinstance(h, str) and h.startswith('#')][:6]
+    # Cap at 8 (defensive; V11 allows more but our schema doesn't need more)
+    hashtags = [h for h in hashtags if isinstance(h, str) and h.startswith('#')][:8]
 
     notes = data.get('research_notes') or []
     if not isinstance(notes, list):
         notes = []
-    notes = [
-        {'finding': str(n.get('finding', ''))[:300],
-         'source_url': str(n.get('source_url', ''))[:500]}
-        for n in notes if isinstance(n, dict) and n.get('finding')
-    ][:6]
+    # V11 caps total notes content at 1000 chars — enforce per-note + total
+    cleaned_notes = []
+    total_chars = 0
+    for n in notes:
+        if not isinstance(n, dict) or not n.get('finding'):
+            continue
+        finding = str(n.get('finding', ''))[:300]
+        source_url = str(n.get('source_url', ''))[:500]
+        if total_chars + len(finding) > 1000:
+            break
+        total_chars += len(finding)
+        cleaned_notes.append({'finding': finding, 'source_url': source_url})
+        if len(cleaned_notes) >= 8:
+            break
+    notes = cleaned_notes
 
     cfo_status = (data.get('cfo_status') or '').strip() or None
-    justification = (data.get('grade_justification') or '').strip() or None
-
-    # ── Finance leadership override (defense in depth) ────────────────
-    # Even if the LLM ignored or misapplied the special rule in the prompt,
-    # code enforces: any finance leadership hire trigger → minimum Grade B
-    # and #NewCFO hashtag present.
-    if _has_finance_leadership_trigger(event):
-        if '#NewCFO' not in hashtags:
-            hashtags = ['#NewCFO'] + hashtags
-            hashtags = hashtags[:6]  # cap at 6
-        if grade in (None, 'C', 'D'):
-            old_grade = grade or 'ungraded'
-            grade = 'B'
-            note = (
-                f'Finance leadership hire override: '
-                f'bumped from {old_grade} → B per TAL high-value-trigger rule. '
-            )
-            justification = note + (justification or '')
-        cfo_status = cfo_status or 'New'
+    # Cap justification at 1000 chars per V11
+    justification = (data.get('grade_justification') or '').strip()[:1000] or None
 
     return {
         'grade': grade,
+        'confidence': confidence,
+        'numeric_score': numeric_score,
         'hashtags': hashtags,
         'cfo_status': cfo_status,
         'grade_justification': justification,
@@ -811,6 +873,8 @@ def enrich_events(
         payload = {
             'companies_data':      enriched,
             'grade':               grading.get('grade'),
+            'confidence_level':    grading.get('confidence'),
+            'numeric_score':       grading.get('numeric_score'),
             'hashtags':            grading.get('hashtags') or [],
             'grade_justification': grading.get('grade_justification'),
             'cfo_status':          grading.get('cfo_status'),
@@ -951,6 +1015,8 @@ def regrade_only_events(limit: int = None, dry_run: bool = False):
         # ── Build payload (don't touch companies_data — we didn't change it) ─
         payload = {
             'grade':               grading.get('grade'),
+            'confidence_level':    grading.get('confidence'),
+            'numeric_score':       grading.get('numeric_score'),
             'hashtags':            grading.get('hashtags') or [],
             'grade_justification': grading.get('grade_justification'),
             'cfo_status':          grading.get('cfo_status'),
