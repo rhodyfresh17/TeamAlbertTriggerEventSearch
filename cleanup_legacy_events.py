@@ -86,10 +86,9 @@ def classify_event(scraper: BaseScraper, event: dict):
     company     = event.get('company_name', '') or ''
     full_text = f'{title} {description} {company}'
 
-    # 1. Industry exclusion (mining, steel, oil & gas, hotel, etc.)
+    # 1. Scrape-time industry exclusion (text-only matching)
     _matches_target, matches_excluded = scraper.matches_industry(full_text)
     if matches_excluded:
-        # Identify which specific keyword matched (best-effort, for reporting)
         text_lower = full_text.lower()
         hit = next(
             (kw for kw in scraper.excluded_industries if kw in text_lower),
@@ -105,6 +104,32 @@ def classify_event(scraper: BaseScraper, event: dict):
             'public-co'
         )
         return False, f'excluded_company: "{hit}"'
+
+    # 3. Post-enrichment industry block — checks the structured industry
+    # field on the PRIMARY company in companies_data. Catches SaaS / healthcare
+    # / construction / etc. that scrape-time text matching couldn't see.
+    try:
+        from enrichment_scout import (
+            POST_ENRICHMENT_INDUSTRY_BLOCK, PRIMARY_ROLES, industry_is_blocked,
+        )
+        import json as _json
+        cd = event.get('companies_data')
+        if isinstance(cd, str):
+            try:
+                cd = _json.loads(cd) if cd.strip() else []
+            except Exception:
+                cd = []
+        if isinstance(cd, list) and cd:
+            primary = next(
+                (c for c in cd
+                 if str(c.get('role', '')).lower() in PRIMARY_ROLES),
+                cd[0]
+            )
+            blocked, kw = industry_is_blocked(primary.get('industry') or '')
+            if blocked:
+                return False, f'post_enrichment_industry: "{kw}"'
+    except ImportError:
+        pass  # if enrichment_scout not importable, skip this pass
 
     return True, ''
 

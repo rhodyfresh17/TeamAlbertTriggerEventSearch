@@ -89,19 +89,41 @@ POST_ENRICHMENT_INDUSTRY_BLOCK = [
     'mining', 'mineral', 'minerals', 'ore', 'metals industry', 'rare earth',
     'cobalt', 'copper mining', 'gold mining', 'silver mining', 'uranium',
     'lithium mining', 'extractive', 'exploration', 'drilling', 'refining',
-    'smelting',
+    'smelting', 'non-ferrous metals',
     # Heavy industry
     'steel', 'aluminum', 'foundry', 'heavy industry', 'industrial manufacturing',
-    # Oil & gas
+    # Oil & gas / energy adjacent
     'oil & gas', 'oil and gas', 'petroleum', 'petrochemical', 'refinery',
+    'lng', 'lng development',
     # Out-of-target verticals
     'hotel', 'hospitality', 'restaurant', 'qsr', 'fast food',
     'casino', 'gaming', 'sports betting',
     'engineering firm', 'civil engineering', 'construction company',
+    'home construction', 'residential construction', 'construction & engineering',
     'data center', 'colocation',
     'power generation', 'utilities', 'electric utility',
     'solar farm', 'wind farm',
+    # Logistics / delivery
     'logistics', 'freight', 'trucking', 'supply chain',
+    'last-mile delivery', 'delivery services',
+    # ── Tech/SaaS — off-target per user FY27, added 2026-06-09 ─────────
+    'b2b saas', 'saas', 'software-as-a-service', 'software development',
+    'software company', 'application software', 'enterprise software',
+    'computer software', 'cloud software',
+    # ── Healthcare/Pharma — off-target per user FY27, added 2026-06-09 ─
+    # Note: NOT blocking bare 'healthcare' to avoid false-match on
+    # 'Healthcare Foundation' / nonprofit charitable orgs which ARE target.
+    'healthcare services', 'healthcare it', 'health it',
+    'hospitals and health care', 'hospitals',
+    'biotechnology', 'biotech',
+    'pharmaceuticals', 'pharmaceutical',
+    'medical devices', 'medical equipment',
+    'senior living', 'assisted living',
+    'life sciences tools', 'life sciences services',
+    'clinical research',
+    # Hardware/embedded (off-target)
+    'computer hardware', 'computer hardware manufacturing',
+    'embedded hardware', 'embedded systems',
 ]
 
 # Primary-company roles (the actual subject of the event)
@@ -333,10 +355,17 @@ Return ONLY a JSON object (no markdown, no explanation) with these keys \
 (null if unknown or ambiguous):
 {{
   "url":      "official website URL (https://...) or null",
-  "industry": "specific industry — be precise, e.g. 'Wealth Management', \
-'Healthcare IT', 'Commercial Banking', 'B2B SaaS', 'Private Equity', \
-'Insurance', 'Auto Dealer', 'Charitable Foundation' — not generic like \
-'Technology' or 'Services' — or null",
+  "industry": "Industry describing what the company OPERATES IN — not its role \
+in any transaction. Examples of operating industries: 'Wealth Management', \
+'Commercial Banking', 'Insurance', 'Auto Dealer', 'Charitable Foundation', \
+'Museum', 'Auto Repair', 'Real Estate Brokerage'. CRITICAL — only return \
+'Private Equity' / 'Venture Capital' / 'Investment Banking' if the company \
+ITSELF is a PE/VC/IB firm whose primary business is investing or advising. \
+An acquirer or investor in a deal is NOT a PE firm unless their core \
+business is investing — an electronics company that acquires another \
+electronics company has industry 'Electronics' (or null), NOT 'Private \
+Equity'. Be precise (not generic like 'Technology' or 'Services'). Return \
+null if uncertain.",
   "size":     "one of: '1-50', '51-200', '201-500', '501-1000', \
 '1001-5000', '5001-10000', '10000+', or null",
   "revenue":  "STRICT SEGMENT. Must be EXACTLY one of: \
