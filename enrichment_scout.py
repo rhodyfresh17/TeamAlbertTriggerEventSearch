@@ -436,10 +436,83 @@ def enrich_one_company(company_name: str, industry_hint: str = '') -> dict:
 # to grade (A=8+, B=5-7, C=2-4, D=0-1). New fields: confidence_level,
 # numeric_score. New hashtag: #NewController.
 #
-# Important behavior change: solo CFO hires drop from B → C under V11 (vs
-# V10.2 which auto-bumped to B). The previous code-side "finance leadership
-# override" is REMOVED — scoring handles it naturally and more nuanced
-# (CFO + 100EE = 6 = B, CFO + funding = 7 = B, CFO + PE + funding = 10 = A).
+# Implementation philosophy: LLM picks the HASHTAGS (creative judgment task),
+# code computes SCORE + GRADE (deterministic math). The LLM is unreliable
+# at arithmetic — it routinely uses wrong point values or misapplies grade
+# thresholds. By separating these, we get reliable correctness on the
+# scoring even when the model gets tired/confused.
+#
+# Solo #NewCFO = 5 points = Grade B (intentional — A.J.: "CFOs are HUGE").
+
+# Point values per V11 — single source of truth for code + prompt consistency
+TAL_V11_HASHTAG_POINTS = {
+    # HIGH-INTENT TRIGGERS
+    '#NewCFO':        5,
+    '#NewController': 3,
+    '#Funding':       3,
+    '#PEBacked':      3,
+    '#Acquisitions':  3,
+    '#FormerUser':    3,
+    '#PrevConvo':     3,
+    # COMPLEXITY SIGNALS
+    '#HyperGrowth':   2,
+    '#100EE':         2,
+    '#Locations':     2,
+    '#Entities':      2,
+    '#HoldCo':        2,
+    '#Global':        2,
+    '#Franchisor':    2,
+    '#Franchisee':    2,
+    '#Legacy':        2,
+}
+
+HIGH_INTENT_HASHTAGS = {
+    '#NewCFO', '#NewController', '#Funding', '#PEBacked',
+    '#Acquisitions', '#FormerUser', '#PrevConvo',
+}
+
+
+def _compute_v11_grade(hashtags: list, confidence: str):
+    """Deterministically compute (numeric_score, grade) from hashtag list per
+    V11 rules. Overrides the LLM's own score/grade — the LLM is unreliable
+    at arithmetic and threshold-application.
+
+    Returns (score: int, grade: str).
+
+    Grade rules per V11:
+      1. Score = sum of hashtag points.
+      2. Grade A requires (high-intent trigger present) AND (score 8+).
+      3. Without any high-intent trigger, grade cannot exceed C — UNLESS
+         complexity-only score is 8+ (high-complexity exception → B).
+      4. Low confidence caps grade at C regardless of score.
+    """
+    if not hashtags:
+        return 0, 'D'
+
+    score = sum(TAL_V11_HASHTAG_POINTS.get(h, 0) for h in hashtags)
+    has_high_intent = any(h in HIGH_INTENT_HASHTAGS for h in hashtags)
+    complexity_score = sum(
+        TAL_V11_HASHTAG_POINTS.get(h, 0)
+        for h in hashtags if h not in HIGH_INTENT_HASHTAGS
+    )
+
+    if has_high_intent:
+        if score >= 8:   grade = 'A'
+        elif score >= 5: grade = 'B'
+        elif score >= 2: grade = 'C'
+        else:            grade = 'D'
+    else:
+        # No high-intent trigger: standard mapping caps at C, except
+        # high-complexity exception (8+ complexity → B)
+        if complexity_score >= 8: grade = 'B'
+        elif score >= 2:          grade = 'C'
+        else:                     grade = 'D'
+
+    # Low-confidence cap (rule 4)
+    if confidence == 'Low' and grade in ('A', 'B'):
+        grade = 'C'
+
+    return score, grade
 
 TAL_GRADING_PROMPT = '''\
 You are a lead-grading assistant for Oracle NetSuite sales applying TAL V11. \
@@ -466,11 +539,13 @@ HASHTAGS — use ONLY these and ONLY when evidence supports them. Each has \
 a fixed point value. Sum all applicable points = numeric_score.
 
 HIGH-INTENT TRIGGERS:
-- **#NewCFO (+4)** — CFO or CFO-equivalent (Chief Financial Officer, VP \
+- **#NewCFO (+5)** — CFO or CFO-equivalent (Chief Financial Officer, VP \
 Finance, Head of Finance, Director of Finance, Chief Financial) hired \
 within last 18 months. Apply if event_type=cfo_hire OR title/description \
 states a new CFO/VP Finance/Director Finance hire. NOT for Controllers — \
-use #NewController instead.
+use #NewController instead. \
+NOTE: a solo #NewCFO (no other hashtag) = 5 points = Grade B — this is \
+intentional: a new CFO is the single highest-value NetSuite sales trigger.
 - **#NewController (+3)** — Controller, VP Accounting, or Chief Accounting \
 Officer hired within last 18 months. Use this INSTEAD of #NewCFO when the \
 role is Controller / VP Accounting / Chief Accounting (not CFO-track).
@@ -638,32 +713,37 @@ def grade_event(event: dict, companies_data: list) -> dict:
         return empty
 
     # ── Validate + coerce ────────────────────────────────────────────────
-    grade_raw = (data.get('grade') or '').strip()
-    # Accept the V11 letter grades + "Unable to Grade"
-    if grade_raw.upper() in ('A', 'B', 'C', 'D'):
-        grade = grade_raw.upper()
-    elif grade_raw.lower() == 'unable to grade':
-        grade = 'Unable to Grade'
-    else:
-        grade = None
+    # Note: we OVERRIDE the LLM's grade and numeric_score below using
+    # deterministic computation from the hashtags. The LLM is unreliable
+    # at arithmetic — it routinely uses wrong point values or applies
+    # wrong grade thresholds. Hashtag selection is creative work (LLM's
+    # strength); scoring + grading is mechanical (better in code).
 
     confidence = (data.get('confidence') or '').strip().title()  # "High"/"Medium"/"Low"
     if confidence not in ('High', 'Medium', 'Low'):
         confidence = None
 
-    # numeric_score should be an integer >= 0
-    try:
-        numeric_score = int(data.get('numeric_score') or 0)
-        if numeric_score < 0:
-            numeric_score = None
-    except (TypeError, ValueError):
-        numeric_score = None
+    # Take the LLM's "Unable to Grade" signal if present — preserves the
+    # path for unidentifiable companies; otherwise we'll compute the grade
+    # from hashtags below.
+    grade_raw = (data.get('grade') or '').strip()
+    llm_says_unable = grade_raw.lower() == 'unable to grade'
 
     hashtags = data.get('hashtags') or []
     if isinstance(hashtags, str):
         hashtags = [h.strip() for h in hashtags.split() if h.strip().startswith('#')]
-    # Cap at 8 (defensive; V11 allows more but our schema doesn't need more)
-    hashtags = [h for h in hashtags if isinstance(h, str) and h.startswith('#')][:8]
+    # Keep only valid V11 hashtags — silently drop unknown/invented ones
+    hashtags = [
+        h for h in hashtags
+        if isinstance(h, str) and h in TAL_V11_HASHTAG_POINTS
+    ][:8]
+
+    # ── DETERMINISTIC scoring + grade (overrides LLM math) ──────────────
+    if llm_says_unable:
+        grade = 'Unable to Grade'
+        numeric_score = 0
+    else:
+        numeric_score, grade = _compute_v11_grade(hashtags, confidence)
 
     notes = data.get('research_notes') or []
     if not isinstance(notes, list):
