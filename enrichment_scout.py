@@ -39,6 +39,7 @@ import argparse
 import logging
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 import requests
 
@@ -56,15 +57,24 @@ except ImportError:
     SUPABASE_AVAILABLE = False
 
 # ── Config ────────────────────────────────────────────────────────────────────
-# Tavily key MUST come from env (.env locally, GitHub Secret in CI).
-# We don't fall back to any hardcoded value — that would leak into git history.
-TAVILY_API_KEY    = os.environ.get('TAVILY_API_KEY', '')
+# Web-search backend. Switched from Tavily to local Firecrawl 2026-06-09 after
+# hitting Tavily free-tier quota. Firecrawl is self-hosted on the user's Mac
+# Studio (already running for Scout), so unlimited / free / private.
+# Tavily kept as optional fallback when SEARCH_BACKEND='tavily' or Firecrawl unreachable.
+SEARCH_BACKEND    = os.environ.get('SEARCH_BACKEND', 'firecrawl').lower()
+FIRECRAWL_URL     = os.environ.get('FIRECRAWL_URL', 'http://localhost:3002')
+TAVILY_API_KEY    = os.environ.get('TAVILY_API_KEY', '')  # fallback only now
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
 OLLAMA_URL        = os.environ.get('OLLAMA_URL',   'http://localhost:11434')
 # Default model — falls back to whatever is locally available. Override with
 # `export OLLAMA_MODEL=...` to use a specific model (e.g. qwen2.5:14b).
 OLLAMA_MODEL      = os.environ.get('OLLAMA_MODEL', 'qwen3-coder:30b')
 CLAUDE_MODEL      = 'claude-3-5-haiku-20241022'
+
+# Persistent firmographic-search cache (SQLite). Same company name within
+# CACHE_TTL_DAYS doesn't re-search — saves time + quota for repeat companies.
+CACHE_DB_PATH      = os.environ.get('CACHE_DB_PATH', 'trigger_events.db')
+CACHE_TTL_DAYS     = int(os.environ.get('CACHE_TTL_DAYS', '30'))
 
 RATE_LIMIT_SECONDS = 1.2
 
@@ -238,13 +248,32 @@ def get_supabase():
 
 
 def check_required_keys():
-    """Fail fast with a clear message if required API keys aren't set."""
-    if not TAVILY_API_KEY:
+    """Fail fast with a clear message if the configured search backend isn't
+    reachable. Firecrawl (default) checked at runtime per-call; Tavily checked
+    here if explicitly selected."""
+    if SEARCH_BACKEND == 'tavily' and not TAVILY_API_KEY:
         sys.exit(
-            "TAVILY_API_KEY not set. Add to .env (local) or GitHub Secrets (CI):\n"
-            "  TAVILY_API_KEY=tvly-...\n"
-            "Get a free key at https://tavily.com"
+            "SEARCH_BACKEND=tavily but TAVILY_API_KEY is empty.\n"
+            "Either:\n"
+            "  - Add TAVILY_API_KEY to .env (get one at https://tavily.com), OR\n"
+            "  - Set SEARCH_BACKEND=firecrawl (default, uses local Firecrawl)"
         )
+    if SEARCH_BACKEND == 'firecrawl':
+        # Quick health probe — fail early if Firecrawl isn't running
+        try:
+            r = requests.get(f'{FIRECRAWL_URL}/', timeout=5)
+            if r.status_code >= 400:
+                sys.exit(
+                    f"Firecrawl at {FIRECRAWL_URL} returned HTTP {r.status_code}. "
+                    f"Is the firecrawl-api container running? "
+                    f"  docker compose ps firecrawl-api-1"
+                )
+        except Exception as e:
+            sys.exit(
+                f"Cannot reach Firecrawl at {FIRECRAWL_URL}: {e}\n"
+                f"  Check: docker compose ps firecrawl-api-1\n"
+                f"  Or set SEARCH_BACKEND=tavily to use Tavily instead."
+            )
 
 
 def check_columns(client):
@@ -303,17 +332,59 @@ def extract_event_companies(event: dict) -> list:
     return valid[:5]
 
 
-# ── Step 2 — Tavily web search ────────────────────────────────────────────────
+# ── Step 2 — Web search (Firecrawl primary, Tavily fallback, persistent cache) ─
 
-def tavily_search(company_name: str, industry_hint: str = '') -> dict:
-    """Search Tavily. industry_hint steers results toward the right entity.
-    Revenue + employee keywords in the query surface firmographic pages
-    (Crunchbase, ZoomInfo, Bloomberg, Owler) naturally."""
+def _build_search_query(company_name: str, industry_hint: str = '') -> str:
+    """Build the firmographic search query — shared by all backends so results
+    are equivalent regardless of which provider answers."""
     hint = f' {industry_hint}' if industry_hint else ''
-    query = (
+    return (
         f'"{company_name}"{hint} company official website headquarters '
         f'employees annual revenue size'
     )
+
+
+def _firecrawl_search(company_name: str, industry_hint: str = '') -> dict:
+    """Search via local self-hosted Firecrawl. Returns dict in the Tavily
+    response shape so downstream code doesn't change. Free, unlimited,
+    private. Default backend."""
+    query = _build_search_query(company_name, industry_hint)
+    try:
+        resp = requests.post(
+            f'{FIRECRAWL_URL}/v1/search',
+            json={'query': query, 'limit': 6},
+            timeout=25  # Firecrawl can be slower than Tavily on first cold-cache
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if not data.get('success'):
+            log.warning(f'  Firecrawl returned success=false for "{company_name}"')
+            return {}
+        # Adapt Firecrawl response → Tavily-shaped envelope
+        results = data.get('data') or []
+        return {
+            'answer':  '',  # Firecrawl doesn't summarize like Tavily; leave blank
+            'results': [
+                {
+                    'title':   r.get('title', ''),
+                    'url':     r.get('url', ''),
+                    # Firecrawl uses 'description'; Tavily extractor reads 'content'
+                    'content': (r.get('description') or '')[:400],
+                }
+                for r in results
+            ]
+        }
+    except Exception as e:
+        log.warning(f'  Firecrawl error for "{company_name}": {e}')
+        return {}
+
+
+def _tavily_search(company_name: str, industry_hint: str = '') -> dict:
+    """Search Tavily — kept as fallback when SEARCH_BACKEND='tavily' OR
+    Firecrawl is unreachable. Costs quota; use sparingly."""
+    if not TAVILY_API_KEY:
+        return {}
+    query = _build_search_query(company_name, industry_hint)
     try:
         resp = requests.post(
             'https://api.tavily.com/search',
@@ -331,6 +402,101 @@ def tavily_search(company_name: str, industry_hint: str = '') -> dict:
     except Exception as e:
         log.warning(f'  Tavily error for "{company_name}": {e}')
         return {}
+
+
+# ── Persistent search cache ─────────────────────────────────────────────────
+
+def _cache_key(company_name: str, industry_hint: str = '') -> str:
+    """Normalized cache key — case + whitespace insensitive."""
+    return f'{(company_name or "").strip().lower()}||{(industry_hint or "").strip().lower()}'
+
+
+def _cache_get(company_name: str, industry_hint: str = '') -> Optional[dict]:
+    """Look up cached search results. Returns None if not cached or stale."""
+    try:
+        import sqlite3
+        conn = sqlite3.connect(CACHE_DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS firmographic_cache (
+                cache_key TEXT PRIMARY KEY,
+                results_json TEXT,
+                cached_at TEXT
+            )
+        ''')
+        cur.execute(
+            'SELECT results_json, cached_at FROM firmographic_cache WHERE cache_key = ?',
+            (_cache_key(company_name, industry_hint),)
+        )
+        row = cur.fetchone()
+        conn.close()
+        if not row:
+            return None
+        cached_at = datetime.fromisoformat(row['cached_at'])
+        if (datetime.utcnow() - cached_at).days >= CACHE_TTL_DAYS:
+            return None  # stale
+        return json.loads(row['results_json'])
+    except Exception as e:
+        log.debug(f'  Cache lookup failed: {e}')
+        return None
+
+
+def _cache_set(company_name: str, industry_hint: str, results: dict) -> None:
+    """Persist search results to the cache."""
+    if not results or not results.get('results'):
+        return  # don't cache empty/failed results
+    try:
+        import sqlite3
+        conn = sqlite3.connect(CACHE_DB_PATH)
+        cur = conn.cursor()
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS firmographic_cache (
+                cache_key TEXT PRIMARY KEY,
+                results_json TEXT,
+                cached_at TEXT
+            )
+        ''')
+        cur.execute(
+            'INSERT OR REPLACE INTO firmographic_cache '
+            '(cache_key, results_json, cached_at) VALUES (?, ?, ?)',
+            (
+                _cache_key(company_name, industry_hint),
+                json.dumps(results),
+                datetime.utcnow().isoformat(),
+            )
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log.debug(f'  Cache store failed: {e}')
+
+
+def tavily_search(company_name: str, industry_hint: str = '') -> dict:
+    """Public search interface. Despite the legacy name, dispatches to the
+    configured SEARCH_BACKEND (firecrawl by default) with persistent caching.
+    Function name kept for backwards-compat with the rest of the file."""
+    # Cache check first — saves cost regardless of backend
+    cached = _cache_get(company_name, industry_hint)
+    if cached:
+        return cached
+
+    # Backend dispatch
+    if SEARCH_BACKEND == 'tavily':
+        results = _tavily_search(company_name, industry_hint)
+    elif SEARCH_BACKEND == 'firecrawl':
+        results = _firecrawl_search(company_name, industry_hint)
+        # Auto-fallback to Tavily if Firecrawl returned nothing AND Tavily is configured
+        if (not results or not results.get('results')) and TAVILY_API_KEY:
+            log.info('  → Firecrawl empty, falling back to Tavily')
+            results = _tavily_search(company_name, industry_hint)
+    else:
+        log.warning(f'  Unknown SEARCH_BACKEND={SEARCH_BACKEND!r}, defaulting to firecrawl')
+        results = _firecrawl_search(company_name, industry_hint)
+
+    if results and results.get('results'):
+        _cache_set(company_name, industry_hint, results)
+    return results
 
 
 # ── Step 3 — Extract firmographics from search results ───────────────────────

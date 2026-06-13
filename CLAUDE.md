@@ -35,14 +35,14 @@ Verify from inside Elon: `ls /projects/TeamAlbertTriggerEventSearch/CLAUDE.md` �
 The skills Elon needs for code review are **bundled by default** with the Hermes image and enabled out of the box. No `install` needed. Verify from the host:
 
 ```bash
-docker exec hermes-coder /opt/hermes/.venv/bin/hermes skills list 2>&1 | \
+docker exec hermes-elon /opt/hermes/.venv/bin/hermes skills list 2>&1 | \
   grep -E 'codebase-inspection|github-code-review|github-pr-workflow|systematic-debugging'
 ```
 
 Each should print a row with `builtin │ builtin │ enabled`. If ANY are missing or disabled, then (and only then) run:
 
 ```bash
-docker exec hermes-coder /opt/hermes/.venv/bin/hermes skills install <name>
+docker exec hermes-elon /opt/hermes/.venv/bin/hermes skills install <name>
 ```
 
 Note: from outside the container, `hermes` is not on `$PATH` — always use the full path `/opt/hermes/.venv/bin/hermes`. When Elon runs commands from inside his own chat interface (port 9185), the path is set up correctly already.
@@ -398,11 +398,31 @@ source venv/bin/activate
 - **Finance leadership override is two-layer** — once in the prompt (so LLM produces consistent justifications), once in code (so it can't be ignored). When changing one, change both.
 - **The dashboard's pandas reads from Supabase return NaN for missing JSONB fields**. Always guard with `if isinstance(x, float) and x != x:` or `_v()` helper. There's a history of NaN-related bugs.
 
-### Web-search backend: Tavily (and ONLY Tavily for this app)
+### Web-search backend: Firecrawl primary, Tavily fallback (changed 2026-06-09)
 
-This app uses **Tavily** (`TAVILY_API_KEY` in `.env` / GitHub Secrets) for the
-firmographic-enrichment step. Do NOT swap it for Firecrawl, even if you see
-Scout or another Hermes agent using Firecrawl.
+This app now uses **local self-hosted Firecrawl** (`http://localhost:3002`)
+as the primary firmographic-search backend. Tavily is kept as an optional
+fallback. Configured via `SEARCH_BACKEND` env var: `firecrawl` (default) or
+`tavily`.
+
+**Why we switched from Tavily**: Tavily free tier = 1,000 searches/month and
+we were hitting the cap. Firecrawl is already running on A.J.'s Mac Studio
+(for Scout), self-hosted, no quota.
+
+**Persistent SQLite cache** layered on top: same company name within 30 days
+doesn't re-search. Roughly 30-50% reduction in actual search calls when
+companies recur across events. Cache key = `(company_name + industry_hint).lower()`,
+stored in `trigger_events.db` → `firmographic_cache` table.
+
+**Auto-fallback chain**: if Firecrawl returns empty AND Tavily key is set,
+falls back to Tavily for that one call (logged). If neither responds, the
+event gets empty companies_data and stays unenriched.
+
+**Important context**:
+- **Scout (the `hermes-sales` Hermes agent)** uses Firecrawl directly for
+  its own open-ended sales research — separate from this app's pipeline.
+  Both apps now share the Firecrawl backend but for different workloads.
+- **The old "use ONLY Tavily for this app" guidance is OBSOLETE**.
 
 **Why the distinction matters:**
 - **Scout (the `hermes-sales` Hermes agent)** runs open-ended sales research
