@@ -975,7 +975,13 @@ def enrich_events(
     if not re_enrich and col_ok.get('enriched_at'):
         query = query.is_('enriched_at', 'null')
 
-    result = query.order('discovered_at', desc=True).execute()
+    # Process OLDEST first. When the queue grows beyond per-run capacity,
+    # newest-first ordering pushes old events further back each cycle until
+    # they rot indefinitely (e.g. events stuck for 9 days). Oldest-first
+    # guarantees forward progress on the queue's tail. Trade-off: freshest
+    # events take a bit longer to appear graded on the dashboard, but
+    # they're visible (just ungraded) much sooner regardless.
+    result = query.order('discovered_at', desc=False).execute()
     events = result.data or []
     if limit:
         events = events[:limit]
@@ -1184,12 +1190,15 @@ def regrade_only_events(limit: int = None, dry_run: bool = False):
     client = get_supabase()
     col_ok = check_columns(client)
 
-    # Fetch events that already have firmographic data
+    # Fetch events that already have firmographic data.
+    # Oldest-first (same rationale as enrich_events): if a regrade run is
+    # interrupted, we've made forward progress on the tail and the next
+    # run picks up where we left off.
     query = client.table('events').select(
         'id, company_name, event_type, title, description, '
         'source_url, companies_data'
     ).not_.is_('companies_data', 'null')
-    result = query.order('discovered_at', desc=True).execute()
+    result = query.order('discovered_at', desc=False).execute()
     events = result.data or []
     if limit:
         events = events[:limit]
