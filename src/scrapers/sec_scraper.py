@@ -85,7 +85,16 @@ class SECScraper(BaseScraper):
         self.session.headers.update({'User-Agent': self.sec_user_agent})
 
         # Per-CIK address cache so we don't repeatedly look up the same filer
-        self._cik_state_cache: Dict[str, str] = {}
+        # Per-CIK address+SIC cache so we don't repeatedly look up the same
+        # filer. Value shape: {'state': str, 'sic': str, 'sic_desc': str}.
+        self._cik_info_cache: Dict[str, Dict[str, str]] = {}
+        # Backward-compat alias (some code paths read this; safe to keep as
+        # the same underlying dict but the values are now dicts, so don't
+        # use this directly — call _lookup_filer_info()).
+        self._cik_state_cache = self._cik_info_cache  # type: ignore[assignment]
+
+        # Counter for blocked-by-SIC events (for the source_status reporting)
+        self._sic_blocked_count: int = 0
 
         # Set of accession numbers (adsh) for Item 5.02 filings that also
         # mention "Chief Financial Officer" — pre-fetched once per scrape
@@ -106,6 +115,9 @@ class SECScraper(BaseScraper):
         # Prefetch CFO-related Item 5.02 filing accession numbers so we can
         # correctly classify them at hit-conversion time. One extra EFTS call.
         self._cfo_adsh_set = self._fetch_cfo_filing_adsh_set()
+
+        # Reset per-run counter so the count reflects this scrape only
+        self._sic_blocked_count = 0
 
         all_events: List[TriggerEvent] = []
         for item_code, item_def in ITEM_DEFINITIONS.items():
@@ -130,6 +142,10 @@ class SECScraper(BaseScraper):
                     'events_found':  0,
                 })
                 print(f'  - {source_label}: ERROR {e}')
+
+        if self._sic_blocked_count > 0:
+            print(f'  - SEC SIC prefilter: blocked {self._sic_blocked_count} '
+                  f'off-target filings before enrichment')
 
         return all_events
 
@@ -198,6 +214,90 @@ class SECScraper(BaseScraper):
             print(f'  - SEC CFO prefetch failed (defaulting to EXEC for all): {e}')
             return adsh_set  # return whatever we got before the error
 
+    # ── SIC code prefilter ───────────────────────────────────────────────
+    # Block off-target industries at SCRAPE time using the filer's SIC code
+    # from EDGAR submissions JSON. Stops Pharma/Biotech/Software/Logistics
+    # events from going through expensive Tavily+Ollama enrichment only to
+    # be deleted by the post-enrichment industry filter.
+    #
+    # SIC codes per https://www.sec.gov/info/edgar/siccodes.htm
+    # Each entry maps the SIC (or SIC range) to a human-readable reason
+    # that gets logged when an event is blocked.
+    BLOCKED_SIC_CODES: Dict[str, str] = {
+        # ── Mining / metals / extractive ──────────────────────────────
+        '1000': 'Metal Mining',
+        '1040': 'Gold Mining',
+        '1044': 'Silver Mining',
+        '1090': 'Misc Metal Mining',
+        '1311': 'Crude Petroleum & Natural Gas',
+        '1381': 'Drilling Oil & Gas Wells',
+        '1389': 'Oil & Gas Field Services',
+        '1400': 'Mining & Quarrying — Nonmetallic',
+        '1422': 'Crushed & Broken Limestone',
+        '1623': 'Water/Sewer/Pipeline Construction',
+        '2911': 'Petroleum Refining',
+        '2990': 'Misc Petroleum Products',
+        # ── Heavy industry / metals ───────────────────────────────────
+        '3310': 'Steel Works & Blast Furnaces',
+        '3312': 'Steel Works',
+        '3317': 'Steel Pipe & Tubes',
+        '3320': 'Iron & Steel Foundries',
+        '3330': 'Primary Nonferrous Metals',
+        '3334': 'Primary Aluminum',
+        '3341': 'Secondary Smelting & Refining',
+        # ── Software / Computer Services ──────────────────────────────
+        '7370': 'Computer Services',
+        '7371': 'Computer Services — Prepackaged Software',
+        '7372': 'Prepackaged Software',
+        '7374': 'Computer Processing & Data Preparation',
+        '7389': 'Services — Business Services NEC',
+        # ── Computer Hardware / Semis ─────────────────────────────────
+        '3576': 'Computer Communications Equipment',
+        '3577': 'Computer Peripheral Equipment',
+        '3674': 'Semiconductors & Related Devices',
+        # ── Healthcare / Pharma / Biotech / MedDev ────────────────────
+        '2834': 'Pharmaceutical Preparations',
+        '2835': 'In Vitro & In Vivo Diagnostic Substances',
+        '2836': 'Biological Products (Biotechnology)',
+        '3841': 'Surgical & Medical Instruments',
+        '3842': 'Orthopedic, Prosthetic, & Surgical Appliances',
+        '3845': 'Electromedical & Electrotherapeutic Apparatus',
+        '8000': 'Health Services',
+        '8050': 'Nursing & Personal Care Facilities',
+        '8060': 'Hospitals',
+        '8062': 'General Medical & Surgical Hospitals',
+        '8071': 'Medical Laboratories',
+        '8090': 'Health Services',
+        '8731': 'Commercial Physical & Biological Research',
+        # ── Logistics / Transportation ────────────────────────────────
+        '4011': 'Railroads',
+        '4213': 'Trucking',
+        '4400': 'Water Transportation',
+        '4412': 'Deep Sea Foreign Transportation of Freight',
+        '4500': 'Air Transportation',
+        '4512': 'Air Transportation — Scheduled',
+        '4513': 'Air Couriers',
+        '4581': 'Airports',
+        '4700': 'Transportation Services',
+        '4731': 'Freight Transportation Arrangement',
+        # ── Utilities ─────────────────────────────────────────────────
+        '4900': 'Electric, Gas, & Sanitary Services',
+        '4911': 'Electric Services',
+        '4922': 'Natural Gas Transmission',
+        '4923': 'Natural Gas Distribution',
+        '4924': 'Natural Gas Distribution',
+        '4931': 'Electric & Other Services Combined',
+        '4932': 'Gas & Other Services Combined',
+        '4941': 'Water Supply',
+        # ── Hospitality / Entertainment ───────────────────────────────
+        '5812': 'Eating Places (Restaurants)',
+        '7000': 'Hotels & Other Lodging',
+        '7011': 'Hotels & Motels',
+        '7990': 'Amusement & Recreation Services',
+        '7993': 'Coin-Operated Amusement Devices',
+        '7997': 'Membership Sports & Recreation Clubs',
+    }
+
     def _search_efts(self, item_code: str) -> List[Dict[str, Any]]:
         """Query SEC EFTS for 8-K filings tagged with a specific item."""
         startdt = (date.today() - timedelta(days=self.lookback_days)).isoformat()
@@ -255,14 +355,27 @@ class SECScraper(BaseScraper):
             f'{int(cik)}/{adsh_clean}/{adsh}-index.htm'
         )
 
-        # Filer's business state — used for territory filter
-        state = self._lookup_filer_state(cik)
+        # Filer info (state + SIC) — one HTTP call, used for both checks
+        filer_info = self._lookup_filer_info(cik)
+        state = filer_info.get('state', '')
         if not state:
             return None
         if state.upper() not in self.territory_codes:
             return None
 
-        # Skip industry-excluded targets where applicable
+        # SIC code prefilter — blocks off-target industries at scrape time
+        # so they never go through expensive Tavily+Ollama enrichment.
+        # Aligns with POST_ENRICHMENT_INDUSTRY_BLOCK in enrichment_scout.py.
+        sic = filer_info.get('sic', '')
+        if sic and sic in self.BLOCKED_SIC_CODES:
+            self._sic_blocked_count += 1
+            reason = self.BLOCKED_SIC_CODES[sic]
+            sic_desc = filer_info.get('sic_desc', reason)
+            print(f'    🚫 SIC {sic} ({sic_desc}) — blocked at scrape time: '
+                  f'{company_name[:40]}')
+            return None
+
+        # Skip industry-excluded targets where applicable (name-based)
         full_text = ' '.join([company_name, source.get('file_type', '')])
         _matches_target, matches_excluded = self.matches_industry(full_text)
         if matches_excluded:
@@ -301,13 +414,17 @@ class SECScraper(BaseScraper):
             matched_regions=[state],
         )
 
-    # ── Helper: look up filer's business state ────────────────────────────
+    # ── Helper: look up filer's business state + SIC code ─────────────────
 
-    def _lookup_filer_state(self, cik: str) -> str:
-        """Look up a filer's business state from EDGAR submissions JSON.
-        Cached per-run. Returns empty string if unavailable."""
-        if cik in self._cik_state_cache:
-            return self._cik_state_cache[cik]
+    def _lookup_filer_info(self, cik: str) -> Dict[str, str]:
+        """Look up a filer's business state AND SIC code from EDGAR
+        submissions JSON. Single HTTP call gives us both. Cached per-run.
+        Returns {} on any error.
+
+        Result shape: {'state': 'NY', 'sic': '6020', 'sic_desc': 'Banks'}
+        """
+        if cik in self._cik_info_cache:
+            return self._cik_info_cache[cik]
 
         try:
             url = self.SUBMISSIONS_URL.format(cik=int(cik))
@@ -316,11 +433,19 @@ class SECScraper(BaseScraper):
             data = resp.json()
             addresses = data.get('addresses') or {}
             business = addresses.get('business') or {}
-            state = (business.get('stateOrCountry') or '').strip().upper()
-            self._cik_state_cache[cik] = state
+            info = {
+                'state':    (business.get('stateOrCountry') or '').strip().upper(),
+                'sic':      str(data.get('sic') or '').strip(),
+                'sic_desc': (data.get('sicDescription') or '').strip(),
+            }
+            self._cik_info_cache[cik] = info
             # SEC rate-limit politeness
             time.sleep(0.12)
-            return state
-        except Exception as e:
-            self._cik_state_cache[cik] = ''
-            return ''
+            return info
+        except Exception:
+            self._cik_info_cache[cik] = {}
+            return {}
+
+    def _lookup_filer_state(self, cik: str) -> str:
+        """Backward-compatible wrapper around _lookup_filer_info."""
+        return self._lookup_filer_info(cik).get('state', '')
