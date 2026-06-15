@@ -139,8 +139,34 @@ def check_supabase():
         return FAIL, f'Supabase query failed: {e}'
 
 
+def _freshness_thresholds_for_dow(dow: int):
+    """Day-of-week aware thresholds (warn_hours, fail_hours) for scrape freshness.
+
+    Our underlying sources (SEC EDGAR, press wires, job boards) are quiet on
+    weekends — SEC accepts no Sunday filings, PR wires get minimal weekend
+    releases, etc. Historical data shows Sunday produces ~3% of weekday event
+    volume, Saturday ~33%. Monday is a catch-up day where the most-recent
+    event can legitimately date back to Friday evening.
+
+    A flat 8h FAIL threshold mis-fires every Monday morning. These thresholds
+    align with the actual data pattern.
+
+    dow: 0 = Monday, 6 = Sunday (per datetime.weekday()).
+    """
+    if dow == 0:  # Monday — catch-up day; oldest event may be Friday PM
+        return 40, 65
+    if dow == 5:  # Saturday — sources quiet but cron still firing
+        return 16, 30
+    if dow == 6:  # Sunday — sources nearly dead
+        return 30, 56
+    return 5, 8  # Tue–Fri normal weekday
+
+
 def check_scrape_freshness():
-    """Has a scrape happened recently? Look at most recent discovered_at."""
+    """Has a scrape happened recently? Look at most recent discovered_at.
+
+    Thresholds vary by day-of-week because the underlying news/SEC/job sources
+    are quiet on weekends (see _freshness_thresholds_for_dow docstring)."""
     client = get_supabase()
     if not client:
         return WARN, 'Supabase unavailable — cannot check'
@@ -153,12 +179,26 @@ def check_scrape_freshness():
         dt = datetime.fromisoformat(last.replace('Z', '+00:00'))
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-        age_hr = (datetime.now(timezone.utc) - dt).total_seconds() / 3600
-        if age_hr > 8:
-            return FAIL, f'Last scrape was {age_hr:.1f}h ago — GitHub Actions may be broken (cron is every 4h)'
-        if age_hr > 5:
-            return WARN, f'Last scrape was {age_hr:.1f}h ago — slightly stale'
-        return PASS, f'Last scrape {age_hr:.1f}h ago'
+        now = datetime.now(timezone.utc)
+        age_hr = (now - dt).total_seconds() / 3600
+        dow = now.weekday()
+        dow_name = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][dow]
+        warn_hr, fail_hr = _freshness_thresholds_for_dow(dow)
+
+        if age_hr > fail_hr:
+            return FAIL, (
+                f'Last scrape was {age_hr:.1f}h ago — exceeds {fail_hr}h '
+                f'fail threshold for {dow_name}. GitHub Actions may be broken.'
+            )
+        if age_hr > warn_hr:
+            return WARN, (
+                f'Last scrape was {age_hr:.1f}h ago — exceeds {warn_hr}h '
+                f'warn threshold for {dow_name} (normal on Mon mornings).'
+            )
+        return PASS, (
+            f'Last scrape {age_hr:.1f}h ago '
+            f'(within {warn_hr}h {dow_name} threshold)'
+        )
     except Exception as e:
         return WARN, f'Could not check scrape freshness: {e}'
 
