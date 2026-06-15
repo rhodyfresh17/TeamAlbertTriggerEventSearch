@@ -89,7 +89,7 @@ Elon will: pull the repo, walk recent diffs, apply the §8 playbook, and report.
 This is a **sales lead intelligence tool** for A.J. Albert's NetSuite Up-Market Sales team. It:
 
 1. **Scrapes** news/SEC/job sources every 4 hours (via GitHub Actions cron)
-2. **Enriches** each event with firmographic data (Tavily + local Ollama) — extracts companies involved, industry, size, revenue, HQ, LinkedIn
+2. **Enriches** each event with firmographic data (Firecrawl primary + Tavily fallback + local Ollama) — extracts companies involved, industry, size, revenue, HQ, LinkedIn
 3. **Grades** each event with TAL V10.2 (A/B/C/D fit score for NetSuite Up-Market)
 4. **Surfaces** results on a Streamlit Cloud dashboard at https://teamalbertfy27leads.streamlit.app/ — password-protected, filterable by region, revenue segment, grade
 
@@ -130,7 +130,7 @@ User: **A.J. Albert** — NetSuite Up-Market Sales rep on Team Albert. Non-techn
 │                                                                       │
 │  Per unenriched event:                                                │
 │   1. LLM extracts companies + roles (Ollama qwen3-coder:30b)          │
-│   2. Tavily search per unique company name                            │
+│   2. Firecrawl search per unique company (Tavily fallback if empty) │
 │   3. LLM extracts firmographics → companies_data JSONB                │
 │   4. POST-ENRICHMENT industry filter — DELETE if industry blocked     │
 │      (catches mining leaks the scrape-time text filter misses)        │
@@ -224,8 +224,8 @@ Hashtag definitions are STRICT (see prompt) — there's a history of the LLM stu
 ### Enrichment + grading
 - **`enrichment_scout.py`** — THE most important file outside the scraper. Reads unenriched events from Supabase, runs the 4-step pipeline (extract → search → firmographics → grade), writes back. **Has THREE modes:**
   - default — enrich only new events
-  - `--re-enrich` — full re-pull (calls Tavily, costs quota)
-  - `--regrade-only` — re-apply grading + industry filter + event_type reclassification using EXISTING companies_data (NO Tavily calls, free)
+  - `--re-enrich` — full re-pull (hits the configured search backend = Firecrawl by default; Tavily quota only consumed on fallbacks, currently ~3% of searches)
+  - `--regrade-only` — re-apply grading + industry filter + event_type reclassification using EXISTING companies_data (NO search-API calls, free)
 - **`run_enrichment.sh`** + **`~/Library/LaunchAgents/com.teamalbert.enrichment.plist`** — launchd wrapper that fires enrichment every 4 hours on the Mac.
 
 ### Sync + dashboard
@@ -372,8 +372,8 @@ source venv/bin/activate
 | **Health check (weekly — ~60s)** | `python monitor_health.py --weekly` |
 | Manual scrape cycle (locally, mirrors GitHub Actions) | `python -m src.main` |
 | Enrich only NEW events | `python enrichment_scout.py` |
-| Re-grade ALL events (free, no Tavily) | `python enrichment_scout.py --regrade-only` |
-| Full re-enrich (uses Tavily quota!) | `python enrichment_scout.py --re-enrich` |
+| Re-grade ALL events (free, no search API) | `python enrichment_scout.py --regrade-only` |
+| Full re-enrich (hits Firecrawl by default; Tavily only on fallbacks ~3%) | `python enrichment_scout.py --re-enrich` |
 | Cleanup industry leaks + dupes (dry-run) | `python cleanup_legacy_events.py` |
 | Cleanup — actually delete | `python cleanup_legacy_events.py --apply` |
 | Run dashboard locally | `streamlit run dashboard.py` |

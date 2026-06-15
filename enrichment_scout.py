@@ -39,7 +39,7 @@ import argparse
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict
 
 import requests
 
@@ -472,6 +472,18 @@ def _cache_set(company_name: str, industry_hint: str, results: dict) -> None:
         log.debug(f'  Cache store failed: {e}')
 
 
+# Per-run counters for the actual backend each search hit. Reset to 0
+# at the start of every enrich_events() / regrade_only_events() run.
+# The main loop reads these when printing the final summary.
+SEARCH_COUNTS: Dict[str, int] = {'cache': 0, 'firecrawl': 0, 'tavily': 0}
+
+
+def reset_search_counts() -> None:
+    """Zero the SEARCH_COUNTS dict — call at the start of each run."""
+    for k in SEARCH_COUNTS:
+        SEARCH_COUNTS[k] = 0
+
+
 def tavily_search(company_name: str, industry_hint: str = '') -> dict:
     """Public search interface. Despite the legacy name, dispatches to the
     configured SEARCH_BACKEND (firecrawl by default) with persistent caching.
@@ -479,19 +491,24 @@ def tavily_search(company_name: str, industry_hint: str = '') -> dict:
     # Cache check first — saves cost regardless of backend
     cached = _cache_get(company_name, industry_hint)
     if cached:
+        SEARCH_COUNTS['cache'] += 1
         return cached
 
     # Backend dispatch
     if SEARCH_BACKEND == 'tavily':
+        SEARCH_COUNTS['tavily'] += 1
         results = _tavily_search(company_name, industry_hint)
     elif SEARCH_BACKEND == 'firecrawl':
+        SEARCH_COUNTS['firecrawl'] += 1
         results = _firecrawl_search(company_name, industry_hint)
         # Auto-fallback to Tavily if Firecrawl returned nothing AND Tavily is configured
         if (not results or not results.get('results')) and TAVILY_API_KEY:
             log.info('  → Firecrawl empty, falling back to Tavily')
+            SEARCH_COUNTS['tavily'] += 1
             results = _tavily_search(company_name, industry_hint)
     else:
         log.warning(f'  Unknown SEARCH_BACKEND={SEARCH_BACKEND!r}, defaulting to firecrawl')
+        SEARCH_COUNTS['firecrawl'] += 1
         results = _firecrawl_search(company_name, industry_hint)
 
     if results and results.get('results'):
@@ -995,7 +1012,7 @@ def enrich_events(
     print()
 
     firm_cache: dict = {}
-    tavily_calls = 0
+    reset_search_counts()
     ok = fail = 0
 
     for idx, event in enumerate(events, 1):
@@ -1055,7 +1072,6 @@ def enrich_events(
                 log.info(f'  → Searching: {name}')
                 if not dry_run:
                     firm_cache[cache_key] = enrich_one_company(name, industry_hint)
-                    tavily_calls += 1
                     time.sleep(RATE_LIMIT_SECONDS)
                 else:
                     firm_cache[cache_key] = {
@@ -1169,9 +1185,11 @@ def enrich_events(
                 fail += 1
 
     print()
+    sc = SEARCH_COUNTS
     log.info(
-        f'Done — enriched: {ok}, failed: {fail}, '
-        f'Tavily searches: {tavily_calls}'
+        f'Done — enriched: {ok}, failed: {fail}  ·  '
+        f'Searches: {sum(sc.values())} '
+        f'(cache:{sc["cache"]} firecrawl:{sc["firecrawl"]} tavily:{sc["tavily"]})'
     )
 
 
@@ -1303,7 +1321,7 @@ def regrade_only_events(limit: int = None, dry_run: bool = False):
         f'Done — regraded: {ok}, deleted (industry block): {deleted}, '
         f'event_type → cfo_hire: {upgraded}, failed: {fail}'
     )
-    log.info('Tavily API calls used: 0  (regrade-only mode)')
+    log.info('Search API calls (Firecrawl/Tavily): 0  (regrade-only mode)')
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
