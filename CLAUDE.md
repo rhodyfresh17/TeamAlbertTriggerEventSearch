@@ -6,6 +6,40 @@ You are an AI agent (Elon, or any successor) inheriting this codebase. This docu
 
 ---
 
+## ⚠️ READ THIS FIRST — two rules that prevent the most common mistakes
+
+**RULE 1 — ALWAYS activate the venv before running ANY Python script.**
+Every Python script in this repo (cleanup_legacy_events.py, enrichment_scout.py,
+monitor_health.py, supabase_sync.py, etc.) depends on packages installed in the
+project's virtual environment (`venv/`), NOT the system Python. The deps include
+`yaml` (pyyaml), `supabase`, `python-dotenv`, `requests`, `streamlit`, etc.
+
+If you run `python3 some_script.py` directly you'll get
+`ModuleNotFoundError: No module named 'yaml'` (or supabase, etc.). The fix is
+NOT to pip-install anything — the venv already has everything. The fix is to
+activate the venv first:
+
+```bash
+cd ~/Shared/AI-BOTS/TeamAlbertTriggerEventSearch   # or /projects/TeamAlbertTriggerEventSearch in a container
+source venv/bin/activate
+python3 cleanup_legacy_events.py
+```
+
+NEVER tell the user to `pip install` packages into their system Python — it
+pollutes their Mac and is unnecessary. The venv is the answer 100% of the time.
+(These scripts run on the MAC, where the venv lives — not inside a Hermes
+container, which has no venv and no Mac-side deps. See §4b for why Hermes agents
+read logs but don't execute these scripts.)
+
+**RULE 2 — `--apply` DELETES. It is never a "test".**
+`cleanup_legacy_events.py` with no flags is a DRY RUN (safe — shows what would be
+deleted, changes nothing). Adding `--apply` actually deletes from Supabase.
+`--limit 100 --apply` deletes up to 100 events — that is NOT a "test", it is a
+real deletion of up to 100 rows. The only safe "test" is the no-flag dry run.
+Never label any `--apply` command as a test.
+
+---
+
 ## §A. ONE-TIME SETUP FOR HERMES AGENTS (Elon — read this first)
 
 Skip this section if you're a Claude agent (you already have filesystem access). For Hermes agents (Elon and successors), three things need to be in place once before you can review/maintain this repo:
