@@ -818,7 +818,9 @@ territory:
       - "Wells Fargo"
       - "Citigroup"
       - "Citibank"
-      - "Citi"
+      # NOTE: do NOT add bare "Citi" — it substring-matches "CITIzens..."
+      # community banks (e.g. Citizens Financial Services Inc, a small PA
+      # bank that IS a target). Keep the specific entity names only.
       - "Goldman Sachs"
       - "Morgan Stanley"
       - "U.S. Bancorp"
@@ -843,7 +845,10 @@ territory:
       - "KeyBank"
       - "Regions Financial"
       - "Regions Bank"
-      - "Citizens Financial"
+      # Use the FULL entity name so we exclude the $200B Citizens Financial
+      # Group (CFG) WITHOUT collateral-matching the small "Citizens Financial
+      # Services Inc" (CZFS, a PA community bank that IS a target).
+      - "Citizens Financial Group"
       - "Citizens Bank"
       - "M&T Bank"
       - "Huntington Bancshares"
