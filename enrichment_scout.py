@@ -1113,13 +1113,44 @@ def enrich_events(
         if blocked:
             log.info(
                 f'  🚫 Post-enrichment block — industry '
-                f'"{primary.get("industry")}" matched "{kw}". Deleting event.'
+                f'"{primary.get("industry")}" matched "{kw}". Soft-deleting.'
             )
             if not dry_run:
+                # SOFT-DELETE: set blocked_at + enriched_at so:
+                #  - dashboard filters out (blocked_at IS NOT NULL)
+                #  - next enrichment skips (enriched_at IS NOT NULL)
+                #  - next GHA scrape's supabase_sync upsert is a no-op
+                #    (row still exists, blocked_at/enriched_at preserved)
+                # Hard-DELETE was getting silently reverted by the next
+                # supabase_sync's upsert from the GHA-cached SQLite.
+                soft_delete_payload = {
+                    'blocked_at':     datetime.utcnow().isoformat(),
+                    'blocked_reason': f'industry: {primary.get("industry")} (matched "{kw}")',
+                    'enriched_at':    datetime.utcnow().isoformat(),
+                }
                 try:
-                    client.table('events').delete().eq('id', eid).execute()
+                    client.table('events').update(soft_delete_payload).eq(
+                        'id', eid).execute()
                 except Exception as e:
-                    log.error(f'    Delete failed: {e}')
+                    if 'does not exist' in str(e):
+                        # Fall back to hard delete if blocked_at column not yet
+                        # migrated. User will see events re-appear until they
+                        # run the migration SQL.
+                        log.warning(
+                            '    blocked_at column missing — falling back to '
+                            'hard DELETE (will re-appear on next sync until '
+                            'you add the column). Migration SQL:\n'
+                            '      ALTER TABLE events ADD COLUMN IF NOT EXISTS '
+                            'blocked_at     TIMESTAMPTZ;\n'
+                            '      ALTER TABLE events ADD COLUMN IF NOT EXISTS '
+                            'blocked_reason TEXT;'
+                        )
+                        try:
+                            client.table('events').delete().eq('id', eid).execute()
+                        except Exception as e2:
+                            log.error(f'    Hard-delete fallback also failed: {e2}')
+                    else:
+                        log.error(f'    Soft-delete failed: {e}')
             ok += 1  # count as processed (not failed)
             continue
 
@@ -1260,15 +1291,31 @@ def regrade_only_events(limit: int = None, dry_run: bool = False):
         if blocked:
             log.info(
                 f'  🚫 Industry "{primary.get("industry")}" matched "{kw}" '
-                f'→ delete'
+                f'→ soft-delete'
             )
             if not dry_run:
+                # Same SOFT-DELETE pattern as enrich_events — see comment there.
+                # Hard-DELETE was undone by next supabase_sync upsert.
+                soft_delete_payload = {
+                    'blocked_at':     datetime.utcnow().isoformat(),
+                    'blocked_reason': f'industry: {primary.get("industry")} (matched "{kw}")',
+                    'enriched_at':    datetime.utcnow().isoformat(),
+                }
                 try:
-                    client.table('events').delete().eq('id', eid).execute()
+                    client.table('events').update(soft_delete_payload).eq(
+                        'id', eid).execute()
                     deleted += 1
                 except Exception as e:
-                    log.error(f'  Delete failed: {e}')
-                    fail += 1
+                    if 'does not exist' in str(e):
+                        try:
+                            client.table('events').delete().eq('id', eid).execute()
+                            deleted += 1
+                        except Exception as e2:
+                            log.error(f'  Hard-delete fallback failed: {e2}')
+                            fail += 1
+                    else:
+                        log.error(f'  Soft-delete failed: {e}')
+                        fail += 1
             else:
                 deleted += 1
             continue

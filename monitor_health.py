@@ -209,11 +209,20 @@ def check_enrichment_lag():
     if not client:
         return WARN, 'Supabase unavailable — cannot check'
     try:
-        # Events that have no enriched_at AND are >5h old → enrichment is lagging
+        # Events that have no enriched_at AND are >5h old → enrichment is lagging.
+        # Exclude soft-deleted (blocked_at IS NOT NULL) events — those are
+        # intentionally left in the table as tombstones to prevent supabase_sync
+        # from re-creating deleted rows, but they don't represent enrichment work
+        # to be done. Filter only applies if blocked_at column exists.
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=5)).isoformat()
-        result = client.table('events').select(
+        q = client.table('events').select(
             'id', count='exact'
-        ).is_('enriched_at', 'null').lt('discovered_at', cutoff).execute()
+        ).is_('enriched_at', 'null').lt('discovered_at', cutoff)
+        try:
+            q = q.is_('blocked_at', 'null')
+        except Exception:
+            pass  # column not yet present (pre-migration)
+        result = q.execute()
         stale = result.count or 0
         if stale > 10:
             return FAIL, f'{stale} events unenriched after 5+ hours — launchd cron may be broken'

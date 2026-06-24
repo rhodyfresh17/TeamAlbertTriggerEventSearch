@@ -570,6 +570,14 @@ def load_events(days: int = 30, search: str = None) -> pd.DataFrame:
         query = client.table('events').select('*')
         cutoff_date = (datetime.now() - timedelta(days=days)).isoformat()
         query = query.gte('discovered_at', cutoff_date)
+        # Hide soft-deleted (industry-blocked) events. They stay in the table
+        # so supabase_sync doesn't recreate them via upsert, but the user
+        # never sees them. The is_('blocked_at', 'null') filter is omitted
+        # if the column doesn't exist yet (pre-migration).
+        try:
+            query = query.is_('blocked_at', 'null')
+        except Exception:
+            pass  # column not yet present; will start filtering after migration
         response = query.order('discovered_at', desc=True).limit(1000).execute()
 
         if not response.data:
