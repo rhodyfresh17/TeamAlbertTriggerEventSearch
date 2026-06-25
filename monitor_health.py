@@ -54,9 +54,13 @@ PLAIN = {PASS: 'pass', WARN: 'warn', FAIL: 'fail'}
 
 def check_env_creds():
     """Verify required env vars are set (without revealing values)."""
-    required = ['SUPABASE_URL', 'TAVILY_API_KEY']
+    # Firecrawl (local, free) is the PRIMARY search backend — it has no API
+    # key (it's a local container), so the only hard requirement is Supabase.
+    # TAVILY_API_KEY is OPTIONAL — it's just the ~3% fallback when Firecrawl
+    # returns empty. Adzuna keys are optional (job-board source).
+    required = ['SUPABASE_URL']
     optional = ['SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_KEY',
-                'ADZUNA_APP_ID', 'ADZUNA_APP_KEY']
+                'TAVILY_API_KEY', 'ADZUNA_APP_ID', 'ADZUNA_APP_KEY']
     missing_req = [k for k in required if not os.environ.get(k)]
     if missing_req:
         return FAIL, f'Missing required env vars: {", ".join(missing_req)}'
@@ -70,11 +74,41 @@ def check_env_creds():
     return PASS, 'All env vars set'
 
 
-def check_tavily_api():
-    """Make a tiny Tavily call to confirm API works + key is valid."""
+def check_firecrawl():
+    """Verify the PRIMARY search backend (local Firecrawl) is reachable.
+    This is the one that matters — ~97% of enrichment searches go here."""
+    url = os.environ.get('FIRECRAWL_URL', 'http://localhost:3002')
+    try:
+        # Hit the root — Firecrawl returns 200 with a small JSON banner.
+        resp = requests.get(f'{url}/', timeout=8)
+        if resp.status_code == 200:
+            return PASS, f'Firecrawl reachable at {url} (primary search backend)'
+        return WARN, (
+            f'Firecrawl at {url} returned HTTP {resp.status_code} — '
+            f'enrichment will lean on the Tavily fallback. '
+            f'Check: docker compose ps firecrawl-api-1'
+        )
+    except requests.ConnectionError:
+        return FAIL, (
+            f'Firecrawl not reachable at {url} — enrichment search backend '
+            f'is DOWN. Start it: docker compose up -d firecrawl-api-1'
+        )
+    except requests.Timeout:
+        return WARN, f'Firecrawl slow to respond (>8s) at {url}'
+    except Exception as e:
+        return WARN, f'Firecrawl check error: {e}'
+
+
+def check_tavily_fallback():
+    """Check the OPTIONAL Tavily fallback. Tavily is only used ~3% of the
+    time (when Firecrawl returns empty), so problems here are INFORMATIONAL,
+    never a hard failure — a depleted Tavily quota does not break enrichment.
+
+    Returns PASS when healthy or when not configured (it's optional). Returns
+    WARN only to surface a depleted/invalid key for awareness, not alarm."""
     key = os.environ.get('TAVILY_API_KEY', '')
     if not key:
-        return FAIL, 'TAVILY_API_KEY not set'
+        return PASS, 'Tavily fallback not configured (optional — Firecrawl is primary)'
     try:
         resp = requests.post(
             'https://api.tavily.com/search',
@@ -83,16 +117,27 @@ def check_tavily_api():
             timeout=10
         )
         if resp.status_code == 200:
-            return PASS, 'Tavily API responsive (HTTP 200)'
-        if resp.status_code == 401 or resp.status_code == 403:
-            return FAIL, f'Tavily key invalid (HTTP {resp.status_code}) — rotate or update .env'
-        if resp.status_code == 429:
-            return WARN, 'Tavily rate-limited (HTTP 429) — quota near/at limit'
-        return WARN, f'Tavily HTTP {resp.status_code}: {resp.text[:80]}'
+            return PASS, 'Tavily fallback healthy (used for ~3% of searches)'
+        if resp.status_code in (401, 403):
+            return WARN, (
+                f'Tavily fallback key invalid (HTTP {resp.status_code}) — '
+                f'not urgent; Firecrawl handles ~97% of searches. '
+                f'Rotate the key when convenient.'
+            )
+        if resp.status_code in (429, 432):
+            # Quota exhaustion on the free tier is the EXPECTED steady state,
+            # not a problem — Firecrawl handles ~97% of searches. Report as
+            # PASS so it doesn't trigger a daily alert; the message still
+            # carries the info for anyone reading the full report.
+            return PASS, (
+                f'Tavily fallback quota used up (HTTP {resp.status_code}) — '
+                f'expected on free tier, enrichment unaffected (Firecrawl primary)'
+            )
+        return WARN, f'Tavily fallback HTTP {resp.status_code}: {resp.text[:60]}'
     except requests.Timeout:
-        return WARN, 'Tavily timeout (>10s) — service may be slow'
+        return PASS, 'Tavily fallback slow (>10s) — non-critical, Firecrawl is primary'
     except Exception as e:
-        return FAIL, f'Tavily call failed: {e}'
+        return WARN, f'Tavily fallback check error (non-critical): {e}'
 
 
 def check_ollama():
@@ -366,7 +411,8 @@ def run_checks(mode: str):
     """Return list of (check_name, status, message)."""
     checks = [
         ('Environment credentials',     check_env_creds),
-        ('Tavily API',                  check_tavily_api),
+        ('Firecrawl (search backend)',  check_firecrawl),
+        ('Tavily fallback',             check_tavily_fallback),
         ('Ollama (local LLM)',          check_ollama),
         ('Supabase connection',         check_supabase),
         ('Scrape freshness',            check_scrape_freshness),
