@@ -184,65 +184,79 @@ def check_supabase():
         return FAIL, f'Supabase query failed: {e}'
 
 
-def _freshness_thresholds_for_dow(dow: int):
-    """Day-of-week aware thresholds (warn_hours, fail_hours) for scrape freshness.
-
-    Our underlying sources (SEC EDGAR, press wires, job boards) are quiet on
-    weekends — SEC accepts no Sunday filings, PR wires get minimal weekend
-    releases, etc. Historical data shows Sunday produces ~3% of weekday event
-    volume, Saturday ~33%. Monday is a catch-up day where the most-recent
-    event can legitimately date back to Friday evening.
-
-    A flat 8h FAIL threshold mis-fires every Monday morning. These thresholds
-    align with the actual data pattern.
-
-    dow: 0 = Monday, 6 = Sunday (per datetime.weekday()).
-    """
-    if dow == 0:  # Monday — catch-up day; oldest event may be Friday PM
-        return 40, 65
-    if dow == 5:  # Saturday — sources quiet but cron still firing
-        return 16, 30
-    if dow == 6:  # Sunday — sources nearly dead
-        return 30, 56
-    return 5, 8  # Tue–Fri normal weekday
-
-
 def check_scrape_freshness():
-    """Has a scrape happened recently? Look at most recent discovered_at.
+    """Is the scraper PIPELINE alive? Measured by when the cron last RAN,
+    not when it last found an event.
 
-    Thresholds vary by day-of-week because the underlying news/SEC/job sources
-    are quiet on weekends (see _freshness_thresholds_for_dow docstring)."""
+    The GitHub Actions cron fires every 4h regardless of day. The right signal
+    for "is the pipeline broken" is source_status.last_check (updated on every
+    run, even when 0 events are found) — NOT events.discovered_at (which only
+    moves when something new is found).
+
+    These two diverge every weekend: the cron keeps running, but SEC EDGAR is
+    closed and press wires are quiet, so no new events appear for 30-50h. The
+    old version measured discovered_at and needed fragile day-of-week thresholds
+    to avoid false weekend alarms. This version measures the cron itself, so
+    it's day-of-week independent and doesn't false-fire on quiet weekends.
+
+    Event-discovery age is reported as a secondary, informational note only —
+    a long drought is surfaced for awareness but never alarms (covered properly
+    by check_event_volume_trend + check_source_health)."""
     client = get_supabase()
     if not client:
         return WARN, 'Supabase unavailable — cannot check'
-    try:
-        result = client.table('events').select('discovered_at').order(
-            'discovered_at', desc=True).limit(1).execute()
-        if not result.data:
-            return WARN, 'No events in DB at all'
-        last = result.data[0]['discovered_at']
-        dt = datetime.fromisoformat(last.replace('Z', '+00:00'))
+    now = datetime.now(timezone.utc)
+
+    def _age_hours(ts: str):
+        if not ts:
+            return None
+        dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-        now = datetime.now(timezone.utc)
-        age_hr = (now - dt).total_seconds() / 3600
-        dow = now.weekday()
-        dow_name = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][dow]
-        warn_hr, fail_hr = _freshness_thresholds_for_dow(dow)
+        return (now - dt).total_seconds() / 3600
 
-        if age_hr > fail_hr:
-            return FAIL, (
-                f'Last scrape was {age_hr:.1f}h ago — exceeds {fail_hr}h '
-                f'fail threshold for {dow_name}. GitHub Actions may be broken.'
+    try:
+        # PRIMARY: when did the cron last run? (source_status.last_check)
+        ss = client.table('source_status').select('last_check').order(
+            'last_check', desc=True).limit(1).execute()
+        cron_age = _age_hours(ss.data[0]['last_check']) if ss.data else None
+
+        # SECONDARY (informational): when was the last new event discovered?
+        ev = client.table('events').select('discovered_at').order(
+            'discovered_at', desc=True).limit(1).execute()
+        event_age = _age_hours(ev.data[0]['discovered_at']) if ev.data else None
+
+        # Build the secondary note about event-discovery age
+        if event_age is None:
+            event_note = 'no events in DB'
+        elif event_age < 24:
+            event_note = f'last new event {event_age:.1f}h ago'
+        else:
+            event_note = (
+                f'last new event {event_age:.0f}h ago '
+                f'(normal on weekends — sources quiet)'
             )
-        if age_hr > warn_hr:
+
+        # The cron is the alarm signal. It runs every 4h.
+        if cron_age is None:
             return WARN, (
-                f'Last scrape was {age_hr:.1f}h ago — exceeds {warn_hr}h '
-                f'warn threshold for {dow_name} (normal on Mon mornings).'
+                'No source_status rows — cannot confirm cron ran. '
+                'Has the scraper run at least once? '
+                f'({event_note})'
+            )
+        if cron_age > 10:
+            return FAIL, (
+                f'Scraper cron last ran {cron_age:.1f}h ago (expected every 4h) '
+                f'— GitHub Actions likely broken. Check the Actions tab. '
+                f'({event_note})'
+            )
+        if cron_age > 6:
+            return WARN, (
+                f'Scraper cron last ran {cron_age:.1f}h ago — may have missed '
+                f'a cycle (expected every 4h). ({event_note})'
             )
         return PASS, (
-            f'Last scrape {age_hr:.1f}h ago '
-            f'(within {warn_hr}h {dow_name} threshold)'
+            f'Cron healthy — last ran {cron_age:.1f}h ago; {event_note}'
         )
     except Exception as e:
         return WARN, f'Could not check scrape freshness: {e}'
