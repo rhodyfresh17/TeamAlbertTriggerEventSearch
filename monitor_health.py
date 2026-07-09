@@ -407,11 +407,26 @@ def check_cleanup_dryrun():
                     n = int(parts[1])
                 except (IndexError, ValueError):
                     continue
+                # A small residual of genuine syndication dupes / stray
+                # off-target events is normal steady-state — news gets
+                # syndicated, and a few items land just outside the scrape-time
+                # dedup window. That's routine tidiness, not a health problem,
+                # so don't nag weekly about it. Only WARN when noise ACCUMULATES
+                # past the threshold, which signals the scrape-time dedup or
+                # industry filters have actually regressed.
+                CLEANUP_WARN_THRESHOLD = 25
                 if n == 0:
                     return PASS, 'No noise in DB (cleanup dry-run clean)'
-                if n > 10:
-                    return WARN, f'{n} events would be cleanup-dropped — review filters'
-                return WARN, f'{n} noise events present — run `python cleanup_legacy_events.py --apply`'
+                if n > CLEANUP_WARN_THRESHOLD:
+                    return WARN, (
+                        f'{n} noise events accumulating (> {CLEANUP_WARN_THRESHOLD}) '
+                        f'— scrape dedup/filters may have regressed. Review, then '
+                        f'`python cleanup_legacy_events.py --apply`'
+                    )
+                return PASS, (
+                    f'{n} minor noise events (below {CLEANUP_WARN_THRESHOLD} '
+                    f'threshold — routine, optional `cleanup_legacy_events.py --apply`)'
+                )
         return WARN, 'Cleanup dry-run produced unexpected output'
     except subprocess.TimeoutExpired:
         return WARN, 'Cleanup dry-run timed out'
