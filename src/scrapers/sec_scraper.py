@@ -381,6 +381,15 @@ class SECScraper(BaseScraper):
         if matches_excluded:
             return None
 
+        # Skip mega-cap public companies (BlackRock, Morgan Stanley, the big
+        # banks, etc.) — too large for the NetSuite up-market territory. These
+        # pass the industry filter (their industry IS Financial Services, a
+        # target) so they need the explicit excluded_public_companies check.
+        # Without this they get ingested, enriched, and pollute the dashboard
+        # until manually cleaned.
+        if self.is_public_company(company_name):
+            return None
+
         # Classify event_type. For Item 5.02 (officer changes), route to
         # CFO_HIRE if the pre-fetched CFO set contains this filing's adsh,
         # else EXECUTIVE_HIRE for other officer changes.

@@ -134,21 +134,48 @@ def classify_event(scraper: BaseScraper, event: dict):
     return True, ''
 
 
+def _is_templated_title(title: str) -> bool:
+    """True if the title is machine-generated from a template rather than a
+    real article headline. Templated titles are NOT valid dedup keys because
+    distinct source items collide on the same generated string:
+
+      - SEC 8-K: "SEC 8-K Item 1.01 (...) — Netcapital Inc." — a company that
+        files multiple 8-Ks of the same item type over time produces the SAME
+        title but DIFFERENT accession URLs. They are distinct filings.
+      - Adzuna:  "{Company} hiring: {Role}" — a repost gets the same title.
+
+    These are already deduped correctly by URL (seen_urls) at scrape time, so
+    title-dedup must skip them or it deletes legitimate distinct events."""
+    t = (title or '').strip().lower()
+    return t.startswith('sec 8-k') or ' hiring: ' in t
+
+
 def find_title_duplicates(events: list) -> list:
-    """Find groups of events that share the same normalized title (syndicated
-    press releases). Returns [(title, [events_to_delete])] — keeps the most
-    enriched/oldest copy and marks the rest for deletion."""
+    """Find groups of events that share the same normalized title AND come from
+    genuine syndication (real article republished at multiple URLs). Returns
+    [(title, keep, [events_to_delete])] — keeps the most enriched/oldest copy.
+
+    Skips machine-templated titles (SEC, Adzuna) which collide across DISTINCT
+    items — deleting those would destroy legitimate separate filings/postings.
+    Only flags a group as duplicates when it's a real headline appearing more
+    than once (the syndicated-press-release case this was built for)."""
     from collections import defaultdict
     by_title = defaultdict(list)
     for e in events:
         t = (e.get('title') or '').strip().lower()
-        if t:
+        # Skip templated titles — they are deduped by URL, not title.
+        if t and not _is_templated_title(t):
             by_title[t].append(e)
 
     drops = []
     for title, evs in by_title.items():
         if len(evs) < 2:
             continue
+        # Safety: only real syndication has the SAME title at DIFFERENT URLs.
+        # If every copy shares one URL it's a true re-scrape (still a dup);
+        # if URLs differ on a non-templated headline it's syndication. Either
+        # way these are genuine dupes — but require at least the titles match
+        # exactly (already guaranteed by the grouping).
         # Pick the BEST one to keep:
         #   1. Prefer events that have been enriched (companies_data + grade)
         #   2. Among those, prefer oldest (already had time in DB)
@@ -181,11 +208,21 @@ def main():
     scraper = _FilterOnlyScraper(cfg)
     client = get_supabase()
 
-    # Fetch all events (full record — needed for dedup quality scoring)
-    response = client.table('events').select(
+    # Fetch all events (full record — needed for dedup quality scoring).
+    # Exclude soft-deleted (blocked_at IS NOT NULL) events — they're already
+    # handled (invisible on the dashboard, skipped by enrichment). Re-flagging
+    # them would double-count AND a hard-delete would let supabase_sync
+    # recreate them from the cached SQLite (the zombie loop the soft-delete
+    # pattern was built to stop). Graceful if blocked_at column doesn't exist.
+    query = client.table('events').select(
         'id, title, description, company_name, event_type, discovered_at, '
         'companies_data, grade, source_url'
-    ).order('discovered_at', desc=True).execute()
+    )
+    try:
+        query = query.is_('blocked_at', 'null')
+    except Exception:
+        pass
+    response = query.order('discovered_at', desc=True).execute()
     events = response.data or []
     if args.limit:
         events = events[:args.limit]

@@ -138,9 +138,16 @@ class TriggerEventMonitor:
             if self.db.has_seen_url(event.url):
                 continue
 
-            # Title dedup — normalize, then check both in-run set and recent DB
+            # Title dedup catches syndicated press releases (same real headline
+            # republished at different URLs). But it must SKIP machine-templated
+            # titles: SEC "SEC 8-K Item X — Company" and Adzuna "{Co} hiring: X"
+            # collide across DISTINCT items (a company filing multiple 8-Ks of
+            # the same item type, weeks apart, produces identical titles). Those
+            # are separate real events, deduped correctly by URL above. Applying
+            # title-dedup to them silently drops legitimate filings.
             title_key = (event.title or '').strip().lower()
-            if title_key:
+            is_templated = title_key.startswith('sec 8-k') or ' hiring: ' in title_key
+            if title_key and not is_templated:
                 if title_key in seen_titles_this_run:
                     title_dupes_skipped += 1
                     continue
