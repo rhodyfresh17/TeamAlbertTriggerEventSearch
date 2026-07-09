@@ -1099,8 +1099,13 @@ sources:
       url: "https://nonprofitquarterly.org/feed/"
       enabled: true
 
-    - name: "Inside Philanthropy"
-      url: "https://www.insidephilanthropy.com/feed"
+    # Inside Philanthropy retired 2026-07-08 — entire domain now returns
+    # HTTP 403 Cloudflare block pages (HTML) to scrapers on every feed path,
+    # so its XML never parsed. Replaced with Chronicle of Philanthropy, the
+    # flagship nonprofit-sector publication (open RSS, ~10 fresh items/day,
+    # covers foundation grants, major gifts, and nonprofit exec moves).
+    - name: "Chronicle of Philanthropy"
+      url: "https://www.philanthropy.com/feed"
       enabled: true
 
     - name: "Associations Now (ASAE)"

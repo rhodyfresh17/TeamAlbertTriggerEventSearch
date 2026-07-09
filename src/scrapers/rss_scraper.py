@@ -12,6 +12,66 @@ from .base import BaseScraper
 from ..models import TriggerEvent, EventType, EventSource
 
 
+# Standard URIs for common RSS namespace prefixes. Many feeds use these
+# prefixes (esp. media:) in element tags but forget to declare xmlns:PREFIX
+# on the root <rss> element, which makes Python's strict xml.etree parser
+# throw "unbound prefix". We inject the missing declarations before parsing.
+_KNOWN_NS_URIS = {
+    'media':   'http://search.yahoo.com/mrss/',
+    'content': 'http://purl.org/rss/1.0/modules/content/',
+    'dc':      'http://purl.org/dc/elements/1.1/',
+    'atom':    'http://www.w3.org/2005/Atom',
+    'wfw':     'http://wellformedweb.org/CommentAPI/',
+    'sy':      'http://purl.org/rss/1.0/modules/syndication/',
+    'slash':   'http://purl.org/rss/1.0/modules/slash/',
+    'georss':  'http://www.georss.org/georss',
+    'geo':     'http://www.w3.org/2003/01/geo/wgs84_pos#',
+    'gd':      'http://schemas.google.com/g/2005',
+    'thr':     'http://purl.org/syndication/thread/1.0',
+    'itunes':  'http://www.itunes.com/dtds/podcast-1.0.dtd',
+}
+
+
+def sanitize_feed_xml(raw: bytes) -> bytes:
+    """Inject any namespace prefixes that are USED in the feed but not
+    DECLARED on the root element, so strict xml.etree parsing doesn't fail
+    with 'unbound prefix'. Returns the raw bytes unchanged if nothing needs
+    fixing or the root <rss>/<feed> tag can't be located.
+
+    This is a targeted fix for the common real-world bug where a feed emits
+    e.g. <media:content ...> without xmlns:media on the root (Chronicle of
+    Philanthropy and many WordPress feeds do this)."""
+    try:
+        text = raw.decode('utf-8', errors='replace')
+    except Exception:
+        return raw
+
+    # Prefixes actually used in element tags: <media:content>, <dc:creator>...
+    used = set(re.findall(r'<([A-Za-z][\w-]*):', text))
+    # Prefixes already declared anywhere in the doc
+    declared = set(re.findall(r'xmlns:([A-Za-z][\w-]*)\s*=', text))
+    missing = [p for p in used if p not in declared]
+    if not missing:
+        return raw
+
+    # Find the opening root tag (<rss ...> or <feed ...>) to inject into
+    m = re.search(r'<(rss|feed)\b[^>]*?>', text)
+    if not m:
+        return raw
+    root_tag = m.group(0)
+
+    # Build xmlns declarations for each missing prefix (known URI, or a
+    # harmless placeholder so parsing succeeds — we don't consume these tags)
+    injections = ''.join(
+        f' xmlns:{p}="{_KNOWN_NS_URIS.get(p, f"urn:ns:{p}")}"'
+        for p in missing
+    )
+    # Insert right before the closing '>' of the root tag
+    patched_root = root_tag[:-1] + injections + '>'
+    text = text.replace(root_tag, patched_root, 1)
+    return text.encode('utf-8')
+
+
 def strip_html(text: str) -> str:
     """Remove HTML tags and clean up text."""
     if not text:
@@ -91,8 +151,16 @@ class RSSScraper(BaseScraper):
             response = self.session.get(url, timeout=self.timeout)
             response.raise_for_status()
 
-            # Parse XML
-            root = ET.fromstring(response.content)
+            # Parse XML. Sanitize first to inject any namespace prefixes the
+            # feed uses but forgot to declare (common with media:/content:),
+            # which would otherwise fail strict parsing with 'unbound prefix'.
+            try:
+                root = ET.fromstring(response.content)
+            except ET.ParseError as pe:
+                if 'unbound prefix' in str(pe):
+                    root = ET.fromstring(sanitize_feed_xml(response.content))
+                else:
+                    raise
 
             # Handle both RSS and Atom feeds
             items = root.findall('.//item')  # RSS
