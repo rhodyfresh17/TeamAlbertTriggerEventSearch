@@ -804,11 +804,50 @@ def render_event_card(row, event_config):
             f'<span style="font-size:0.68rem;background:rgba(78,140,170,0.18);'
             f'color:#9cd0e6;padding:0.15rem 0.45rem;border-radius:4px;'
             f'margin:0 0.2rem 0.2rem 0;display:inline-block;">{h}</span>'
-            for h in hashtags_raw[:6]
+            for h in hashtags_raw
         )
         hashtags_html = (
             f'<div style="margin-top:0.4rem;">{chip_spans}</div>'
         )
+
+    # ⚠️ Fit-verification flag — fit gates couldn't confirm territory/
+    # revenue/vertical. Rep can usually resolve in a 10-second LinkedIn
+    # check. (Policy per A.J. 2026-07-16: flag unknowns, don't hide them.)
+    fit_html = ""
+    fit_raw = row.get('fit')
+    if isinstance(fit_raw, str) and fit_raw.strip():
+        try:
+            fit_raw = json.loads(fit_raw)
+        except Exception:
+            fit_raw = None
+    if isinstance(fit_raw, dict) and fit_raw.get('verdict') == 'unverified':
+        unk = [r for r in (fit_raw.get('reasons') or []) if 'unverified' in r]
+        tip = 'Fit not fully confirmed: ' + ('; '.join(unk) or 'verify manually')
+        fit_html = (
+            f'<span title="{tip}" '
+            f'style="display:inline-flex;align-items:center;'
+            f'padding:0.25rem 0.55rem;border-radius:6px;'
+            f'background:rgba(245,158,11,0.18);color:#fbbf24;'
+            f'font-size:0.7rem;font-weight:700;margin-left:0.4rem;'
+            f'cursor:help;">⚠️ VERIFY FIT</span>'
+        )
+
+    # Aging indicator — how long has this sat in the queue?
+    age_html = ""
+    disc = row.get('discovered_date')
+    if disc is not None and not (isinstance(disc, float) and disc != disc):
+        try:
+            ddt = datetime.fromisoformat(str(disc).replace('Z', '+00:00'))
+            if ddt.tzinfo is not None:
+                ddt = ddt.replace(tzinfo=None)
+            age_days = (datetime.now() - ddt).days
+            if age_days >= 1:
+                color = '#f87171' if age_days > 14 else (
+                    '#fbbf24' if age_days > 7 else 'var(--text-muted)')
+                age_html = (f'<span style="color:{color};" '
+                            f'title="Days since discovered">⏳ {age_days}d</span>')
+        except Exception:
+            pass
 
     # Unified card: header + expander in one container
     with st.container(border=True):
@@ -816,7 +855,7 @@ def render_event_card(row, event_config):
             <div class="event-card-inner">
                 <div class="event-card-header">
                     {grade_html}<span class="event-type-badge {badge_class}">{event_config['icon']} {event_config['label']}</span>
-                    <span class="status-badge {status_cfg['class']}">{status_cfg['label']}</span>
+                    <span class="status-badge {status_cfg['class']}">{status_cfg['label']}</span>{fit_html}
                 </div>
                 <div class="event-title">{title}</div>
                 <div class="event-company">
@@ -825,6 +864,7 @@ def render_event_card(row, event_config):
                 </div>
                 <div class="event-meta">
                     <span>📅 {date_display}</span>
+                    {age_html}
                 </div>
                 {hashtags_html}
             </div>
@@ -1221,6 +1261,87 @@ def get_stats(df) -> dict:
     }
 
 
+_GRADE_RANK = {'A': 0, 'B': 1, None: 2, '': 2, 'C': 3, 'D': 4}
+
+
+def _grade_rank(g):
+    """Sort key: A first, then B, then ungraded (fresh events awaiting
+    enrichment shouldn't sink below C/D junk), then C, then D."""
+    if g is None or (isinstance(g, float) and g != g):
+        return 2
+    return _GRADE_RANK.get(str(g).strip().upper(), 2)
+
+
+def render_work_queue(new_df: pd.DataFrame, top_n: int = 10):
+    """The Monday-morning view: ONE ranked list across all event types,
+    rolled up per company. Ranking: grade → numeric score → freshness."""
+    st.markdown("""
+        <div class="section-header">
+            <span style="font-size: 1.5rem;">🔥</span>
+            <h2>Work Queue</h2>
+            <span class="section-count" title="Top accounts across all event types, ranked by grade → score → freshness">ranked</span>
+        </div>
+    """, unsafe_allow_html=True)
+
+    if new_df.empty:
+        st.info("Queue clear — no new leads awaiting review.")
+        return
+
+    rows = new_df.to_dict('records')
+
+    # Rank events: grade, then score desc, then freshness desc
+    def _score(r):
+        s = r.get('numeric_score')
+        if s is None or (isinstance(s, float) and s != s):
+            return -1
+        try:
+            return int(s)
+        except Exception:
+            return -1
+
+    rows.sort(key=lambda r: (
+        _grade_rank(r.get('grade')),
+        -_score(r),
+        str(r.get('discovered_date') or ''),
+    ))
+    # For freshness DESC within same grade+score, re-sort stably:
+    rows.sort(key=lambda r: (
+        _grade_rank(r.get('grade')),
+        -_score(r),
+    ))
+
+    # Roll up per company — the best-ranked event represents the account
+    by_company = {}
+    order = []
+    for r in rows:
+        key = _resolve_display_company(r).strip().lower()
+        if key in ('unknown company', ''):
+            key = f"__solo_{r.get('id')}"  # don't merge unknowns together
+        if key not in by_company:
+            by_company[key] = {'top': r, 'others': 0}
+            order.append(key)
+        else:
+            by_company[key]['others'] += 1
+
+    shown = 0
+    for key in order:
+        if shown >= top_n:
+            break
+        entry = by_company[key]
+        r = entry['top']
+        event_config = EVENT_TYPES.get(r.get('event_type'), EVENT_TYPES['other'])
+        render_event_card(r, event_config)
+        if entry['others']:
+            st.caption(f"    ↳ +{entry['others']} more event(s) for this "
+                       f"company in the New Leads tabs below")
+        shown += 1
+
+    remaining = len(order) - shown
+    if remaining > 0:
+        st.caption(f"…{remaining} more account(s) in the New Leads tabs below "
+                   f"(this queue shows the top {top_n}).")
+
+
 def render_metric_card(icon: str, value: int, label: str, color: str, gradient: str = None):
     """Render a modern metric card."""
     bg_gradient = gradient or f"linear-gradient(135deg, {color}20 0%, {color}10 100%)"
@@ -1368,10 +1489,10 @@ def main():
                 default=['A', 'B'],
                 placeholder="Select grades…",
                 help=(
-                    "A = 3+ hashtags + 2 triggers (hottest)  ·  "
-                    "B = 2 hashtags + 1 trigger  ·  "
-                    "C = 1 hashtag  ·  "
-                    "D = 0 hashtags (coldest)"
+                    "Point-based TAL rubric: A = score 8+ with a high-intent "
+                    "trigger (hottest)  ·  B = 5-7  ·  C = 2-4  ·  D = 0-1. "
+                    "High-intent: NewCFO +5, NewController/Funding/PEBacked/"
+                    "Acquisitions +3. Complexity signals +2 each."
                 ),
                 label_visibility="collapsed",
                 key="flt_grades",
@@ -1443,6 +1564,12 @@ def main():
     # Split data: new (unclassified) vs classified
     new_df = df[df['lead_status'] == 'NEW']
     classified_df = df[df['lead_status'] != 'NEW']
+
+    # ── 🔥 WORK QUEUE — the answer to "which accounts do I work?" ──────────
+    # One ranked list across ALL event types: grade first (A→B→ungraded),
+    # then numeric score, then freshness. Rolled up per company so one
+    # account with 4 events is one row, not four cards.
+    render_work_queue(new_df)
 
     # ── New Leads Section ──
     new_count = len(new_df)
