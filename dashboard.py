@@ -1137,15 +1137,12 @@ def render_event_card(row, event_config, key_prefix: str = ''):
                             st.link_button(flabel, fhref, use_container_width=True)
 
             with col2:
-                current_status = status
-                new_status = st.selectbox(
-                    "Status",
-                    LEAD_STATUSES,
-                    index=LEAD_STATUSES.index(current_status) if current_status in LEAD_STATUSES else 0,
-                    key=f"{key_prefix}status_{row['id']}",
-                    label_visibility="collapsed"
-                )
-
+                # Event-level controls, slimmed 2026-07-17: account dispositions
+                # (per-company selectors on the left) are THE workflow now —
+                # the old event Status dropdown duplicated the same choices.
+                # The only event-level verdict with distinct meaning survives:
+                # killing a junk ARTICLE (bad match, syndication noise,
+                # irrelevant story) without passing judgment on the company.
                 notes = st.text_area(
                     "Notes",
                     value=row.get('notes') or "",
@@ -1154,12 +1151,24 @@ def render_event_card(row, event_config, key_prefix: str = ''):
                     placeholder="Add notes..."
                 )
 
-                if st.button("💾 Save Changes", key=f"{key_prefix}save_{row['id']}", use_container_width=True):
-                    if update_lead_status(row['id'], new_status, notes):
-                        if new_status == "NOT RELEVANT":
-                            st.success("✓ Event removed!")
-                        else:
+                if st.button("💾 Save note", key=f"{key_prefix}save_{row['id']}",
+                             use_container_width=True):
+                    client = get_supabase_client()
+                    if client:
+                        try:
+                            client.table('events').update(
+                                {'notes': notes}).eq('id', row['id']).execute()
                             st.success("✓ Saved!")
+                        except Exception as e:
+                            st.error(f"Save failed: {e}")
+
+                st.caption("Junk article? (kills this event only — "
+                           "doesn't judge the company)")
+                if st.button("🚫 Not Relevant — this event",
+                             key=f"{key_prefix}nr_{row['id']}",
+                             use_container_width=True):
+                    if update_lead_status(row['id'], "NOT RELEVANT", notes):
+                        st.success("✓ Event removed!")
                         st.rerun()
 
 
