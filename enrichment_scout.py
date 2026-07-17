@@ -1518,6 +1518,13 @@ def enrich_events(
     )
     if not re_enrich and col_ok.get('enriched_at'):
         query = query.is_('enriched_at', 'null')
+    # NEVER process tombstoned events — they're already decided (industry/
+    # fit-gate blocked or rep-dismissed). Re-enriching them is pure waste
+    # (~15s each) and re-grades rows the dashboard will never show.
+    try:
+        query = query.is_('blocked_at', 'null')
+    except Exception:
+        pass
 
     # Process OLDEST first. When the queue grows beyond per-run capacity,
     # newest-first ordering pushes old events further back each cycle until
@@ -1692,16 +1699,22 @@ def enrich_events(
             ok += 1
             continue
 
-        payload = {
-            'companies_data':      enriched,
-            'grade':               grading.get('grade'),
-            'confidence_level':    grading.get('confidence'),
-            'numeric_score':       grading.get('numeric_score'),
-            'hashtags':            grading.get('hashtags') or [],
-            'grade_justification': grading.get('grade_justification'),
-            'cfo_status':          grading.get('cfo_status'),
-            'research_notes':      grading.get('research_notes') or [],
-        }
+        payload = {'companies_data': enriched}
+        if grading.get('grade') is not None:
+            payload.update({
+                'grade':               grading.get('grade'),
+                'confidence_level':    grading.get('confidence'),
+                'numeric_score':       grading.get('numeric_score'),
+                'hashtags':            grading.get('hashtags') or [],
+                'grade_justification': grading.get('grade_justification'),
+                'cfo_status':          grading.get('cfo_status'),
+                'research_notes':      grading.get('research_notes') or [],
+            })
+        else:
+            # Grading LLM failed entirely — keep firmographics but DON'T
+            # overwrite any existing grade with None (re-enrich runs were
+            # nulling good grades on transient LLM failures).
+            log.warning('  Grading returned nothing — keeping existing grade')
         if col_ok.get('enriched_at'):
             payload['enriched_at'] = datetime.utcnow().isoformat()
         if col_ok.get('fit'):
@@ -1770,6 +1783,12 @@ def regrade_only_events(limit: int = None, dry_run: bool = False):
         'id, company_name, event_type, title, description, '
         'source_url, companies_data'
     ).not_.is_('companies_data', 'null')
+    # Skip tombstoned events (already blocked/dismissed — regrading them is
+    # wasted work on rows the dashboard never shows)
+    try:
+        query = query.is_('blocked_at', 'null')
+    except Exception:
+        pass
     result = query.order('discovered_at', desc=False).execute()
     events = result.data or []
     if limit:
@@ -1854,15 +1873,19 @@ def regrade_only_events(limit: int = None, dry_run: bool = False):
             continue
 
         # ── Build payload (don't touch companies_data — we didn't change it) ─
-        payload = {
-            'grade':               grading.get('grade'),
-            'confidence_level':    grading.get('confidence'),
-            'numeric_score':       grading.get('numeric_score'),
-            'hashtags':            grading.get('hashtags') or [],
-            'grade_justification': grading.get('grade_justification'),
-            'cfo_status':          grading.get('cfo_status'),
-            'research_notes':      grading.get('research_notes') or [],
-        }
+        if grading.get('grade') is None:
+            log.warning('  Grading returned nothing — keeping existing grade')
+            payload = {}
+        else:
+            payload = {
+                'grade':               grading.get('grade'),
+                'confidence_level':    grading.get('confidence'),
+                'numeric_score':       grading.get('numeric_score'),
+                'hashtags':            grading.get('hashtags') or [],
+                'grade_justification': grading.get('grade_justification'),
+                'cfo_status':          grading.get('cfo_status'),
+                'research_notes':      grading.get('research_notes') or [],
+            }
         if col_ok.get('fit'):
             payload['fit'] = fit
 
@@ -1873,6 +1896,10 @@ def regrade_only_events(limit: int = None, dry_run: bool = False):
             payload['event_type'] = 'cfo_hire'
             upgraded += 1
             log.info(f'  Reclassifying event_type {current_etype!r} → cfo_hire')
+
+        if not payload:
+            ok += 1  # nothing to write (grading failed, no reclass) — skip
+            continue
 
         try:
             client.table('events').update(payload).eq('id', eid).execute()
