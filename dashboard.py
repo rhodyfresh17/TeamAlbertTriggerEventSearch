@@ -687,7 +687,7 @@ def _resolve_display_company(row) -> str:
     return name if name else 'Unknown Company'
 
 
-def render_event_card(row, event_config):
+def render_event_card(row, event_config, key_prefix: str = ''):
     """Render a single event card with modern styling."""
     status = row.get('lead_status', 'NEW') or 'NEW'
     title = str(row.get('title', ''))[:100]
@@ -849,26 +849,27 @@ def render_event_card(row, event_config):
         except Exception:
             pass
 
-    # Unified card: header + expander in one container
+    # Unified card: header + expander in one container.
+    # IMPORTANT: the HTML is assembled as ONE continuous line. Streamlit
+    # renders st.markdown with markdown rules even when unsafe_allow_html
+    # is on — an indented line after a blank/whitespace-only line becomes a
+    # literal CODE BLOCK. A conditionally-empty placeholder (e.g. age_html
+    # for a <1-day-old event) on its own indented template line produced
+    # exactly that: raw </div> + chip HTML rendering as code (2026-07-17).
+    card_html = (
+        f'<div class="event-card-inner">'
+        f'<div class="event-card-header">'
+        f'{grade_html}<span class="event-type-badge {badge_class}">{event_config["icon"]} {event_config["label"]}</span> '
+        f'<span class="status-badge {status_cfg["class"]}">{status_cfg["label"]}</span>{fit_html}'
+        f'</div>'
+        f'<div class="event-title">{title}</div>'
+        f'<div class="event-company"><span>🏢</span> <span>{company}</span></div>'
+        f'<div class="event-meta"><span>📅 {date_display}</span> {age_html}</div>'
+        f'{hashtags_html}'
+        f'</div>'
+    )
     with st.container(border=True):
-        st.markdown(f"""
-            <div class="event-card-inner">
-                <div class="event-card-header">
-                    {grade_html}<span class="event-type-badge {badge_class}">{event_config['icon']} {event_config['label']}</span>
-                    <span class="status-badge {status_cfg['class']}">{status_cfg['label']}</span>{fit_html}
-                </div>
-                <div class="event-title">{title}</div>
-                <div class="event-company">
-                    <span>🏢</span>
-                    <span>{company}</span>
-                </div>
-                <div class="event-meta">
-                    <span>📅 {date_display}</span>
-                    {age_html}
-                </div>
-                {hashtags_html}
-            </div>
-        """, unsafe_allow_html=True)
+        st.markdown(card_html, unsafe_allow_html=True)
 
         with st.expander("📝 Details & Actions"):
             col1, col2 = st.columns([2, 1])
@@ -1116,19 +1117,19 @@ def render_event_card(row, event_config):
                     "Status",
                     LEAD_STATUSES,
                     index=LEAD_STATUSES.index(current_status) if current_status in LEAD_STATUSES else 0,
-                    key=f"status_{row['id']}",
+                    key=f"{key_prefix}status_{row['id']}",
                     label_visibility="collapsed"
                 )
 
                 notes = st.text_area(
                     "Notes",
                     value=row.get('notes') or "",
-                    key=f"notes_{row['id']}",
+                    key=f"{key_prefix}notes_{row['id']}",
                     height=80,
                     placeholder="Add notes..."
                 )
 
-                if st.button("💾 Save Changes", key=f"save_{row['id']}", use_container_width=True):
+                if st.button("💾 Save Changes", key=f"{key_prefix}save_{row['id']}", use_container_width=True):
                     if update_lead_status(row['id'], new_status, notes):
                         if new_status == "NOT RELEVANT":
                             st.success("✓ Event removed!")
@@ -1330,7 +1331,7 @@ def render_work_queue(new_df: pd.DataFrame, top_n: int = 10):
         entry = by_company[key]
         r = entry['top']
         event_config = EVENT_TYPES.get(r.get('event_type'), EVENT_TYPES['other'])
-        render_event_card(r, event_config)
+        render_event_card(r, event_config, key_prefix='wq_')
         if entry['others']:
             st.caption(f"    ↳ +{entry['others']} more event(s) for this "
                        f"company in the New Leads tabs below")
@@ -1541,15 +1542,32 @@ def main():
     cfo_count = stats["by_type"].get("cfo_hire", 0)
     funding_count = stats["by_type"].get("funding", 0)
 
+    # New Finance Leaders = CFO-hire events + any event carrying the
+    # #NewController hashtag (Controller hires stay event_type=
+    # executive_hire by design — see enrichment_scout._finance_role).
+    # This is THE highest-value trigger, so it gets its own card.
+    def _has_controller_tag(h):
+        if isinstance(h, str):
+            try:
+                h = json.loads(h)
+            except Exception:
+                return False
+        return isinstance(h, list) and '#NewController' in h
+    controller_count = int(df['hashtags'].apply(_has_controller_tag).sum()) \
+        if 'hashtags' in df.columns else 0
+    finance_leader_count = cfo_count + controller_count
+
     # Modern metric cards
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
         render_metric_card("📊", stats["total"], "Total Events", "#667eea")
     with col2:
         render_metric_card("🆕", stats["new"], "New Leads", "#10b981")
     with col3:
-        render_metric_card("🔵", ma_count, "M&A Events", "#3b82f6")
+        render_metric_card("💼", finance_leader_count, "New Finance Leaders", "#8b5cf6")
     with col4:
+        render_metric_card("🔵", ma_count, "M&A Events", "#3b82f6")
+    with col5:
         render_metric_card("💰", funding_count, "Funding", "#f59e0b")
 
     st.markdown("<br>", unsafe_allow_html=True)
