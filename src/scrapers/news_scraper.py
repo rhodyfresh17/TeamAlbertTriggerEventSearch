@@ -89,11 +89,19 @@ class GoogleNewsScraper(BaseScraper):
             for region in key_regions[:3]:  # Limit regions
                 queries.append((f'{term} {region}', EventType.MERGER_ACQUISITION, False))
 
-        # Industry-specific queries
-        industries = ['healthcare', 'hospital', 'construction', 'restaurant franchise', 'insurance']
+        # Industry-specific queries — TARGET verticals only (Financial Services,
+        # Nonprofits, Consumer Services). Previously queried healthcare/hospital/
+        # construction/restaurant-franchise, all of which are blocked downstream —
+        # pure wasted fetch + filter cycles (audit 2026-07-16).
+        industries = ['insurance', 'credit union', 'wealth management',
+                      'private equity', 'nonprofit', 'foundation',
+                      'auto dealership', 'real estate brokerage']
         for industry in industries:
             queries.append((f'{industry} CFO', EventType.CFO_HIRE, False))
             queries.append((f'{industry} acquisition', EventType.MERGER_ACQUISITION, False))
+        # New-Controller trigger — a stated top trigger with no query until now
+        queries.append(('new controller appointed', EventType.CFO_HIRE, False))
+        queries.append(('"VP of Finance" appointed', EventType.CFO_HIRE, False))
 
         # LinkedIn-sourced news (executive moves often announced there first)
         # Skip territory filter for LinkedIn - executives don't always mention location

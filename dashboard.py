@@ -578,12 +578,24 @@ def load_events(days: int = 30, search: str = None) -> pd.DataFrame:
             query = query.is_('blocked_at', 'null')
         except Exception:
             pass  # column not yet present; will start filtering after migration
-        response = query.order('discovered_at', desc=True).limit(1000).execute()
 
-        if not response.data:
+        # Paginate — Supabase caps single responses at 1000 rows, which the
+        # DB has now outgrown. A flat .limit(1000) silently dropped the
+        # oldest rows in the window (audit 2026-07-16).
+        rows = []
+        page = 0
+        while True:
+            resp = query.order('discovered_at', desc=True).range(
+                page * 1000, page * 1000 + 999).execute()
+            rows.extend(resp.data or [])
+            if not resp.data or len(resp.data) < 1000 or page >= 9:
+                break  # 10k-row sanity ceiling
+            page += 1
+
+        if not rows:
             return pd.DataFrame()
 
-        df = pd.DataFrame(response.data)
+        df = pd.DataFrame(rows)
 
         if search:
             search_lower = search.lower()
@@ -609,14 +621,27 @@ def load_events(days: int = 30, search: str = None) -> pd.DataFrame:
 
 
 def update_lead_status(event_id: str, status: str, notes: str = None):
-    """Update lead status for an event in Supabase. Deletes if NOT RELEVANT."""
+    """Update lead status for an event in Supabase.
+
+    NOT RELEVANT = SOFT-delete (set blocked_at), never a hard DELETE.
+    Hard-deleting was a zombie loop: supabase_sync upserts every SQLite
+    event each 4-hour cycle, so a deleted row was re-created as NEW and
+    reps had to re-dismiss the same lead over and over (audit 2026-07-16).
+    The tombstone row keeps the upsert from resurrecting it."""
     client = get_supabase_client()
     if not client:
         return False
 
     try:
         if status == "NOT RELEVANT":
-            client.table('events').delete().eq('id', event_id).execute()
+            data = {
+                'blocked_at': datetime.now().isoformat(),
+                'blocked_reason': 'dismissed by rep (NOT RELEVANT)',
+                'lead_status': 'NOT RELEVANT',
+            }
+            if notes:
+                data['notes'] = notes
+            client.table('events').update(data).eq('id', event_id).execute()
         else:
             data = {'lead_status': status}
             if notes is not None:
@@ -669,17 +694,18 @@ def render_event_card(row, event_config):
     company = _resolve_display_company(row)
     published = row.get('published_date', '')
 
-    # Format date
+    # Format date. Guard NaN (float) — it's truthy and used to render "📅 nan".
     date_display = ''
-    if published:
+    if published is not None and not (isinstance(published, float) and published != published):
         try:
             if isinstance(published, str):
                 dt = datetime.fromisoformat(published.replace('Z', '+00:00'))
             else:
                 dt = published
             date_display = dt.strftime('%b %d, %Y')
-        except:
-            date_display = str(published)[:10]
+        except Exception:
+            s = str(published)[:10]
+            date_display = '' if s in ('nan', 'NaT', 'None') else s
 
     status_cfg = STATUS_CONFIG.get(status, STATUS_CONFIG["NEW"])
     badge_class = event_config.get('badge_class', 'badge-other')
@@ -1545,17 +1571,26 @@ def main():
     if bulk_status and bulk_status != "Select status..." and st.sidebar.button("✓ Apply to All New", use_container_width=True):
         client = get_supabase_client()
         if client:
-            updated = 0
+            updated = failed = 0
             for event_id in new_df['id'].tolist():
                 try:
+                    # Same soft-delete rule as update_lead_status — a hard
+                    # DELETE gets resurrected by the next supabase_sync upsert.
                     if bulk_status == "NOT RELEVANT":
-                        client.table('events').delete().eq('id', event_id).execute()
+                        client.table('events').update({
+                            'blocked_at': datetime.now().isoformat(),
+                            'blocked_reason': 'bulk-dismissed by rep (NOT RELEVANT)',
+                            'lead_status': 'NOT RELEVANT',
+                        }).eq('id', event_id).execute()
                     else:
                         client.table('events').update({'lead_status': bulk_status}).eq('id', event_id).execute()
                     updated += 1
-                except:
-                    pass
-            st.sidebar.success(f"✓ Updated {updated} events!")
+                except Exception:
+                    failed += 1
+            if failed:
+                st.sidebar.warning(f"✓ Updated {updated}, ✗ failed {failed}")
+            else:
+                st.sidebar.success(f"✓ Updated {updated} events!")
             st.rerun()
 
     # Sidebar footer

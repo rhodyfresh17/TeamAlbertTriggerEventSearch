@@ -27,15 +27,22 @@ TERRITORY_STATE_CODES: Set[str] = {
     'NC', 'SC', 'GA', 'FL', 'AL', 'TN', 'KY',
     # Rust Belt
     'OH', 'MI', 'IN',
-    # Canadian provinces
-    'A0',  # Newfoundland
-    'A1',  # Nova Scotia
-    'A2',  # Prince Edward Island
+    # Canadian provinces — EDGAR's OFFICIAL state codes
+    # (https://www.sec.gov/submit-filings/filer-support-resources/edgar-state-country-codes):
+    #   A0=Alberta A1=British Columbia A2=Manitoba A3=New Brunswick
+    #   A4=Newfoundland & Labrador A5=Nova Scotia A6=Ontario
+    #   A7=Prince Edward Island A8=Quebec A9=Saskatchewan B0=Yukon
+    # Territory = NB, NL, NS, ON, PE, QC only. The previous mapping here was
+    # mislabeled/shifted: it admitted A0/A1/A2 (Alberta/BC/Manitoba — OUT of
+    # territory) and OMITTED A6/A7/A8 (Ontario/PEI/Quebec — the two biggest
+    # in-territory provinces were silently dropped for months).
     'A3',  # New Brunswick
-    'A4',  # Quebec
-    'A5',  # Ontario
-    # (BC=A6, AB=A0, etc. — Canadian SEC codes vary; include only territory)
-    'ON', 'QC', 'NB', 'NS', 'PE', 'NL',  # in case standard codes appear
+    'A4',  # Newfoundland and Labrador
+    'A5',  # Nova Scotia
+    'A6',  # Ontario
+    'A7',  # Prince Edward Island
+    'A8',  # Quebec
+    'ON', 'QC', 'NB', 'NS', 'PE', 'NL',  # defensive: if plain codes ever appear
 }
 
 
@@ -245,13 +252,16 @@ class SECScraper(BaseScraper):
         '3330': 'Primary Nonferrous Metals',
         '3334': 'Primary Aluminum',
         '3341': 'Secondary Smelting & Refining',
-        # ── Software / Computer Services ──────────────────────────────
-        '7370': 'Computer Services',
-        '7371': 'Computer Services — Prepackaged Software',
-        '7372': 'Prepackaged Software',
-        '7374': 'Computer Processing & Data Preparation',
-        '7389': 'Services — Business Services NEC',
-        # ── Computer Hardware / Semis ─────────────────────────────────
+        # ── Software / Computer Services: REMOVED (2026-07-16) ────────
+        # 7370/7371/7372/7374 are AMBIGUOUS — fintech, payments, and
+        # insurtech companies (target Financial Services subverticals)
+        # frequently file under these codes. 7389 "Services NEC" is a
+        # wastebasket that already false-blocked Repay Holdings (a
+        # payments processor = target). Vertical fit for these is now
+        # decided post-research by the ZI-subindustry gate, which sees
+        # the company's actual business. Only unambiguous never-fit
+        # codes belong in this scrape-time list.
+        # ── Computer Hardware / Semis (unambiguous never-fit) ─────────
         '3576': 'Computer Communications Equipment',
         '3577': 'Computer Peripheral Equipment',
         '3674': 'Semiconductors & Related Devices',

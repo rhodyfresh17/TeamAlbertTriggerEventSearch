@@ -765,12 +765,15 @@ territory:
     - "Supply Chain"
     - "Trucking"
 
+  # Substring-matched — an article containing ANY of these is dropped before
+  # event typing. Keep entries UNAMBIGUOUS. Removed 2026-07-16 after audit:
+  #   "performance"  → killed every release mentioning "financial performance"
+  #   "engagement"   → killed "customer engagement", "engagement letter"
+  #   "theater/theatre" → contradicted the Cultural & Arts TARGET vertical
+  #   "wedding"      → could kill venue/hospitality-adjacent NPO news; kept out
   excluded_content:
-    - "concert"
-    - "theatre"
-    - "theater"
-    - "performance"
-    - "festival"
+    - "concert tour"
+    - "music festival"
     - "music event"
     - "Grammy"
     - "award show"
@@ -780,15 +783,12 @@ territory:
     - "movie premiere"
     - "film festival"
     - "sports game"
-    - "championship"
+    - "championship game"
     - "playoff"
-    - "tournament"
     - "recipe"
     - "cookbook"
-    - "weather"
+    - "weather forecast"
     - "obituary"
-    - "wedding"
-    - "engagement"
 
   company_filters:
     exclude_public_companies: true
