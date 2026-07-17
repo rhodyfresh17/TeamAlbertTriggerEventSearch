@@ -1867,7 +1867,9 @@ def enrich_events(
                 if cname == account_nm:
                     c['tal'] = {'grade': grading.get('grade'),
                                 'score': grading.get('numeric_score'),
-                                'confidence': grading.get('confidence')}
+                                'confidence': grading.get('confidence'),
+                                'hashtags': grading.get('hashtags') or [],
+                                'justification': grading.get('grade_justification')}
                     continue
                 if (str(c.get('role', '')).lower() in
                         [r for r in WORKABLE_ROLES]
@@ -1879,9 +1881,47 @@ def enrich_events(
                     if g2.get('grade'):
                         c['tal'] = {'grade': g2.get('grade'),
                                     'score': g2.get('numeric_score'),
-                                    'confidence': g2.get('confidence')}
+                                    'confidence': g2.get('confidence'),
+                                    'hashtags': g2.get('hashtags') or [],
+                                    'justification': g2.get('grade_justification')}
                         log.info(f'    Secondary account {cname[:30]}: '
                                  f'Grade={g2["grade"]} Score={g2.get("numeric_score")}')
+
+            # ── Headline = BEST-graded company (A.J. 2026-07-17: "the grade
+            # at the top should indicate the highest grade of the companies
+            # within that event"). Grade/score/hashtags/attribution all
+            # promote together so the pill and the account name agree.
+            _grank = {'A': 0, 'B': 1, 'C': 2, 'D': 3}
+            _best = None
+            for c in enriched:
+                _t = c.get('tal') or {}
+                if _t.get('grade') in _grank:
+                    _k = (_grank[_t['grade']], -(_t.get('score') or 0))
+                    if _best is None or _k < _best[0]:
+                        _best = (_k, c)
+            if _best is not None:
+                _bc = _best[1]
+                if (_bc.get('name') or '').strip() != account_nm:
+                    _bt = _bc['tal']
+                    log.info(f'    Headline promoted to best account: '
+                             f'{_bc.get("name")} (Grade {_bt["grade"]})')
+                    grading['grade'] = _bt['grade']
+                    grading['numeric_score'] = _bt.get('score')
+                    grading['confidence'] = _bt.get('confidence')
+                    if _bt.get('hashtags'):
+                        grading['hashtags'] = _bt['hashtags']
+                    if _bt.get('justification'):
+                        grading['grade_justification'] = _bt['justification']
+                    _bf = _bc.get('fit') or {}
+                    fit['account_name'] = _bc.get('name')
+                    fit['primary_name'] = _bc.get('name')
+                    fit['zi_subindustry'] = _bc.get('zi_subindustry')
+                    for _dim in ('territory', 'revenue', 'vertical'):
+                        if _bf.get(_dim):
+                            fit[_dim] = _bf[_dim]
+                    if _bf.get('verdict'):
+                        fit['verdict'] = _bf['verdict']
+                        fit['reasons'] = list(_bf.get('reasons') or [])
 
         if grading.get('grade'):
             log.info(
@@ -2074,7 +2114,47 @@ def regrade_only_events(limit: int = None, dry_run: bool = False):
                     if _g2.get('grade'):
                         _c['tal'] = {'grade': _g2.get('grade'),
                                      'score': _g2.get('numeric_score'),
-                                     'confidence': _g2.get('confidence')}
+                                     'confidence': _g2.get('confidence'),
+                                     'hashtags': _g2.get('hashtags') or [],
+                                     'justification': _g2.get('grade_justification')}
+            # store headline account's tal with promotion fields too
+            for _c in cd:
+                if (_c.get('name') or '').strip() == _acct_nm and grading.get('grade'):
+                    _c['tal'] = {'grade': grading.get('grade'),
+                                 'score': grading.get('numeric_score'),
+                                 'confidence': grading.get('confidence'),
+                                 'hashtags': grading.get('hashtags') or [],
+                                 'justification': grading.get('grade_justification')}
+            # Headline = best-graded company (mirrors enrich_events)
+            _grank = {'A': 0, 'B': 1, 'C': 2, 'D': 3}
+            _best = None
+            for _c in cd:
+                _t = _c.get('tal') or {}
+                if _t.get('grade') in _grank:
+                    _k = (_grank[_t['grade']], -(_t.get('score') or 0))
+                    if _best is None or _k < _best[0]:
+                        _best = (_k, _c)
+            if _best is not None:
+                _bc = _best[1]
+                if (_bc.get('name') or '').strip() != _acct_nm:
+                    _bt = _bc['tal']
+                    grading['grade'] = _bt['grade']
+                    grading['numeric_score'] = _bt.get('score')
+                    grading['confidence'] = _bt.get('confidence')
+                    if _bt.get('hashtags'):
+                        grading['hashtags'] = _bt['hashtags']
+                    if _bt.get('justification'):
+                        grading['grade_justification'] = _bt['justification']
+                    _bf = _bc.get('fit') or {}
+                    fit['account_name'] = _bc.get('name')
+                    fit['primary_name'] = _bc.get('name')
+                    fit['zi_subindustry'] = _bc.get('zi_subindustry')
+                    for _dim in ('territory', 'revenue', 'vertical'):
+                        if _bf.get(_dim):
+                            fit[_dim] = _bf[_dim]
+                    if _bf.get('verdict'):
+                        fit['verdict'] = _bf['verdict']
+                        fit['reasons'] = list(_bf.get('reasons') or [])
 
         if fit['verdict'] == 'unverified' and grading.get('grade') == 'A':
             grading['grade'] = 'B'
