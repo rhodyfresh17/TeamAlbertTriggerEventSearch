@@ -1262,6 +1262,28 @@ def get_stats(df) -> dict:
     }
 
 
+def _finance_leader_mask(df: pd.DataFrame) -> pd.Series:
+    """Boolean mask: rows that represent a new finance leader — either a
+    CFO-hire event OR any event tagged #NewController (Controller hires
+    stay event_type=executive_hire by design). Shared by the metric card
+    count and the drill-down focus so the number and the list always match."""
+    if df.empty:
+        return pd.Series(dtype=bool)
+    is_cfo = df['event_type'] == 'cfo_hire'
+
+    def _has_controller_tag(h):
+        if isinstance(h, str):
+            try:
+                h = json.loads(h)
+            except Exception:
+                return False
+        return isinstance(h, list) and '#NewController' in h
+
+    has_ctrl = df['hashtags'].apply(_has_controller_tag) \
+        if 'hashtags' in df.columns else pd.Series(False, index=df.index)
+    return is_cfo | has_ctrl
+
+
 _GRADE_RANK = {'A': 0, 'B': 1, None: 2, '': 2, 'C': 3, 'D': 4}
 
 
@@ -1546,18 +1568,14 @@ def main():
     # #NewController hashtag (Controller hires stay event_type=
     # executive_hire by design — see enrichment_scout._finance_role).
     # This is THE highest-value trigger, so it gets its own card.
-    def _has_controller_tag(h):
-        if isinstance(h, str):
-            try:
-                h = json.loads(h)
-            except Exception:
-                return False
-        return isinstance(h, list) and '#NewController' in h
-    controller_count = int(df['hashtags'].apply(_has_controller_tag).sum()) \
-        if 'hashtags' in df.columns else 0
-    finance_leader_count = cfo_count + controller_count
+    fl_mask = _finance_leader_mask(df)
+    finance_leader_count = int(fl_mask.sum())
 
-    # Modern metric cards
+    # Modern metric cards — the three CATEGORY cards are drillable: the
+    # "Work these →" button under each focuses the entire page (Work Queue
+    # + tabs) on that category so a rep can grind through the whole list.
+    focus = st.session_state.get('category_focus')
+
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
         render_metric_card("📊", stats["total"], "Total Events", "#667eea")
@@ -1565,10 +1583,22 @@ def main():
         render_metric_card("🆕", stats["new"], "New Leads", "#10b981")
     with col3:
         render_metric_card("💼", finance_leader_count, "New Finance Leaders", "#8b5cf6")
+        if st.button("Work these →", key="focus_fl", use_container_width=True,
+                     type="primary" if focus == 'finance' else "secondary"):
+            st.session_state['category_focus'] = None if focus == 'finance' else 'finance'
+            st.rerun()
     with col4:
         render_metric_card("🔵", ma_count, "M&A Events", "#3b82f6")
+        if st.button("Work these →", key="focus_ma", use_container_width=True,
+                     type="primary" if focus == 'ma' else "secondary"):
+            st.session_state['category_focus'] = None if focus == 'ma' else 'ma'
+            st.rerun()
     with col5:
         render_metric_card("💰", funding_count, "Funding", "#f59e0b")
+        if st.button("Work these →", key="focus_funding", use_container_width=True,
+                     type="primary" if focus == 'funding' else "secondary"):
+            st.session_state['category_focus'] = None if focus == 'funding' else 'funding'
+            st.rerun()
 
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -1583,11 +1613,32 @@ def main():
     new_df = df[df['lead_status'] == 'NEW']
     classified_df = df[df['lead_status'] != 'NEW']
 
+    # ── Category focus (from the metric-card buttons) ──────────────────────
+    if focus:
+        labels = {'finance': '💼 New Finance Leaders',
+                  'ma': '🔵 M&A Events', 'funding': '💰 Funding'}
+        if focus == 'finance':
+            new_df = new_df[_finance_leader_mask(new_df)]
+        elif focus == 'ma':
+            new_df = new_df[new_df['event_type'] == 'merger_acquisition']
+        elif focus == 'funding':
+            new_df = new_df[new_df['event_type'] == 'funding']
+        fc1, fc2 = st.columns([5, 1])
+        with fc1:
+            st.info(f"Focused on **{labels[focus]}** — {len(new_df)} new "
+                    f"lead(s), ranked below. Click ✕ to see everything again.")
+        with fc2:
+            if st.button("✕ Clear", key="clear_focus", use_container_width=True):
+                st.session_state['category_focus'] = None
+                st.rerun()
+
     # ── 🔥 WORK QUEUE — the answer to "which accounts do I work?" ──────────
     # One ranked list across ALL event types: grade first (A→B→ungraded),
     # then numeric score, then freshness. Rolled up per company so one
     # account with 4 events is one row, not four cards.
-    render_work_queue(new_df)
+    # When a category focus is active, show the WHOLE ranked list — the rep
+    # is working through it, not previewing it.
+    render_work_queue(new_df, top_n=(500 if focus else 10))
 
     # ── New Leads Section ──
     new_count = len(new_df)
