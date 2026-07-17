@@ -1494,6 +1494,7 @@ def enrich_events(
     limit: int = None,
     re_enrich: bool = False,
     dry_run: bool = False,
+    missing_fit_only: bool = False,
 ):
     check_required_keys()
     client  = get_supabase()
@@ -1518,6 +1519,10 @@ def enrich_events(
     )
     if not re_enrich and col_ok.get('enriched_at'):
         query = query.is_('enriched_at', 'null')
+    if missing_fit_only and col_ok.get('fit'):
+        # Catch-up mode: only events the fit-gate rollout hasn't touched yet
+        # (e.g. rows beyond a prior run's 1000-row page cap). Idempotent.
+        query = query.is_('fit', 'null')
     # NEVER process tombstoned events — they're already decided (industry/
     # fit-gate blocked or rep-dismissed). Re-enriching them is pure waste
     # (~15s each) and re-grades rows the dashboard will never show.
@@ -1936,6 +1941,9 @@ if __name__ == '__main__':
                    help='Re-apply grading rules + industry filter + event_type '
                         'reclassification using EXISTING firmographic data. '
                         'NO Tavily calls (free, Ollama-only).')
+    p.add_argument('--missing-fit-only', action='store_true',
+                   help='With --re-enrich: only process events that have no '
+                        'fit data yet (catch-up after a capped backlog run)')
     p.add_argument('--dry-run',       action='store_true',
                    help='Preview without writing to Supabase')
     args = p.parse_args()
@@ -1949,4 +1957,5 @@ if __name__ == '__main__':
             limit=args.limit,
             re_enrich=args.re_enrich,
             dry_run=args.dry_run,
+            missing_fit_only=args.missing_fit_only,
         )
