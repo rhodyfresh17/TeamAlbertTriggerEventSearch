@@ -982,7 +982,8 @@ def render_event_card(row, event_config, key_prefix: str = ''):
                         "Companies Involved</div>",
                         unsafe_allow_html=True
                     )
-                    for co in companies_data:
+                    acct_dispos = st.session_state.get('acct_dispos')
+                    for _co_idx, co in enumerate(companies_data):
                         co_name     = _v(co.get('name'))
                         co_role     = _v(co.get('role'))
                         co_url      = _v(co.get('url'))
@@ -1076,6 +1077,28 @@ def render_event_card(row, event_config, key_prefix: str = ''):
                             for bcol, (blabel, bhref) in zip(btn_cols, co_buttons):
                                 with bcol:
                                     st.link_button(blabel, bhref, use_container_width=True)
+
+                        # ── Per-ACCOUNT disposition (follows the company
+                        # across every event it appears in). Auto-saves on
+                        # change; any status = "decided" and the account's
+                        # events drop out of the active queue on next refresh.
+                        if co_name and acct_dispos is not None:
+                            wkey = f"{key_prefix}acct_{row['id']}_{_co_idx}"
+                            cur = (acct_dispos.get(_account_key(co_name)) or {}).get('status')
+                            opts = ['—'] + ACCOUNT_STATUSES
+                            sel_cols = st.columns([1, 2])
+                            with sel_cols[0]:
+                                st.caption(f"Account status — {co_name[:30]}")
+                            with sel_cols[1]:
+                                st.selectbox(
+                                    f"acct status {co_name}",
+                                    opts,
+                                    index=opts.index(cur) if cur in opts else 0,
+                                    key=wkey,
+                                    label_visibility="collapsed",
+                                    on_change=_on_account_dispo_change,
+                                    args=(wkey, co_name),
+                                )
 
                         st.markdown(
                             "<div style='border-top:1px solid rgba(255,255,255,0.07);"
@@ -1262,6 +1285,77 @@ def get_stats(df) -> dict:
         "by_type": df['event_type'].value_counts().to_dict(),
         "new": len(df[df['lead_status'] == 'NEW'])
     }
+
+
+# ── Account-level dispositions ────────────────────────────────────────────
+# The disposition object is the COMPANY (account), not the event: one M&A
+# event surfaces 2+ companies, each deserving its own verdict, and a verdict
+# follows the company across every event it appears in. Any disposition
+# means "decided — get it out of my queue" (per A.J. 2026-07-17), so events
+# whose primary company is dispositioned disappear from the active views.
+ACCOUNT_STATUSES = ['Picked Up', 'On Rep TAL', 'NetSuite Customer',
+                    'Out of Alignment', 'Not a Fit']
+ACCOUNT_DISPO_MIGRATION_SQL = (
+    "create table if not exists account_dispositions (\n"
+    "  company_key text primary key,\n"
+    "  company_name text,\n"
+    "  status text not null,\n"
+    "  notes text,\n"
+    "  updated_at timestamptz default now()\n"
+    ");"
+)
+
+
+def _account_key(name) -> str:
+    """Normalize a company name into a stable disposition key."""
+    s = str(name or '').strip().lower()
+    # Strip common suffixes so "Acme Inc." and "Acme" collide intentionally
+    for suf in (', inc.', ', inc', ' inc.', ' inc', ', llc', ' llc',
+                ', ltd.', ' ltd.', ' ltd', ' corp.', ' corp', ' co.', ' company'):
+        if s.endswith(suf):
+            s = s[: -len(suf)]
+            break
+    return s.strip(' .,')
+
+
+def load_account_dispositions():
+    """Return {company_key: {status, company_name, updated_at}} or None when
+    the table hasn't been migrated yet."""
+    client = get_supabase_client()
+    if not client:
+        return None
+    try:
+        rows = client.table('account_dispositions').select('*').execute().data or []
+        return {r['company_key']: r for r in rows}
+    except Exception:
+        return None  # table missing — feature dormant until migration
+
+
+def set_account_disposition(company_name: str, status):
+    """Upsert (or clear, when status falsy/'—') a company's disposition."""
+    client = get_supabase_client()
+    if not client or not company_name:
+        return
+    key = _account_key(company_name)
+    if not key:
+        return
+    try:
+        if not status or status == '—':
+            client.table('account_dispositions').delete().eq('company_key', key).execute()
+        else:
+            client.table('account_dispositions').upsert({
+                'company_key': key,
+                'company_name': str(company_name)[:200],
+                'status': status,
+                'updated_at': datetime.now().isoformat(),
+            }, on_conflict='company_key').execute()
+    except Exception as e:
+        st.error(f"Couldn't save account disposition: {e}")
+
+
+def _on_account_dispo_change(widget_key: str, company_name: str):
+    """selectbox on_change callback — writes immediately, no save button."""
+    set_account_disposition(company_name, st.session_state.get(widget_key))
 
 
 def _finance_leader_mask(df: pd.DataFrame) -> pd.Series:
@@ -1615,6 +1709,48 @@ def main():
     new_df = df[df['lead_status'] == 'NEW']
     classified_df = df[df['lead_status'] != 'NEW']
 
+    # ── Account dispositions: any dispositioned company = decided → its
+    # events leave the active queue (per A.J.: "once a company is marked
+    # Picked Up it should disappear from view").
+    acct_dispos = load_account_dispositions()
+    st.session_state['acct_dispos'] = acct_dispos
+    if acct_dispos is None:
+        st.warning(
+            "**Account dispositions need a one-time migration** — run this in "
+            "Supabase SQL Editor to enable per-company statuses:\n"
+            f"```sql\n{ACCOUNT_DISPO_MIGRATION_SQL}\n```"
+        )
+    elif acct_dispos and not new_df.empty:
+        decided_keys = set(acct_dispos.keys())
+
+        def _event_decided(r):
+            # Hidden when the company the event is ABOUT is dispositioned —
+            # check both the display company and the enriched primary.
+            names = {_resolve_display_company(r)}
+            cd = r.get('companies_data')
+            if isinstance(cd, str):
+                try:
+                    cd = json.loads(cd)
+                except Exception:
+                    cd = []
+            if isinstance(cd, list) and cd:
+                for role in ('acquirer', 'portfolio company', 'hiring company',
+                             'primary', 'target'):
+                    m = next((c for c in cd
+                              if str(c.get('role', '')).lower() == role), None)
+                    if m:
+                        names.add(m.get('name') or '')
+                        break
+            return any(_account_key(n) in decided_keys for n in names if n)
+
+        decided_mask = new_df.apply(_event_decided, axis=1)
+        hidden_n = int(decided_mask.sum())
+        new_df = new_df[~decided_mask]
+        if hidden_n:
+            st.caption(f"♻️ {hidden_n} event(s) hidden — their accounts are "
+                       f"already dispositioned (see the Dispositioned "
+                       f"Accounts panel at the bottom).")
+
     # ── Category focus (from the metric-card buttons) ──────────────────────
     if focus:
         labels = {'finance': '💼 New Finance Leaders',
@@ -1722,6 +1858,29 @@ def main():
                         render_event_card(row, event_config)
 
     st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── Dispositioned Accounts (decided — hidden from active views) ────────
+    if acct_dispos:
+        with st.expander(f"♻️ Dispositioned Accounts ({len(acct_dispos)})",
+                         expanded=False):
+            st.caption("Every event for these companies is hidden from the "
+                       "queue. Clear a row to bring the account back.")
+            rows = sorted(acct_dispos.values(),
+                          key=lambda r: r.get('updated_at') or '', reverse=True)
+            for r in rows[:200]:
+                c1, c2, c3, c4 = st.columns([3, 2, 2, 1])
+                with c1:
+                    st.markdown(f"**{r.get('company_name') or r['company_key']}**")
+                with c2:
+                    st.markdown(r.get('status') or '')
+                with c3:
+                    st.caption((r.get('updated_at') or '')[:10])
+                with c4:
+                    if st.button("✕ Clear", key=f"clr_acct_{r['company_key']}",
+                                 use_container_width=True):
+                        set_account_disposition(r.get('company_name')
+                                                or r['company_key'], None)
+                        st.rerun()
 
     # ── All Events Table ──
     with st.expander("📊 All Events Table", expanded=False):
