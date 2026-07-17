@@ -771,6 +771,36 @@ def reset_search_counts() -> None:
         SEARCH_COUNTS[k] = 0
 
 
+# Monthly Tavily budget guard — free tier is 1000 calls/month. The 2026-07-16
+# overnight bulk run fired 1616 fallback calls and exhausted the quota mid-run
+# (late calls returned empty → thinner enrichment). We now stop falling back
+# once the month's budget is nearly spent, preserving headroom for the
+# genuinely-needed lookups later in the month.
+TAVILY_MONTHLY_BUDGET = int(os.environ.get('TAVILY_MONTHLY_BUDGET', '900'))
+
+
+def _tavily_month_count(increment: bool = False) -> int:
+    """Read (and optionally increment) this calendar month's Tavily call
+    count, persisted in the local cache DB so it survives restarts."""
+    month = datetime.utcnow().strftime('%Y-%m')
+    try:
+        conn = sqlite3.connect(CACHE_DB_PATH)
+        cur = conn.cursor()
+        cur.execute('CREATE TABLE IF NOT EXISTS tavily_usage '
+                    '(month TEXT PRIMARY KEY, calls INTEGER)')
+        if increment:
+            cur.execute('INSERT INTO tavily_usage (month, calls) VALUES (?, 1) '
+                        'ON CONFLICT(month) DO UPDATE SET calls = calls + 1',
+                        (month,))
+            conn.commit()
+        cur.execute('SELECT calls FROM tavily_usage WHERE month = ?', (month,))
+        row = cur.fetchone()
+        conn.close()
+        return row[0] if row else 0
+    except Exception:
+        return 0  # fail open — guard is best-effort
+
+
 def tavily_search(company_name: str, industry_hint: str = '') -> dict:
     """Public search interface. Despite the legacy name, dispatches to the
     configured SEARCH_BACKEND (firecrawl by default) with persistent caching.
@@ -784,15 +814,30 @@ def tavily_search(company_name: str, industry_hint: str = '') -> dict:
     # Backend dispatch
     if SEARCH_BACKEND == 'tavily':
         SEARCH_COUNTS['tavily'] += 1
+        _tavily_month_count(increment=True)
         results = _tavily_search(company_name, industry_hint)
     elif SEARCH_BACKEND == 'firecrawl':
         SEARCH_COUNTS['firecrawl'] += 1
         results = _firecrawl_search(company_name, industry_hint)
-        # Auto-fallback to Tavily if Firecrawl returned nothing AND Tavily is configured
+        if not results or not results.get('results'):
+            # Empty Firecrawl during bulk runs is usually TRANSIENT upstream
+            # rate-limiting (searxng's engines throttling a burst). One short
+            # wait + retry recovers most of them for free — verified: the
+            # same queries succeed seconds later.
+            time.sleep(2.5)
+            SEARCH_COUNTS['firecrawl'] += 1
+            results = _firecrawl_search(company_name, industry_hint)
+        # Tavily fallback — only if configured AND monthly budget remains
         if (not results or not results.get('results')) and TAVILY_API_KEY:
-            log.info('  → Firecrawl empty, falling back to Tavily')
-            SEARCH_COUNTS['tavily'] += 1
-            results = _tavily_search(company_name, industry_hint)
+            used = _tavily_month_count()
+            if used >= TAVILY_MONTHLY_BUDGET:
+                log.info(f'  → Firecrawl empty; Tavily budget spent '
+                         f'({used}/{TAVILY_MONTHLY_BUDGET} this month) — skipping fallback')
+            else:
+                log.info('  → Firecrawl empty, falling back to Tavily')
+                SEARCH_COUNTS['tavily'] += 1
+                _tavily_month_count(increment=True)
+                results = _tavily_search(company_name, industry_hint)
     else:
         log.warning(f'  Unknown SEARCH_BACKEND={SEARCH_BACKEND!r}, defaulting to firecrawl')
         SEARCH_COUNTS['firecrawl'] += 1

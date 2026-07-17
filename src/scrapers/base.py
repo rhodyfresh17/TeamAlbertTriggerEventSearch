@@ -398,8 +398,9 @@ class BaseScraper(ABC):
         )
 
         patterns = [
-            # "{Company} <funding_verb> ..."
-            (rf"^({company_chars}{{1,60}}?)\s+{funding_verbs}\b", 1),
+            # "{Company} <funding_verb> ..." — optional "to " before the verb
+            # handles "White Cap to acquire X" (was capturing "White Cap to")
+            (rf"^({company_chars}{{1,60}}?)\s+(?:to\s+)?{funding_verbs}\b", 1),
             # Corporate suffix anywhere in text
             (
                 r"\b("
