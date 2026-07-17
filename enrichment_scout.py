@@ -858,7 +858,14 @@ Guidance: fintech/payments → 'Credit Cards & Transaction Processing'; \
 RIA/wealth/asset managers/family offices → 'Investment Banking' or \
 'Venture Capital & Private Equity' as fits; mortgage/consumer lenders → \
 'Lending & Brokerage'; credit unions → 'Banking'; charities/foundations → \
-one of the Non-Profit options; use null ONLY if the company cannot be \
+one of the Non-Profit options. CRITICAL: 'Venture Capital & Private \
+Equity' applies ONLY when the company ITSELF is an investment firm that \
+manages funds and invests in other companies. A startup that RAISED \
+venture funding is NOT 'Venture Capital & Private Equity' — classify it \
+by what it actually sells (a funded healthcare startup is OTHER, a funded \
+robotics company is OTHER, a funded insurtech is 'Insurance'). Same for \
+acquirers: an operating company that acquires another is classified by \
+its OWN business, not as PE. Use null ONLY if the company cannot be \
 identified at all.",
   "size":     "one of: '1-50', '51-200', '201-500', '501-1000', \
 '1001-5000', '5001-10000', '10000+', or null",
@@ -1573,20 +1580,22 @@ def enrich_events(
             role      = co['role']
             cache_key = name.lower().strip()
 
-            # Build an industry hint from the event type + role to disambiguate.
-            # event_type is stored LOWERCASE per src/models.py (EventType enum
-            # values are 'merger_acquisition', 'funding', 'cfo_hire', etc.) —
-            # this check was previously wrong-cased so hints were never applied.
-            etype_l = (etype or '').lower()
-            hint_parts = []
-            if etype_l in ('merger_acquisition', 'funding'):
-                hint_parts.append('financial services private equity')
-            if etype_l in ('executive_hire', 'cfo_hire'):
-                hint_parts.append('B2B company')
-            # Add the role context too
-            if role in ('Acquirer', 'Target', 'Portfolio Company', 'Hiring Company'):
-                hint_parts.append('North America')
-            industry_hint = ' '.join(hint_parts)
+            # Build a NEUTRAL disambiguation hint. Never inject industry
+            # guesses: the old 'financial services private equity' hint for
+            # M&A/funding events biased BOTH the web search AND the ZI
+            # classification — every funded startup came back classified
+            # 'Venture Capital & Private Equity' (live test 2026-07-16).
+            # Role-based context only:
+            role_l = (role or '').lower()
+            if role_l in ('lead investor', 'investor'):
+                # Investors genuinely ARE investment firms — hint helps here
+                industry_hint = 'investment firm'
+            elif role_l == 'portfolio company':
+                # The company that RAISED money — explicitly steer AWAY from
+                # classifying it as the investor
+                industry_hint = 'company North America'
+            else:
+                industry_hint = 'company North America'
 
             if cache_key not in firm_cache:
                 log.info(f'  → Searching: {name}')
@@ -1595,8 +1604,8 @@ def enrich_events(
                     time.sleep(RATE_LIMIT_SECONDS)
                 else:
                     firm_cache[cache_key] = {
-                        'url': None, 'industry': None, 'size': None,
-                        'revenue': None, 'revenue_source': None,
+                        'url': None, 'industry': None, 'zi_subindustry': None,
+                        'size': None, 'revenue': None, 'revenue_source': None,
                         'hq': None, 'linkedin': None
                     }
             else:
@@ -1612,6 +1621,7 @@ def enrich_events(
                 'role':           role,
                 'url':            firm.get('url'),
                 'industry':       firm.get('industry'),
+                'zi_subindustry': firm.get('zi_subindustry'),
                 'size':           firm.get('size'),
                 'revenue':        firm.get('revenue'),
                 'revenue_source': firm.get('revenue_source'),
