@@ -9,6 +9,11 @@ PROJECT="/Users/andrewalbertbase/Shared/AI-BOTS/TeamAlbertTriggerEventSearch"
 ALERTS_LOG="$PROJECT/logs/health_alerts.log"
 RUNTIME_LOG="$PROJECT/logs/health_check_runtime.log"
 
+# Post health issues to Scout's Discord thread (TriggerEventSearch Health).
+# Only fires on WARN/FAIL below; routine "all clear" stays quiet.
+SCOUT_ENV="${HOME}/Shared/AI-BOTS/hermes-scout-data/.env"
+source "${HOME}/Shared/AI-BOTS/utils/discord_notify.sh" 2>/dev/null || true
+
 # Trim alerts log if it gets too big (keep last 5000 lines so Elon has history)
 if [ -f "$ALERTS_LOG" ] && [ "$(wc -l < "$ALERTS_LOG")" -gt 5000 ]; then
     tail -4000 "$ALERTS_LOG" > "$ALERTS_LOG.tmp" && mv "$ALERTS_LOG.tmp" "$ALERTS_LOG"
@@ -57,6 +62,8 @@ if [ "$EXIT_CODE" -ne 0 ]; then
         grep -E "$EXTRACT_PATTERN" "$TMP_OUT" | sed 's/^/    /'
         echo "    → Full output in logs/health_check_runtime.log"
     } >> "$ALERTS_LOG"
+    DETAIL="$(grep -E "$EXTRACT_PATTERN" "$TMP_OUT" | sed 's/^/• /')"
+    discord_notify "$SCOUT_ENV" "$(printf '🔴 TriggerEventSearch health FAILED (%s)\n%s\nFull log: logs/health_check_runtime.log' "$MODE" "$DETAIL")"
 else
     # Also log if there are WARNs even though overall passed
     if grep -qE "^  🟡 WARN  " "$TMP_OUT"; then
@@ -65,6 +72,8 @@ else
             echo "[$TIMESTAMP] 🟡 Health check passed with WARNINGS (mode=$MODE)"
             grep -E "^  🟡 WARN  " "$TMP_OUT" | sed 's/^/    /'
         } >> "$ALERTS_LOG"
+        DETAIL="$(grep -E "^  🟡 WARN  " "$TMP_OUT" | sed 's/^/• /')"
+        discord_notify "$SCOUT_ENV" "$(printf '🟡 TriggerEventSearch passed with warnings (%s)\n%s' "$MODE" "$DETAIL")"
     else
         echo "[$TIMESTAMP] ✅ All clear ($MODE check passed)" >> "$ALERTS_LOG"
     fi

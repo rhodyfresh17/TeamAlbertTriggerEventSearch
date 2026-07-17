@@ -40,6 +40,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict
+import subprocess
 
 import requests
 
@@ -65,11 +66,14 @@ SEARCH_BACKEND    = os.environ.get('SEARCH_BACKEND', 'firecrawl').lower()
 FIRECRAWL_URL     = os.environ.get('FIRECRAWL_URL', 'http://localhost:3002')
 TAVILY_API_KEY    = os.environ.get('TAVILY_API_KEY', '')  # fallback only now
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
-OLLAMA_URL        = os.environ.get('OLLAMA_URL',   'http://localhost:11434')
-# Default model — falls back to whatever is locally available. Override with
-# `export OLLAMA_MODEL=...` to use a specific model (e.g. qwen2.5:14b).
-OLLAMA_MODEL      = os.environ.get('OLLAMA_MODEL', 'qwen3-coder:30b')
-CLAUDE_MODEL      = 'claude-3-5-haiku-20241022'
+CLAUDE_MODEL      = 'claude-3-5-haiku-20241022'  # optional cloud path — unused unless key set
+# LLM primary = the shared local llama.cpp server (Qwen3.6, non-thinking, OpenAI /v1)
+# that serves the whole Hermes fleet on :8091 (migrated 2026-07-11). Replaces the old
+# Ollama qwen3-coder path — that was a SECOND ~25GB model reloading 6x/day, which
+# thrashed RAM. Now one shared model, no per-job reload. Fallback = Scout agent (llm_json).
+LLAMACPP_URL      = os.environ.get('LLAMACPP_URL',   'http://localhost:8091')
+LLAMACPP_MODEL    = os.environ.get('LLAMACPP_MODEL', 'qwen3.6')
+SCOUT_CONTAINER   = os.environ.get('SCOUT_CONTAINER', 'hermes-sales')
 
 # Persistent firmographic-search cache (SQLite). Same company name within
 # CACHE_TTL_DAYS doesn't re-search — saves time + quota for repeat companies.
@@ -164,21 +168,35 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
-# ── LLM abstraction (Anthropic API or Ollama) ─────────────────────────────────
+# ── LLM abstraction: local llama.cpp primary, Scout agent fallback ────────────
+# Primary = the shared local llama.cpp server (Qwen3.6, non-thinking, OpenAI /v1)
+# serving the whole Hermes fleet on :8091 — ONE model, no per-job reloads.
+# Fallback = the Scout Hermes agent via docker exec: it uses whatever Scout is
+# configured for — local today (so the fallback is cosmetic while they share the
+# server), cloud Grok in future (then a real independent failover). The old
+# Anthropic-vs-Ollama switch is retired; _anthropic_json pre-empts ONLY if
+# ANTHROPIC_API_KEY is set (normally it is not).
 
 def _llm_backend():
-    return 'anthropic' if ANTHROPIC_API_KEY else 'ollama'
+    """Label for logging only."""
+    return 'anthropic' if ANTHROPIC_API_KEY else 'llamacpp'
 
 
 def llm_json(prompt: str, max_tokens: int = 600) -> dict:
     """
-    Send prompt to the active LLM, return parsed JSON dict.
-    Tries Anthropic claude-3-5-haiku if ANTHROPIC_API_KEY is set, else Ollama.
-    Returns {} on any failure.
+    Send prompt to the LLM, return parsed JSON dict.
+    Order: Anthropic (only if key set) -> local llama.cpp -> Scout agent fallback.
+    Returns {} if all paths fail.
     """
-    if _llm_backend() == 'anthropic':
-        return _anthropic_json(prompt, max_tokens)
-    return _ollama_json(prompt, max_tokens)
+    if ANTHROPIC_API_KEY:
+        result = _anthropic_json(prompt, max_tokens)
+        if result:
+            return result
+    result = _llamacpp_json(prompt, max_tokens)
+    if result:
+        return result
+    log.warning('  llama.cpp empty/unreachable — falling back to Scout agent')
+    return _scout_json(prompt, max_tokens)
 
 
 def _anthropic_json(prompt: str, max_tokens: int) -> dict:
@@ -215,23 +233,58 @@ def _anthropic_json(prompt: str, max_tokens: int) -> dict:
         return {}
 
 
-def _ollama_json(prompt: str, max_tokens: int) -> dict:
+def _loads_json_object(text: str) -> dict:
+    """Extract + parse the outermost {...} from an LLM reply. Qwen often wraps JSON in
+    ```markdown fences``` or adds prose, so a bare json.loads() fails — grab the object."""
+    if not text:
+        return {}
+    s, e = text.find('{'), text.rfind('}')
+    if s == -1 or e <= s:
+        return {}
+    try:
+        return json.loads(text[s:e + 1])
+    except Exception:
+        return {}
+
+
+def _llamacpp_json(prompt: str, max_tokens: int) -> dict:
+    """Primary: local llama.cpp OpenAI-compatible endpoint, JSON mode, non-thinking."""
     try:
         resp = requests.post(
-            f'{OLLAMA_URL}/api/generate',
+            f'{LLAMACPP_URL}/v1/chat/completions',
             json={
-                'model':   OLLAMA_MODEL,
-                'prompt':  prompt,
-                'stream':  False,
-                'format':  'json',
-                'options': {'temperature': 0.05, 'num_predict': max_tokens},
+                'model':           LLAMACPP_MODEL,
+                'messages':        [{'role': 'user', 'content': prompt}],
+                'temperature':     0.05,
+                'max_tokens':      max_tokens,
+                'response_format': {'type': 'json_object'},
             },
             timeout=90
         )
         resp.raise_for_status()
-        return json.loads(resp.json().get('response', '{}'))
+        return _loads_json_object(resp.json()['choices'][0]['message']['content'])
     except Exception as e:
-        log.warning(f'  Ollama error: {e}')
+        log.warning(f'  llama.cpp error: {e}')
+        return {}
+
+
+def _scout_json(prompt: str, max_tokens: int) -> dict:
+    """Fallback: ask the Scout Hermes agent via docker exec (uses whatever model Scout
+    runs). Cosmetic while Scout shares the local server; a real cloud failover once
+    Scout moves to Grok. Best-effort JSON extraction from the agent's reply."""
+    try:
+        wrapped = prompt + "\n\nRespond with a single valid JSON object only — no markdown, no prose."
+        proc = subprocess.run(
+            ['docker', 'exec', '-e', 'HERMES_HOME=/opt/data', SCOUT_CONTAINER,
+             '/opt/hermes/.venv/bin/hermes', 'chat', '-q', wrapped, '-Q'],
+            capture_output=True, text=True, timeout=180
+        )
+        result = _loads_json_object(proc.stdout or '')
+        if not result:
+            log.warning('  Scout fallback returned no parseable JSON')
+        return result
+    except Exception as e:
+        log.warning(f'  Scout fallback error: {e}')
         return {}
 
 
@@ -980,7 +1033,8 @@ def enrich_events(
             sys.exit(1)
 
     log.info(f'LLM backend: {backend} '
-             f'({"claude-3-5-haiku" if backend == "anthropic" else OLLAMA_MODEL})')
+             f'({"claude-3-5-haiku" if backend == "anthropic" else LLAMACPP_MODEL} '
+             f'-> Scout fallback)')
 
     # ── Fetch events ──────────────────────────────────────────────────────
     # Include source_url so grade_event() can cite the original article in

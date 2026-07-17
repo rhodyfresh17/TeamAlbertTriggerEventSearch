@@ -140,22 +140,22 @@ def check_tavily_fallback():
         return WARN, f'Tavily fallback check error (non-critical): {e}'
 
 
-def check_ollama():
-    """Verify Ollama is running and the enrichment model is available."""
-    url = os.environ.get('OLLAMA_URL', 'http://localhost:11434')
-    model = os.environ.get('OLLAMA_MODEL', 'qwen3-coder:30b')
+def check_llamacpp():
+    """Verify the shared local llama.cpp server (Qwen3.6, serves the whole fleet) is up."""
+    url = os.environ.get('LLAMACPP_URL', 'http://localhost:8091')
+    model = os.environ.get('LLAMACPP_MODEL', 'qwen3.6')
     try:
-        resp = requests.get(f'{url}/api/tags', timeout=5)
+        resp = requests.get(f'{url}/v1/models', timeout=10)
         if resp.status_code != 200:
-            return FAIL, f'Ollama returned HTTP {resp.status_code}'
-        models = [m['name'] for m in resp.json().get('models', [])]
-        if model not in models:
-            return FAIL, f'Ollama running but model "{model}" not pulled. Available: {models[:3]}'
-        return PASS, f'Ollama up, model "{model}" available'
+            return FAIL, f'llama.cpp returned HTTP {resp.status_code}'
+        ids = [m.get('id') for m in resp.json().get('data', [])]
+        if model not in ids:
+            return WARN, f'llama.cpp up but model "{model}" not listed. Available: {ids[:3]}'
+        return PASS, f'llama.cpp up, model "{model}" serving'
     except requests.ConnectionError:
-        return FAIL, f'Ollama not reachable at {url} — is it running? (`brew services start ollama`)'
+        return FAIL, f'llama.cpp not reachable at {url} — is the llamacpp-hermes launchd service running?'
     except Exception as e:
-        return WARN, f'Ollama check error: {e}'
+        return WARN, f'llama.cpp check error: {e}'
 
 
 def get_supabase():
@@ -442,7 +442,7 @@ def run_checks(mode: str):
         ('Environment credentials',     check_env_creds),
         ('Firecrawl (search backend)',  check_firecrawl),
         ('Tavily fallback',             check_tavily_fallback),
-        ('Ollama (local LLM)',          check_ollama),
+        ('llama.cpp (local LLM)',       check_llamacpp),
         ('Supabase connection',         check_supabase),
         ('Scrape freshness',            check_scrape_freshness),
         ('Enrichment lag',              check_enrichment_lag),
