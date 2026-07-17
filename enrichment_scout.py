@@ -1852,6 +1852,37 @@ def enrich_events(
                 + (grading.get('grade_justification') or '')
             )[:1000]
 
+        # ── Per-COMPANY grades (the grade belongs to the account, per A.J.
+        # 2026-07-17). The chosen account carries the event's headline grade;
+        # every OTHER workable, non-failed company gets its own grade too —
+        # a PE deal with two fitting investors yields a grade for each.
+        # Stored compactly on each company dict → companies_data JSONB.
+        account_nm = (fit.get('account_name') or '').strip()
+        if not dry_run and grading.get('grade'):
+            for c in enriched:
+                cname = (c.get('name') or '').strip()
+                cfit = c.get('fit') or {}
+                if not cname:
+                    continue
+                if cname == account_nm:
+                    c['tal'] = {'grade': grading.get('grade'),
+                                'score': grading.get('numeric_score'),
+                                'confidence': grading.get('confidence')}
+                    continue
+                if (str(c.get('role', '')).lower() in
+                        [r for r in WORKABLE_ROLES]
+                        and cfit.get('verdict') in ('pass', 'unverified')):
+                    g2 = grade_event(event, enriched, extra_evidence,
+                                     account_name=cname)
+                    if cfit.get('verdict') == 'unverified' and g2.get('grade') == 'A':
+                        g2['grade'] = 'B'
+                    if g2.get('grade'):
+                        c['tal'] = {'grade': g2.get('grade'),
+                                    'score': g2.get('numeric_score'),
+                                    'confidence': g2.get('confidence')}
+                        log.info(f'    Secondary account {cname[:30]}: '
+                                 f'Grade={g2["grade"]} Score={g2.get("numeric_score")}')
+
         if grading.get('grade'):
             log.info(
                 f'    Grade={grading["grade"]}  '
@@ -2021,6 +2052,30 @@ def regrade_only_events(limit: int = None, dry_run: bool = False):
         # ── TAL grading (local LLM, free — no search probes in this mode) ──
         grading = grade_event(event, cd, account_name=fit.get('account_name') or '')
 
+        # Per-company grades for other workable, non-failed companies
+        # (mirrors enrich_events — the grade belongs to the account)
+        _acct_nm = (fit.get('account_name') or '').strip()
+        if not dry_run and grading.get('grade'):
+            for _c in cd:
+                _cn = (_c.get('name') or '').strip()
+                _cf = _c.get('fit') or {}
+                if not _cn:
+                    continue
+                if _cn == _acct_nm:
+                    _c['tal'] = {'grade': grading.get('grade'),
+                                 'score': grading.get('numeric_score'),
+                                 'confidence': grading.get('confidence')}
+                    continue
+                if (str(_c.get('role', '')).lower() in WORKABLE_ROLES
+                        and _cf.get('verdict') in ('pass', 'unverified')):
+                    _g2 = grade_event(event, cd, account_name=_cn)
+                    if _cf.get('verdict') == 'unverified' and _g2.get('grade') == 'A':
+                        _g2['grade'] = 'B'
+                    if _g2.get('grade'):
+                        _c['tal'] = {'grade': _g2.get('grade'),
+                                     'score': _g2.get('numeric_score'),
+                                     'confidence': _g2.get('confidence')}
+
         if fit['verdict'] == 'unverified' and grading.get('grade') == 'A':
             grading['grade'] = 'B'
             grading['grade_justification'] = (
@@ -2039,12 +2094,14 @@ def regrade_only_events(limit: int = None, dry_run: bool = False):
             ok += 1
             continue
 
-        # ── Build payload (don't touch companies_data — we didn't change it) ─
+        # ── Build payload. companies_data IS written now — per-company fit
+        # and per-company TAL grades were attached to the company dicts. ──
         if grading.get('grade') is None:
             log.warning('  Grading returned nothing — keeping existing grade')
-            payload = {}
+            payload = {'companies_data': cd}
         else:
             payload = {
+                'companies_data':      cd,
                 'grade':               grading.get('grade'),
                 'confidence_level':    grading.get('confidence'),
                 'numeric_score':       grading.get('numeric_score'),

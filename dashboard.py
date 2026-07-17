@@ -756,7 +756,8 @@ def render_event_card(row, event_config, key_prefix: str = ''):
     grade_html = ""
     if grade in grade_colors:
         color = grade_colors[grade]
-        desc = grade_descriptions[grade]
+        _acct_for_tip = _resolve_display_company(row)
+        desc = f"TAL grade for {_acct_for_tip} — " + grade_descriptions[grade]
         # Append V11 metadata to the tooltip if present
         if score is not None:
             desc += f"  ·  Score: {score}"
@@ -1047,6 +1048,21 @@ def render_event_card(row, event_config, key_prefix: str = ''):
                                         f"color:rgba(255,255,255,0.45);margin-left:7px;"
                                         f"font-style:italic;'>{_h2.escape(' · '.join(_short))}</span>"
                                     )
+                        # Per-company TAL grade chip (the grade belongs to the
+                        # ACCOUNT — each workable company carries its own)
+                        co_tal = co.get('tal') if isinstance(co.get('tal'), dict) else None
+                        if co_tal and co_tal.get('grade') in ('A', 'B', 'C', 'D'):
+                            _g = co_tal['grade']
+                            _gc = {'A': '#10b981', 'B': '#3b82f6',
+                                   'C': '#f59e0b', 'D': '#6b7280'}[_g]
+                            _sc = co_tal.get('score')
+                            _sc_txt = f" · {_sc}" if _sc is not None else ""
+                            role_html += (
+                                f"<span title='TAL grade for this account' "
+                                f"style='font-size:0.66rem;background:{_gc};"
+                                f"color:#fff;border-radius:4px;padding:0.08rem 0.4rem;"
+                                f"margin-left:8px;font-weight:800;'>{_g}{_sc_txt}</span>"
+                            )
                         st.markdown(
                             f"<div style='margin:4px 0 2px;'>"
                             f"<span style='font-size:0.9rem;font-weight:600;"
