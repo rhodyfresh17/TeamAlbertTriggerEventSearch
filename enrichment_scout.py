@@ -588,6 +588,9 @@ Rules:
 - Use the FULL official company name as it appears in the text (e.g. \
 "Bluespring Wealth Partners" not just "Bluespring"; "NextEra Energy" not "NextEra").
 - Only include real, named businesses — not people, government bodies, or vague terms.
+- NEVER include the news outlet, publication, wire service, or website that \
+PUBLISHED the story (e.g. "appeared first on PYMNTS.com", "reports TechCrunch", \
+"— The Globe and Mail"). Publishers are not participants in the event.
 - Assign a specific role using these labels:
     M&A events:           "Acquirer", "Target", "Advisor"
     Funding events:       "Portfolio Company", "Lead Investor", "Investor"
@@ -600,6 +603,49 @@ Return ONLY a JSON object with one key:
 {{"companies": [{{"name": "Full Company Name", "role": "Role"}}, ...]}}'''
 
 
+# News outlets/wire services that occasionally leak into company extraction
+# ("appeared first on PYMNTS.com", "— The Globe and Mail"). Deterministic
+# backstop behind the prompt rule; the source-domain check below catches the
+# general case even for outlets not on this list.
+_PUBLISHER_NAMES = {
+    'pymnts', 'pymnts.com', 'techcrunch', 'reuters', 'bloomberg news',
+    'business wire', 'businesswire', 'pr newswire', 'prnewswire',
+    'globe newswire', 'globenewswire', 'the globe and mail', 'globe and mail',
+    'yahoo finance', 'yahoo news', 'google news', 'associated press',
+    'vc news daily', 'crunchbase news', 'axios', 'forbes', 'fortune',
+    'the wall street journal', 'wall street journal', 'financial times',
+    'financial post', 'cnbc', 'fox business', 'business insider',
+    'insurance journal', 'wealthmanagement.com', 'pehub', 'buyouts',
+}
+
+
+def _is_publisher(name: str, source_url: str) -> bool:
+    """True when an extracted 'company' is actually the article's publisher.
+    Two checks: (1) known-outlet name list; (2) name ≈ the article's own
+    domain (generic — catches any outlet: 'PYMNTS.com' on a pymnts.com URL)."""
+    n = (name or '').strip().lower().rstrip('.')
+    if not n:
+        return False
+    if n in _PUBLISHER_NAMES:
+        return True
+    try:
+        from urllib.parse import urlparse
+        host = (urlparse(source_url or '').netloc or '').lower()
+        host = host[4:] if host.startswith('www.') else host
+        if host:
+            stem = host.rsplit('.', 1)[0]          # pymnts.com → pymnts
+            n_stem = n[:-4] if n.endswith('.com') else n
+            # Space/punct-insensitive: "Johnson City Press" vs
+            # johnsoncitypress.com; "The Globe and Mail" vs theglobeandmail
+            squish = lambda s: ''.join(ch for ch in s if ch.isalnum())
+            if n_stem and (n_stem == stem or n_stem == host or n == host
+                           or (squish(n_stem) and squish(n_stem) == squish(stem))):
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def extract_event_companies(event: dict) -> list:
     prompt = EXTRACT_PROMPT.format(
         event_type=event.get('event_type', ''),
@@ -608,14 +654,19 @@ def extract_event_companies(event: dict) -> list:
     )
     data = llm_json(prompt, max_tokens=400)
     raw = data.get('companies', [])
+    src_url = event.get('source_url') or event.get('url') or ''
     valid = []
     for c in raw:
         name = (c.get('name') or '').strip()
         role = (c.get('role') or 'Mentioned').strip()
-        if name and len(name) > 1 and name.lower() not in (
+        if not name or len(name) <= 1 or name.lower() in (
             'unknown', 'nan', 'none', ''
         ):
-            valid.append({'name': name, 'role': role})
+            continue
+        if _is_publisher(name, src_url):
+            log.info(f'    (dropping publisher "{name}" from companies)')
+            continue
+        valid.append({'name': name, 'role': role})
     return valid[:5]
 
 
