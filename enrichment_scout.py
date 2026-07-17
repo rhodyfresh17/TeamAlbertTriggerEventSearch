@@ -648,8 +648,10 @@ PUBLISHED the story (e.g. "appeared first on PYMNTS.com", "reports TechCrunch", 
 - Maximum 5 companies.
 - If no named companies can be identified, return {{"companies": []}}.
 
-Return ONLY a JSON object with one key:
-{{"companies": [{{"name": "Full Company Name", "role": "Role"}}, ...]}}'''
+Return ONLY a JSON object with one key. Each company gets a "descriptor" —
+2-4 words from the article describing what it does (e.g. "trading platform",
+"venture capital firm", "insurance brokerage"); "" if the article doesn't say:
+{{"companies": [{{"name": "Full Company Name", "role": "Role", "descriptor": "what it does"}}, ...]}}'''
 
 
 # News outlets/wire services that occasionally leak into company extraction
@@ -715,7 +717,8 @@ def extract_event_companies(event: dict) -> list:
         if _is_publisher(name, src_url):
             log.info(f'    (dropping publisher "{name}" from companies)')
             continue
-        valid.append({'name': name, 'role': role})
+        desc = (c.get('descriptor') or '').strip()[:60]
+        valid.append({'name': name, 'role': role, 'descriptor': desc})
     return valid[:5]
 
 
@@ -956,6 +959,12 @@ Extract firmographic data for a specific company from the search results below.
 Target company: "{company_name}"
 Industry context from the news event: "{industry_hint}"
 
+THE ARTICLE ITSELF (primary source — a press release dateline like
+"NEW YORK, NY" is VALID evidence for HQ, and the article's description
+of what the company does is VALID evidence for industry/zi_subindustry
+classification. Use it, especially when search results are thin):
+{article_context}
+
 Search results:
 {results_text}
 
@@ -1029,14 +1038,15 @@ US/Canada only unless clearly elsewhere — or null",
 }}'''
 
 
-def enrich_one_company(company_name: str, industry_hint: str = '') -> dict:
+def enrich_one_company(company_name: str, industry_hint: str = '',
+                       article_context: str = '') -> dict:
     empty = {'url': None, 'industry': None, 'zi_subindustry': None,
              'size': None, 'revenue': None,
              'revenue_source': None, 'hq': None, 'linkedin': None}
 
     search = tavily_search(company_name, industry_hint)
-    if not search.get('results'):
-        return empty
+    if not search.get('results') and not (article_context or '').strip():
+        return empty  # nothing to extract from at all
 
     lines = []
     if search.get('answer'):
@@ -1051,6 +1061,7 @@ def enrich_one_company(company_name: str, industry_hint: str = '') -> dict:
     prompt = FIRMOGRAPHIC_PROMPT.format(
         company_name=company_name,
         industry_hint=industry_hint or 'unknown',
+        article_context=(article_context or '(not provided)').strip(),
         results_text='\n'.join(lines).strip()
     )
     data = llm_json(prompt, max_tokens=550)
@@ -1292,7 +1303,9 @@ research_notes content at <1000 characters.
 
 Cap grade_justification at <1000 characters. The justification must show \
 the math: which hashtags applied, points each, total score, how that maps \
-to the grade.
+to the grade. Write it as a CLEAN final summary (2-4 sentences) — NEVER \
+include deliberation, self-correction, or phrases like "Wait", "Re-reading \
+the rule", "Why B?". Decide first, then write the justification once.
 
 OUTPUT — return ONLY valid JSON (no markdown fences, no preamble):
 {{
@@ -1760,20 +1773,26 @@ def enrich_events(
             # 'Venture Capital & Private Equity' (live test 2026-07-16).
             # Role-based context only:
             role_l = (role or '').lower()
-            if role_l in ('lead investor', 'investor'):
-                # Investors genuinely ARE investment firms — hint helps here
+            descriptor = (co.get('descriptor') or '').strip()
+            if descriptor:
+                # The article's own words about what this company does — the
+                # best disambiguator, esp. for generic names ("fomo" alone is
+                # unsearchable; "fomo trading platform" isn't).
+                industry_hint = descriptor
+            elif role_l in ('lead investor', 'investor'):
                 industry_hint = 'investment firm'
-            elif role_l == 'portfolio company':
-                # The company that RAISED money — explicitly steer AWAY from
-                # classifying it as the investor
-                industry_hint = 'company North America'
             else:
                 industry_hint = 'company North America'
 
             if cache_key not in firm_cache:
                 log.info(f'  → Searching: {name}')
                 if not dry_run:
-                    firm_cache[cache_key] = enrich_one_company(name, industry_hint)
+                    _article_ctx = (
+                        f"{(event.get('title') or '')[:200]}\n"
+                        f"{(event.get('description') or '')[:500]}"
+                    )
+                    firm_cache[cache_key] = enrich_one_company(
+                        name, industry_hint, article_context=_article_ctx)
                     time.sleep(RATE_LIMIT_SECONDS)
                 else:
                     firm_cache[cache_key] = {
