@@ -657,9 +657,19 @@ def update_lead_status(event_id: str, status: str, notes: str = None):
 
 def _resolve_display_company(row) -> str:
     """Pick the best company name to show in the card header.
-    Prefer scrape-time company_name when it's a real value; fall back to the
-    primary enriched company (companies_data[0].name) so events with the
-    old "?" or null company_name still get a real label."""
+    1st choice: the fit-gate-chosen ACCOUNT (the workable company — may be
+    the target or the PE firm, not the headline company). Then scrape-time
+    company_name, then the primary enriched company."""
+    f = row.get('fit')
+    if isinstance(f, str) and f.strip():
+        try:
+            f = json.loads(f)
+        except Exception:
+            f = None
+    if isinstance(f, dict):
+        acct = str(f.get('account_name') or '').strip()
+        if acct:
+            return acct
     scraped = str(row.get('company_name') or '').strip()
     bad = {'', '?', 'unknown', 'unknown company', 'nan', 'none', 'n/a'}
     if scraped and scraped.lower() not in bad:
@@ -993,12 +1003,27 @@ def render_event_card(row, event_config, key_prefix: str = ''):
                         co_hq       = _v(co.get('hq'))
                         co_linkedin = _v(co.get('linkedin'))
 
-                        # Name + role header
+                        # Name + role header + per-company FIT chip
                         role_html = (
                             f"<span style='font-size:0.72rem;color:rgba(78,140,170,0.9);"
                             f"font-weight:600;margin-left:6px;'>{co_role}</span>"
                             if co_role else ""
                         )
+                        co_fit = co.get('fit') if isinstance(co.get('fit'), dict) else None
+                        if co_fit:
+                            _v_map = {'pass':   ('✓ FIT', '#10b981'),
+                                      'fail':   ('✗ NOT A FIT', '#f87171'),
+                                      'unverified': ('⚠ VERIFY', '#fbbf24')}
+                            _txt, _clr = _v_map.get(co_fit.get('verdict'), (None, None))
+                            if _txt:
+                                import html as _h2
+                                _tip = _h2.escape('; '.join(co_fit.get('reasons') or []) or 'all dimensions confirmed', quote=True)
+                                role_html += (
+                                    f"<span title='{_tip}' style='font-size:0.66rem;"
+                                    f"color:{_clr};border:1px solid {_clr};border-radius:4px;"
+                                    f"padding:0.05rem 0.35rem;margin-left:8px;cursor:help;"
+                                    f"font-weight:700;'>{_txt}</span>"
+                                )
                         st.markdown(
                             f"<div style='margin:4px 0 2px;'>"
                             f"<span style='font-size:0.9rem;font-weight:600;"

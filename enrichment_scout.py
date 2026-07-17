@@ -293,33 +293,25 @@ def hq_territory_status(hq: str) -> str:
     return 'unknown'
 
 
-def apply_fit_gates(companies_data: list) -> dict:
-    """Deterministic FIT GATES — run after research, before grading.
+# Roles that can carry a WORKABLE account. A fitting company in one of these
+# roles keeps the event alive. Previous Employer / Advisor / Partner /
+# Mentioned never do — they're context, not accounts to sell into.
+WORKABLE_ROLES = [
+    'acquirer', 'portfolio company', 'hiring company', 'primary', 'target',
+    'lead investor', 'investor',
+]
 
-    Decides whether the primary company is one A.J.'s team could actually
-    work: in territory, in revenue band ($0-$100M), in a target ZoomInfo
-    subindustry. LLMs never make this call — plain code does.
 
-    Returns:
-      {'verdict': 'pass' | 'fail' | 'unverified',
-       'territory': 'in'|'out'|'unknown',
-       'revenue':   'in'|'out'|'unknown',
-       'vertical':  'in'|'out'|'unknown',
-       'zi_subindustry': str|None,
-       'primary_name': str|None,
-       'reasons': [str, ...]}
+def company_fit(c: dict) -> dict:
+    """Fit for ONE company — the atom of the model (per A.J. 2026-07-17:
+    'we should be filtering out at the company level based on industry/
+    revenue/geography, not at the event level').
 
-    Policy (agreed with A.J. 2026-07-16):
-      - ANY confirmed-out dimension → verdict 'fail' (event soft-deleted)
-      - all three confirmed-in → 'pass'
-      - otherwise → 'unverified' (kept, grade capped at B, ⚠️ flag shown)
-    """
-    primary = pick_primary(companies_data)
-    zi = (primary.get('zi_subindustry') or '').strip() or None
+    Returns {'verdict': 'pass'|'fail'|'unverified', 'territory': ...,
+             'revenue': ..., 'vertical': ..., 'reasons': [...]}"""
+    territory = hq_territory_status(c.get('hq') or '')
 
-    territory = hq_territory_status(primary.get('hq') or '')
-
-    rev = (primary.get('revenue') or '').strip()
+    rev = (c.get('revenue') or '').strip()
     if rev in IN_BAND_REVENUE:
         revenue = 'in'
     elif rev == 'Enterprise':
@@ -327,6 +319,7 @@ def apply_fit_gates(companies_data: list) -> dict:
     else:
         revenue = 'unknown'
 
+    zi = (c.get('zi_subindustry') or '').strip() or None
     if zi and zi in ZI_SUBINDUSTRIES:
         vertical = 'in'
     elif zi and zi.upper() == 'OTHER':
@@ -336,7 +329,7 @@ def apply_fit_gates(companies_data: list) -> dict:
 
     reasons = []
     if territory == 'out':
-        reasons.append(f"HQ out of territory ({primary.get('hq')})")
+        reasons.append(f"HQ out of territory ({c.get('hq')})")
     if revenue == 'out':
         reasons.append('revenue Enterprise (>$100M, out of band)')
     if vertical == 'out':
@@ -353,13 +346,69 @@ def apply_fit_gates(companies_data: list) -> dict:
             if val == 'unknown':
                 reasons.append(f'{dim} unverified')
 
+    return {'verdict': verdict, 'territory': territory, 'revenue': revenue,
+            'vertical': vertical, 'reasons': reasons}
+
+
+def apply_fit_gates(companies_data: list) -> dict:
+    """COMPANY-LEVEL fit gates (redesigned 2026-07-17).
+
+    1. Every company gets its own fit verdict, stored on the company dict
+       itself (c['fit']) so the dashboard can chip each one.
+    2. The event's ACCOUNT = the best-fitting workable-role company:
+       fit-passing companies first (by WORKABLE_ROLES priority), then
+       unverified ones. Confirmed-out companies are never the account.
+    3. Event verdict:
+       - 'pass'       → the chosen account passes all three dimensions
+       - 'fail'       → EVERY workable-role company confirmed-out (nothing
+                        here is sellable — only then does the event die).
+                        "Enterprise BigCo acquires Boston MM target" now
+                        SURVIVES on the target instead of dying on the
+                        acquirer.
+       - 'unverified' → otherwise (kept, grade capped at B, ⚠️ flagged)
+
+    Returns the same summary shape callers already use, plus account_name.
+    """
+    # Per-company fit, attached in place (flows into companies_data JSONB)
+    for c in companies_data:
+        c['fit'] = company_fit(c)
+
+    role_rank = {r: i for i, r in enumerate(WORKABLE_ROLES)}
+    workable = [c for c in companies_data
+                if str(c.get('role', '')).lower() in role_rank]
+
+    def _pick(cands):
+        return min(cands, key=lambda c: role_rank[str(c.get('role', '')).lower()]) \
+            if cands else None
+
+    account = (_pick([c for c in workable if c['fit']['verdict'] == 'pass'])
+               or _pick([c for c in workable if c['fit']['verdict'] == 'unverified'])
+               or _pick(workable)
+               or (companies_data[0] if companies_data else None))
+
+    if account is None:
+        return {'verdict': 'unverified', 'territory': 'unknown',
+                'revenue': 'unknown', 'vertical': 'unknown',
+                'zi_subindustry': None, 'primary_name': None,
+                'account_name': None, 'reasons': ['no companies identified']}
+
+    afit = account.get('fit') or company_fit(account)
+    if workable and all(c['fit']['verdict'] == 'fail' for c in workable):
+        verdict = 'fail'
+        reasons = [f"{c.get('name')}: {'; '.join(c['fit']['reasons'])}"
+                   for c in workable]
+    else:
+        verdict = afit['verdict']
+        reasons = list(afit['reasons'])
+
     return {
         'verdict': verdict,
-        'territory': territory,
-        'revenue': revenue,
-        'vertical': vertical,
-        'zi_subindustry': zi if zi and zi in ZI_SUBINDUSTRIES else zi,
-        'primary_name': primary.get('name'),
+        'territory': afit['territory'],
+        'revenue': afit['revenue'],
+        'vertical': afit['vertical'],
+        'zi_subindustry': (account.get('zi_subindustry') or None),
+        'primary_name': account.get('name'),
+        'account_name': account.get('name'),
         'reasons': reasons,
     }
 
@@ -1145,8 +1194,9 @@ CORE RULES
 - If a fact cannot be verified from the input above, treat it as missing.
 - Missing evidence lowers confidence but does not block grading.
 - Use "Unable to Grade" ONLY if the company cannot be reasonably identified.
-- Evaluate the PRIMARY company (Acquirer / Hiring Company / Portfolio Company \
-/ Primary role). Do not inherit attributes across companies in this event.
+- Evaluate THIS account: **{account_name}** — the workable company chosen by \
+the fit gates. Grade ONLY this company. Do not inherit attributes from the \
+other companies in this event.
 
 HASHTAGS — use ONLY these and ONLY when evidence supports them. Each has \
 a fixed point value. Sum all applicable points = numeric_score.
@@ -1445,7 +1495,10 @@ def gather_extra_evidence(event: dict, companies_data: list,
     """Run the rubric's research probes for the PRIMARY company, chosen by
     what the rubric needs for this kind of account. Skips redundant work
     (funding events already carry funding evidence)."""
-    primary = pick_primary(companies_data)
+    account_name = (fit.get('account_name') or '').strip()
+    primary = next((c for c in companies_data
+                    if (c.get('name') or '').strip() == account_name), None) \
+        or pick_primary(companies_data)
     name = (primary.get('name') or '').strip()
     if not name:
         return ''
@@ -1476,7 +1529,7 @@ def gather_extra_evidence(event: dict, companies_data: list,
 
 
 def grade_event(event: dict, companies_data: list,
-                extra_evidence: str = '') -> dict:
+                extra_evidence: str = '', account_name: str = '') -> dict:
     """Apply TAL grading rules (A.J.'s latest rubric, 2026-07-16). Returns
     dict with grade/hashtags/confidence/numeric_score/etc. On any failure
     returns an empty-graded record so the pipeline can still write the event.
@@ -1501,6 +1554,8 @@ def grade_event(event: dict, companies_data: list,
     if not companies_data:
         return empty
 
+    if not account_name:
+        account_name = (pick_primary(companies_data) or {}).get('name') or 'the primary company'
     prompt = TAL_GRADING_PROMPT.format(
         title=event.get('title', ''),
         event_type=event.get('event_type', ''),
@@ -1508,6 +1563,7 @@ def grade_event(event: dict, companies_data: list,
         description=(event.get('description') or '')[:600],
         companies_block=_build_companies_block(companies_data),
         extra_evidence=extra_evidence.strip() or '(none)',
+        account_name=account_name,
     )
     data = llm_json(prompt, max_tokens=900)  # +100 for new fields
     if not data:
@@ -1783,7 +1839,8 @@ def enrich_events(
         # ── 5. Research probes + TAL grading (A.J. rubric) ────────────────
         extra_evidence = '' if dry_run else gather_extra_evidence(event, enriched, fit)
         log.info(f'  Grading via TAL rubric…')
-        grading = grade_event(event, enriched, extra_evidence)
+        grading = grade_event(event, enriched, extra_evidence,
+                              account_name=fit.get('account_name') or '')
 
         # Unverified-fit cap: an A grade needs confirmed fit. (Agreed with
         # A.J. 2026-07-16: flag, don't hide.)
@@ -1962,7 +2019,7 @@ def regrade_only_events(limit: int = None, dry_run: bool = False):
             continue
 
         # ── TAL grading (local LLM, free — no search probes in this mode) ──
-        grading = grade_event(event, cd)
+        grading = grade_event(event, cd, account_name=fit.get('account_name') or '')
 
         if fit['verdict'] == 'unverified' and grading.get('grade') == 'A':
             grading['grade'] = 'B'
