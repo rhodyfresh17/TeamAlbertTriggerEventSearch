@@ -124,7 +124,7 @@ This is a **sales lead intelligence tool** for A.J. Albert's NetSuite Up-Market 
 
 1. **Scrapes** news/SEC/job sources every 4 hours (via GitHub Actions cron)
 2. **Enriches** each event with firmographic data (Firecrawl primary + Tavily fallback + local Ollama) — extracts companies involved, industry, size, revenue, HQ, LinkedIn
-3. **Grades** each event with TAL V10.2 (A/B/C/D fit score for NetSuite Up-Market)
+3. **Gates** each event on researched fit (territory × revenue band × ZI subindustry), then **grades** survivors with A.J.'s point-based TAL rubric (A/B/C/D + score + confidence)
 4. **Surfaces** results on a Streamlit Cloud dashboard at https://teamalbertfy27leads.streamlit.app/ — password-protected, filterable by region, revenue segment, grade
 
 User: **A.J. Albert** — NetSuite Up-Market Sales rep on Team Albert. Non-technical. Depends on you to write code, run commands, and explain in plain language. **Always offer local-only verification (PASS/FAIL, `${VAR}`) rather than asking him to paste secrets in chat.**
@@ -162,17 +162,26 @@ User: **A.J. Albert** — NetSuite Up-Market Sales rep on Team Albert. Non-techn
 │  Fires at :30 past 0/4/8/12/16/20 local Eastern time                  │
 │  → run_enrichment.sh → python enrichment_scout.py                     │
 │                                                                       │
-│  Per unenriched event:                                                │
-│   1. LLM extracts companies + roles (Ollama qwen3-coder:30b)          │
-│   2. Firecrawl search per unique company (Tavily fallback if empty) │
-│   3. LLM extracts firmographics → companies_data JSONB                │
-│   4. POST-ENRICHMENT industry filter — DELETE if industry blocked     │
-│      (catches mining leaks the scrape-time text filter misses)        │
-│   5. TAL V10.2 grading → grade/hashtags/justification/cfo_status      │
-│   6. Finance leadership override → min Grade B                        │
-│   7. event_type reclassification (executive_hire → cfo_hire if        │
-│      CFO/Controller/VP Finance detected in text)                      │
-│   8. Writes directly to Supabase                                      │
+│  Per unenriched event (REDESIGNED 2026-07-16 — "filter on researched  │
+│  evidence BEFORE grading"):                                           │
+│   1. LLM extracts companies + roles (shared llama.cpp Qwen3.6 :8091)  │
+│   2. Firecrawl search per unique company (Tavily fallback if empty)   │
+│   3. LLM extracts firmographics → companies_data JSONB — INCLUDING    │
+│      zi_subindustry (closed-set pick from the 32 ZoomInfo             │
+│      subindustries in ZI_SUBINDUSTRIES, or 'OTHER')                   │
+│   4. Fast industry blocklist (unambiguous never-fits: mining, pharma…)│
+│   5. FIT GATES (apply_fit_gates — deterministic code):                │
+│        territory (researched HQ) × revenue band (LMM/MM/Corp) ×       │
+│        vertical (ZI allowlist). Confirmed-out on ANY dim →            │
+│        soft-delete. Unknowns → keep + cap grade at B + ⚠️ flag        │
+│        persisted to `fit` JSONB column.                               │
+│   6. Research probes (free): funding-lookback search; ProPublica 990  │
+│      API for nonprofits; AUM search for asset managers                │
+│   7. TAL grading (A.J.'s point rubric — see §2) w/ probe evidence     │
+│   8. event_type reclassification — CFO-EQUIVALENTS ONLY relabel to    │
+│      cfo_hire (_finance_role); Controllers stay executive_hire        │
+│      (prevents #NewCFO/#NewController double-count)                   │
+│   9. Writes directly to Supabase                                      │
 └──────────────────────────────────────────────────────────────────────┘
                                   ↓
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -216,18 +225,31 @@ Source of truth: `/Users/andrewalbertbase/Downloads/FY27 Territories.xlsx` (kept
 
 Default dashboard filter shows LMM + MM + Corp (the up-market sweet spot, $0-$100M).
 
-### TAL V10.2 grading rules (in `enrichment_scout.py` → `TAL_GRADING_PROMPT`)
+### TAL grading rules (A.J.'s point rubric, aligned 2026-07-16 — in `enrichment_scout.py` → `TAL_GRADING_PROMPT` + `_compute_v11_grade`)
 
-- **A** — 3+ hashtags AND 2 triggers
-- **B** — 2 hashtags AND 1 trigger
-- **C** — 1 hashtag
-- **D** — 0 hashtags
-- **Finance leadership override** — CFO/Controller/VP Finance/Head of Finance/Director of Finance hire → **minimum Grade B** (enforced both in prompt + in code defense-in-depth via `_has_finance_leadership_trigger()`)
+Point-based. LLM picks evidence-backed hashtags; CODE computes score + grade
+(LLMs are unreliable at arithmetic). Source of truth for the rubric: A.J.'s
+"TAL Lead Grader" custom-GPT prompt — if he shares a newer version, diff and
+realign.
 
-Hashtag allowlist (max 6 per event):
-`#HyperGrowth #100EE #Locations #Entities #HoldCo #Global #Franchisor #Franchisee #Funding #PEBacked #Acquisitions #FormerUser #NewCFO #PrevConvo #Legacy`
+**High-intent triggers:** #NewCFO +5 · #NewController +3 · #Funding +3 (18mo,
+for-profit) · #PEBacked +3 · #Acquisitions +3 (36mo, Acquirer role) ·
+#FormerUser +3 · #PrevConvo +3 (last two need CRM data — dormant in pipeline)
 
-Hashtag definitions are STRICT (see prompt) — there's a history of the LLM stuffing hashtags to inflate grades. Don't loosen the definitions without A.J.'s approval.
+**Complexity signals (+2 each):** #HyperGrowth · #100EE (verified 100+
+employees) · #Locations · #Entities · #HoldCo · #Global (multi-COUNTRY ops —
+NEVER for foreign HQ) · #Franchisor · #Franchisee · #Legacy ·
+#AssetManagerScale (PE: $1B+ AUM & 2+ funds; VC/RIA/REIT directional tiers)
+
+**Grades:** A = 8+ AND ≥1 high-intent trigger · B = 5-7 · C = 2-4 · D = 0-1.
+Complexity-only 8+ (no trigger) → B. Low/unparseable confidence → cap C.
+Fit 'unverified' → cap B (⚠️ VERIFY FIT chip on dashboard). Solo #NewCFO = 5
+= B by design. No hashtag-count cap ("as many as evidence supports").
+
+FIT comes BEFORE grading: `apply_fit_gates` (territory × revenue × ZI
+vertical) soft-deletes confirmed-out events, so grades only rank workable
+accounts. Hashtag definitions are STRICT — history of LLM stuffing. Don't
+loosen without A.J.
 
 ---
 
@@ -489,7 +511,7 @@ will stop working on web search until updated.
 ### User preferences (from MEMORY.md)
 - **DC IS in territory** (not in xlsx but A.J.'s actual coverage)
 - **Crypto-native businesses ARE good fits** (NetSuite + Cryptio integration). Don't block crypto feeds.
-- **A.J. has a lead-scoring prompt** (the TAL V10.2 in this repo — already integrated). If he mentions a new prompt, ask for it before assuming.
+- **A.J.'s TAL rubric is the grading source of truth** (his "TAL Lead Grader" custom-GPT prompt, aligned into the pipeline 2026-07-16). If he shares a newer version, diff it against TAL_GRADING_PROMPT + TAL_V11_HASHTAG_POINTS and realign.
 
 ---
 
