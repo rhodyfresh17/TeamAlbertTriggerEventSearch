@@ -1017,13 +1017,36 @@ def render_event_card(row, event_config, key_prefix: str = ''):
                             _txt, _clr = _v_map.get(co_fit.get('verdict'), (None, None))
                             if _txt:
                                 import html as _h2
-                                _tip = _h2.escape('; '.join(co_fit.get('reasons') or []) or 'all dimensions confirmed', quote=True)
+                                _reasons = co_fit.get('reasons') or []
+                                _tip = _h2.escape('; '.join(_reasons) or 'all dimensions confirmed', quote=True)
                                 role_html += (
                                     f"<span title='{_tip}' style='font-size:0.66rem;"
                                     f"color:{_clr};border:1px solid {_clr};border-radius:4px;"
                                     f"padding:0.05rem 0.35rem;margin-left:8px;cursor:help;"
                                     f"font-weight:700;'>{_txt}</span>"
                                 )
+                                # Inline compact reason — visible, not tooltip-only
+                                # (per A.J. 2026-07-17). HQ/revenue already show
+                                # in the chips row, so keep these terse.
+                                _short = []
+                                _unconfirmed = []
+                                for _r in _reasons:
+                                    if _r.startswith('HQ out of territory'):
+                                        _short.append('out of territory')
+                                    elif _r.startswith('revenue Enterprise'):
+                                        _short.append('>$100M revenue')
+                                    elif _r.startswith('subindustry OTHER'):
+                                        _short.append('off-vertical industry')
+                                    elif _r.endswith('unverified'):
+                                        _unconfirmed.append(_r.replace(' unverified', ''))
+                                if _unconfirmed:
+                                    _short.append("couldn't confirm " + ', '.join(_unconfirmed))
+                                if _short:
+                                    role_html += (
+                                        f"<span style='font-size:0.7rem;"
+                                        f"color:rgba(255,255,255,0.45);margin-left:7px;"
+                                        f"font-style:italic;'>{_h2.escape(' · '.join(_short))}</span>"
+                                    )
                         st.markdown(
                             f"<div style='margin:4px 0 2px;'>"
                             f"<span style='font-size:0.9rem;font-weight:600;"
