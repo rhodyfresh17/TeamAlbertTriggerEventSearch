@@ -33,3 +33,7 @@ ENV/
 .DS_Store
 Thumbs.db
 .streamlit/secrets.toml
+
+# Editor/session backups
+*.bak
+*.bak.*
