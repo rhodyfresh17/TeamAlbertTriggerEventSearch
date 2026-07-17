@@ -1540,6 +1540,7 @@ def enrich_events(
     re_enrich: bool = False,
     dry_run: bool = False,
     missing_fit_only: bool = False,
+    reverify_unverified: bool = False,
 ):
     check_required_keys()
     client  = get_supabase()
@@ -1568,6 +1569,14 @@ def enrich_events(
         # Catch-up mode: only events the fit-gate rollout hasn't touched yet
         # (e.g. rows beyond a prior run's 1000-row page cap). Idempotent.
         query = query.is_('fit', 'null')
+    if reverify_unverified and col_ok.get('fit'):
+        # Re-verify mode: only events whose fit gates couldn't confirm
+        # territory/revenue/vertical (the ⚠️ VERIFY FIT population). Re-runs
+        # the full research → gates → grade pipeline; events that CONFIRM
+        # get uncapped (A becomes reachable) or tombstoned if confirmed-out;
+        # still-unknown stay flagged. Run when the search backend is healthy
+        # (e.g. after burst throttling subsided).
+        query = query.eq('fit->>verdict', 'unverified')
     # NEVER process tombstoned events — they're already decided (industry/
     # fit-gate blocked or rep-dismissed). Re-enriching them is pure waste
     # (~15s each) and re-grades rows the dashboard will never show.
@@ -1989,6 +1998,10 @@ if __name__ == '__main__':
     p.add_argument('--missing-fit-only', action='store_true',
                    help='With --re-enrich: only process events that have no '
                         'fit data yet (catch-up after a capped backlog run)')
+    p.add_argument('--reverify-unverified', action='store_true',
+                   help='With --re-enrich: only re-process events whose fit '
+                        'is unverified (the ⚠️ VERIFY FIT population) — '
+                        'fresh research to confirm or refute fit')
     p.add_argument('--dry-run',       action='store_true',
                    help='Preview without writing to Supabase')
     args = p.parse_args()
@@ -2003,4 +2016,5 @@ if __name__ == '__main__':
             re_enrich=args.re_enrich,
             dry_run=args.dry_run,
             missing_fit_only=args.missing_fit_only,
+            reverify_unverified=args.reverify_unverified,
         )

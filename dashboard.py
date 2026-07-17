@@ -505,6 +505,7 @@ EVENT_TYPES = {
 # Lead status options
 LEAD_STATUSES = [
     "NEW",
+    "REVIEWED - Picked Up",
     "REVIEWED - ON REP TAL",
     "REVIEWED - NetSuite Customer",
     "REVIEWED - Out of Alignment",
@@ -513,6 +514,7 @@ LEAD_STATUSES = [
 
 STATUS_CONFIG = {
     "NEW": {"icon": "🆕", "class": "status-new", "label": "New"},
+    "REVIEWED - Picked Up": {"icon": "✅", "class": "status-customer", "label": "Picked Up"},
     "REVIEWED - ON REP TAL": {"icon": "🟠", "class": "status-reviewed", "label": "On TAL"},
     "REVIEWED - NetSuite Customer": {"icon": "💼", "class": "status-customer", "label": "Customer"},
     "REVIEWED - Out of Alignment": {"icon": "❌", "class": "status-out", "label": "Out"},
