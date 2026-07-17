@@ -93,7 +93,9 @@ MIGRATION_SQL = (
     "  ALTER TABLE events ADD COLUMN IF NOT EXISTS research_notes       JSONB;\n"
     "  -- TAL V11 (added 2026-06-09):\n"
     "  ALTER TABLE events ADD COLUMN IF NOT EXISTS confidence_level     TEXT;\n"
-    "  ALTER TABLE events ADD COLUMN IF NOT EXISTS numeric_score        INTEGER;"
+    "  ALTER TABLE events ADD COLUMN IF NOT EXISTS numeric_score        INTEGER;\n"
+    "  -- Fit gates (added 2026-07-16):\n"
+    "  ALTER TABLE events ADD COLUMN IF NOT EXISTS fit                  JSONB;"
 )
 
 # Post-enrichment industry exclusions — applied AFTER firmographic extraction
@@ -123,19 +125,16 @@ POST_ENRICHMENT_INDUSTRY_BLOCK = [
     # Logistics / delivery
     'logistics', 'freight', 'trucking', 'supply chain',
     'last-mile delivery', 'delivery services',
-    # ── Tech/SaaS — off-target per user FY27, added 2026-06-09 ─────────
-    'b2b saas', 'saas', 'software-as-a-service', 'software development',
-    'software company', 'application software', 'enterprise software',
-    'computer software', 'cloud software',
-    # ── Healthcare/Pharma — off-target per user FY27, added 2026-06-09 ─
-    # Note: NOT blocking bare 'healthcare' to avoid false-match on
-    # 'Healthcare Foundation' / nonprofit charitable orgs which ARE target.
-    'healthcare services', 'healthcare it', 'health it',
-    'hospitals and health care', 'hospitals',
+    # ── SaaS/Software + broad-healthcare blocks REMOVED 2026-07-16 ──────
+    # They contradicted TARGET subverticals: fintech/insurtech/crypto
+    # companies enrich to "SaaS"/"Financial Software" (Financial Services
+    # targets), and FQHC/behavioral-health/hospice nonprofits enrich to
+    # "Hospitals and Health Care" (Nonprofit targets). Vertical fit is now
+    # decided by the ZI-subindustry ALLOWLIST gate (apply_fit_gates below) —
+    # this blocklist survives only as a fast-path for unambiguous never-fits.
     'biotechnology', 'biotech',
     'pharmaceuticals', 'pharmaceutical',
     'medical devices', 'medical equipment',
-    'senior living', 'assisted living',
     'life sciences tools', 'life sciences services',
     'clinical research',
     # Hardware/embedded (off-target)
@@ -143,11 +142,28 @@ POST_ENRICHMENT_INDUSTRY_BLOCK = [
     'embedded hardware', 'embedded systems',
 ]
 
-# Primary-company roles (the actual subject of the event)
-PRIMARY_ROLES = {
-    'acquirer', 'target', 'portfolio company',
-    'hiring company', 'primary',
-}
+# Primary-company role PRIORITY — ordered. The first matching role is the
+# company the event is "about" (and the account a rep would work). Target
+# is deliberately LAST: on M&A the acquirer/platform is the NetSuite
+# opportunity (consolidation pain); the target is only primary when no
+# better role exists. This ordered list replaces the old unordered set,
+# which let "first company in the list" win arbitrarily.
+PRIMARY_ROLE_ORDER = [
+    'acquirer', 'portfolio company', 'hiring company', 'primary', 'target',
+]
+PRIMARY_ROLES = set(PRIMARY_ROLE_ORDER)  # membership checks elsewhere
+
+
+def pick_primary(companies_data: list) -> dict:
+    """Return the primary company per PRIMARY_ROLE_ORDER (first match wins,
+    in priority order), falling back to the first listed company."""
+    if not companies_data:
+        return {}
+    for role in PRIMARY_ROLE_ORDER:
+        for c in companies_data:
+            if str(c.get('role', '')).lower() == role:
+                return c
+    return companies_data[0]
 
 
 def industry_is_blocked(industry: str):
@@ -159,6 +175,193 @@ def industry_is_blocked(industry: str):
         if kw in industry_lower:
             return True, kw
     return False, ''
+
+
+# ── ZoomInfo subindustry taxonomy + FIT GATES ─────────────────────────────────
+# Source of truth: A.J.'s "FY27 Territories.xlsx" (Subindustries sheet) —
+# the 32 ZoomInfo SubIndustries mapped to the 3 NSCorp verticals. The
+# firmographic LLM classifies each company into EXACTLY one of these (or
+# "OTHER"), and the vertical gate is exact membership — replacing fuzzy
+# free-text blocklists with a closed-set allowlist.
+ZI_SUBINDUSTRIES = {
+    # ── Financial Services ────────────────────────────────────────────
+    'Banking':                                    'Financial Services',
+    'Credit Cards & Transaction Processing':      'Financial Services',
+    'Debt Collection':                            'Financial Services',
+    'Holding Companies & Conglomerates':          'Financial Services',
+    'Insurance':                                  'Financial Services',
+    'Investment Banking':                         'Financial Services',
+    'Lending & Brokerage':                        'Financial Services',
+    'Venture Capital & Private Equity':           'Financial Services',
+    # ── Nonprofits & Organizations ────────────────────────────────────
+    'Blood & Organ Banks':                        'Nonprofits & Organizations',
+    'Childcare':                                  'Nonprofits & Organizations',
+    'Colleges & Universities':                    'Nonprofits & Organizations',
+    'Cultural & Informational Centers':           'Nonprofits & Organizations',
+    'K-12 Schools':                               'Nonprofits & Organizations',
+    'Libraries':                                  'Nonprofits & Organizations',
+    'Membership Organizations':                   'Nonprofits & Organizations',
+    'Museums & Art Galleries':                    'Nonprofits & Organizations',
+    'Non-Profit & Charitable Organizations':      'Nonprofits & Organizations',
+    'Non-Profit Organizations & Charitable Foundations': 'Nonprofits & Organizations',
+    'Performing Arts Theaters':                   'Nonprofits & Organizations',
+    'Religious Organizations':                    'Nonprofits & Organizations',
+    'Training':                                   'Nonprofits & Organizations',
+    'Zoos & National Parks':                      'Nonprofits & Organizations',
+    # ── Consumer Services ─────────────────────────────────────────────
+    'Auctions':                                   'Consumer Services',
+    'Automobile Dealers':                         'Consumer Services',
+    'Automotive Service & Collision Repair':      'Consumer Services',
+    'Barber Shops & Beauty Salons':               'Consumer Services',
+    'Cleaning Services':                          'Consumer Services',
+    'Consumer Services':                          'Consumer Services',
+    'Funeral Homes & Funeral Related Services':   'Consumer Services',
+    'Photography Studio':                         'Consumer Services',
+    'Real Estate':                                'Consumer Services',
+    'Repair Services':                            'Consumer Services',
+}
+
+# In-band revenue segments (NetSuite up-market sweet spot). Enterprise
+# (>$100M) is out of band per A.J.
+IN_BAND_REVENUE = {'LMM', 'MM', 'Corp'}
+
+# Territory — 23 US states + DC + 6 eastern Canadian provinces (FY27 xlsx;
+# DC confirmed in-territory by A.J. even though absent from the sheet).
+TERRITORY_STATES = {
+    'ME', 'NH', 'VT', 'MA', 'RI', 'CT',                       # New England
+    'NY', 'NJ', 'PA', 'DE', 'MD', 'VA', 'WV', 'DC',           # Mid-Atlantic
+    'NC', 'SC', 'GA', 'FL', 'AL', 'TN', 'KY',                 # Southeast
+    'OH', 'MI', 'IN',                                          # Rust Belt
+    'ON', 'QC', 'NB', 'NS', 'PE', 'NL',                        # Canada (east)
+}
+_TERRITORY_NAME_TO_CODE = {
+    'maine': 'ME', 'new hampshire': 'NH', 'vermont': 'VT',
+    'massachusetts': 'MA', 'rhode island': 'RI', 'connecticut': 'CT',
+    'new york': 'NY', 'new jersey': 'NJ', 'pennsylvania': 'PA',
+    'delaware': 'DE', 'maryland': 'MD', 'virginia': 'VA',
+    'west virginia': 'WV', 'washington dc': 'DC', 'district of columbia': 'DC',
+    'north carolina': 'NC', 'south carolina': 'SC', 'georgia': 'GA',
+    'florida': 'FL', 'alabama': 'AL', 'tennessee': 'TN', 'kentucky': 'KY',
+    'ohio': 'OH', 'michigan': 'MI', 'indiana': 'IN',
+    'ontario': 'ON', 'quebec': 'QC', 'québec': 'QC', 'new brunswick': 'NB',
+    'nova scotia': 'NS', 'prince edward island': 'PE',
+    'newfoundland': 'NL', 'newfoundland and labrador': 'NL',
+}
+# US state/CA province codes that are definitively OUTSIDE territory —
+# used to distinguish "confirmed out" from "can't tell".
+_ALL_STATE_CODES = {
+    'AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN',
+    'IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV',
+    'NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN',
+    'TX','UT','VT','VA','WA','WV','WI','WY','DC',
+    'ON','QC','NB','NS','PE','NL','BC','AB','MB','SK','YT','NT','NU',
+}
+
+
+def hq_territory_status(hq: str) -> str:
+    """Classify a researched HQ string: 'in' | 'out' | 'unknown'.
+
+    Handles 'City, ST', bare state/province names, and full-name tails
+    ('Boston, Massachusetts'). Foreign or non-territory locations that are
+    clearly identifiable → 'out'; unparseable/missing → 'unknown'."""
+    if not hq or not str(hq).strip():
+        return 'unknown'
+    h = str(hq).strip()
+    tail = h.split(',')[-1].strip() if ',' in h else h
+    tail_up = tail.upper()
+    # 2-letter code path
+    if tail_up in TERRITORY_STATES:
+        return 'in'
+    if tail_up in _ALL_STATE_CODES:
+        return 'out'
+    # Full-name path
+    tail_lo = tail.lower()
+    if tail_lo in _TERRITORY_NAME_TO_CODE:
+        return 'in'
+    h_lo = h.lower()
+    if h_lo in _TERRITORY_NAME_TO_CODE:
+        return 'in'
+    # Recognizable foreign markers → confidently OUT
+    FOREIGN = ('germany', 'france', 'uk', 'united kingdom', 'england',
+               'india', 'china', 'japan', 'australia', 'israel', 'singapore',
+               'switzerland', 'netherlands', 'sweden', 'ireland', 'spain',
+               'italy', 'brazil', 'mexico', 'hong kong', 'korea', 'norway',
+               'denmark', 'finland', 'belgium', 'austria', 'chile',
+               'british columbia', 'alberta', 'manitoba', 'saskatchewan')
+    if any(f in h_lo for f in FOREIGN):
+        return 'out'
+    return 'unknown'
+
+
+def apply_fit_gates(companies_data: list) -> dict:
+    """Deterministic FIT GATES — run after research, before grading.
+
+    Decides whether the primary company is one A.J.'s team could actually
+    work: in territory, in revenue band ($0-$100M), in a target ZoomInfo
+    subindustry. LLMs never make this call — plain code does.
+
+    Returns:
+      {'verdict': 'pass' | 'fail' | 'unverified',
+       'territory': 'in'|'out'|'unknown',
+       'revenue':   'in'|'out'|'unknown',
+       'vertical':  'in'|'out'|'unknown',
+       'zi_subindustry': str|None,
+       'primary_name': str|None,
+       'reasons': [str, ...]}
+
+    Policy (agreed with A.J. 2026-07-16):
+      - ANY confirmed-out dimension → verdict 'fail' (event soft-deleted)
+      - all three confirmed-in → 'pass'
+      - otherwise → 'unverified' (kept, grade capped at B, ⚠️ flag shown)
+    """
+    primary = pick_primary(companies_data)
+    zi = (primary.get('zi_subindustry') or '').strip() or None
+
+    territory = hq_territory_status(primary.get('hq') or '')
+
+    rev = (primary.get('revenue') or '').strip()
+    if rev in IN_BAND_REVENUE:
+        revenue = 'in'
+    elif rev == 'Enterprise':
+        revenue = 'out'
+    else:
+        revenue = 'unknown'
+
+    if zi and zi in ZI_SUBINDUSTRIES:
+        vertical = 'in'
+    elif zi and zi.upper() == 'OTHER':
+        vertical = 'out'
+    else:
+        vertical = 'unknown'
+
+    reasons = []
+    if territory == 'out':
+        reasons.append(f"HQ out of territory ({primary.get('hq')})")
+    if revenue == 'out':
+        reasons.append('revenue Enterprise (>$100M, out of band)')
+    if vertical == 'out':
+        reasons.append('subindustry OTHER (not a target vertical)')
+
+    if reasons:
+        verdict = 'fail'
+    elif territory == 'in' and revenue == 'in' and vertical == 'in':
+        verdict = 'pass'
+    else:
+        verdict = 'unverified'
+        for dim, val in (('territory', territory), ('revenue', revenue),
+                         ('vertical', vertical)):
+            if val == 'unknown':
+                reasons.append(f'{dim} unverified')
+
+    return {
+        'verdict': verdict,
+        'territory': territory,
+        'revenue': revenue,
+        'vertical': vertical,
+        'zi_subindustry': zi if zi and zi in ZI_SUBINDUSTRIES else zi,
+        'primary_name': primary.get('name'),
+        'reasons': reasons,
+    }
 
 logging.basicConfig(
     level=logging.INFO,
@@ -331,13 +534,44 @@ def check_required_keys():
 
 def check_columns(client):
     exists = {}
-    for col in ('companies_data', 'enriched_at'):
+    for col in ('companies_data', 'enriched_at', 'fit'):
         try:
             client.table('events').select(col).limit(1).execute()
             exists[col] = True
         except Exception:
             exists[col] = False
+    if not exists.get('fit'):
+        log.warning(
+            'fit column missing — fit-gate details (⚠️ verify flags) will '
+            'not persist until you run:\n'
+            '  ALTER TABLE events ADD COLUMN IF NOT EXISTS fit JSONB;'
+        )
     return exists
+
+
+def _soft_delete(client, event_id: str, reason: str) -> None:
+    """Tombstone an event: sets blocked_at (hidden from dashboard, immune to
+    supabase_sync resurrection) + enriched_at (skipped by future enrichment).
+    Falls back to hard DELETE only if the blocked_at column is missing."""
+    payload = {
+        'blocked_at':     datetime.utcnow().isoformat(),
+        'blocked_reason': (reason or '')[:300],
+        'enriched_at':    datetime.utcnow().isoformat(),
+    }
+    try:
+        client.table('events').update(payload).eq('id', event_id).execute()
+    except Exception as e:
+        if 'does not exist' in str(e):
+            log.warning(
+                '    blocked_at column missing — falling back to hard DELETE '
+                '(will re-appear on next sync until you run the migration SQL).'
+            )
+            try:
+                client.table('events').delete().eq('id', event_id).execute()
+            except Exception as e2:
+                log.error(f'    Hard-delete fallback also failed: {e2}')
+        else:
+            log.error(f'    Soft-delete failed: {e}')
 
 
 # ── Step 1 — Extract companies + roles from event text ───────────────────────
@@ -605,6 +839,27 @@ business is investing — an electronics company that acquires another \
 electronics company has industry 'Electronics' (or null), NOT 'Private \
 Equity'. Be precise (not generic like 'Technology' or 'Services'). Return \
 null if uncertain.",
+  "zi_subindustry": "Classify the company into EXACTLY ONE of the following \
+ZoomInfo subindustries, or 'OTHER' if none genuinely fits. Do NOT force a \
+fit — a software company is OTHER, a manufacturer is OTHER, a biotech is \
+OTHER. Choose from: 'Banking', 'Credit Cards & Transaction Processing', \
+'Debt Collection', 'Holding Companies & Conglomerates', 'Insurance', \
+'Investment Banking', 'Lending & Brokerage', 'Venture Capital & Private \
+Equity', 'Blood & Organ Banks', 'Childcare', 'Colleges & Universities', \
+'Cultural & Informational Centers', 'K-12 Schools', 'Libraries', \
+'Membership Organizations', 'Museums & Art Galleries', 'Non-Profit & \
+Charitable Organizations', 'Non-Profit Organizations & Charitable \
+Foundations', 'Performing Arts Theaters', 'Religious Organizations', \
+'Training', 'Zoos & National Parks', 'Auctions', 'Automobile Dealers', \
+'Automotive Service & Collision Repair', 'Barber Shops & Beauty Salons', \
+'Cleaning Services', 'Consumer Services', 'Funeral Homes & Funeral Related \
+Services', 'Photography Studio', 'Real Estate', 'Repair Services'. \
+Guidance: fintech/payments → 'Credit Cards & Transaction Processing'; \
+RIA/wealth/asset managers/family offices → 'Investment Banking' or \
+'Venture Capital & Private Equity' as fits; mortgage/consumer lenders → \
+'Lending & Brokerage'; credit unions → 'Banking'; charities/foundations → \
+one of the Non-Profit options; use null ONLY if the company cannot be \
+identified at all.",
   "size":     "one of: '1-50', '51-200', '201-500', '501-1000', \
 '1001-5000', '5001-10000', '10000+', or null",
   "revenue":  "STRICT SEGMENT. Must be EXACTLY one of: \
@@ -623,7 +878,8 @@ US/Canada only unless clearly elsewhere — or null",
 
 
 def enrich_one_company(company_name: str, industry_hint: str = '') -> dict:
-    empty = {'url': None, 'industry': None, 'size': None, 'revenue': None,
+    empty = {'url': None, 'industry': None, 'zi_subindustry': None,
+             'size': None, 'revenue': None,
              'revenue_source': None, 'hq': None, 'linkedin': None}
 
     search = tavily_search(company_name, industry_hint)
@@ -654,9 +910,19 @@ def enrich_one_company(company_name: str, industry_hint: str = '') -> dict:
     if not revenue:
         revenue_src = None
 
+    # Validate the ZI classification against the closed set — anything the
+    # model invents outside the taxonomy is coerced to None (unknown), and
+    # 'OTHER' is preserved as an explicit out-of-vertical verdict.
+    zi_raw = (data.get('zi_subindustry') or '').strip()
+    if zi_raw in ZI_SUBINDUSTRIES or zi_raw.upper() == 'OTHER':
+        zi_val = 'OTHER' if zi_raw.upper() == 'OTHER' else zi_raw
+    else:
+        zi_val = None
+
     return {
         'url':            data.get('url')      or None,
         'industry':       data.get('industry') or None,
+        'zi_subindustry': zi_val,
         'size':           data.get('size')     or None,
         'revenue':        revenue,
         'revenue_source': revenue_src,
@@ -691,15 +957,16 @@ TAL_V11_HASHTAG_POINTS = {
     '#FormerUser':    3,
     '#PrevConvo':     3,
     # COMPLEXITY SIGNALS
-    '#HyperGrowth':   2,
-    '#100EE':         2,
-    '#Locations':     2,
-    '#Entities':      2,
-    '#HoldCo':        2,
-    '#Global':        2,
-    '#Franchisor':    2,
-    '#Franchisee':    2,
-    '#Legacy':        2,
+    '#HyperGrowth':       2,
+    '#100EE':             2,
+    '#Locations':         2,
+    '#Entities':          2,
+    '#HoldCo':            2,
+    '#Global':            2,
+    '#Franchisor':        2,
+    '#Franchisee':        2,
+    '#Legacy':            2,
+    '#AssetManagerScale': 2,   # added 2026-07-16 per A.J.'s latest TAL rubric
 }
 
 HIGH_INTENT_HASHTAGS = {
@@ -744,8 +1011,10 @@ def _compute_v11_grade(hashtags: list, confidence: str):
         elif score >= 2:          grade = 'C'
         else:                     grade = 'D'
 
-    # Low-confidence cap (rule 4)
-    if confidence == 'Low' and grade in ('A', 'B'):
+    # Low-confidence cap (rule 4). Unparseable/missing confidence is treated
+    # as Low — previously None slipped past the exact-'Low' check and junk-
+    # confidence events could keep Grade A (audit 2026-07-16).
+    if confidence not in ('High', 'Medium') and grade in ('A', 'B'):
         grade = 'C'
 
     return score, grade
@@ -762,6 +1031,11 @@ Description: {description}
 
 COMPANIES (pre-researched firmographics)
 {companies_block}
+
+ADDITIONAL RESEARCH EVIDENCE (funding history / nonprofit 990 / AUM probes —
+may be empty; treat as authoritative when present, esp. for #Funding
+recency, #AssetManagerScale, and nonprofit revenue):
+{extra_evidence}
 
 CORE RULES
 - Prefer evidence over assumptions.
@@ -801,22 +1075,40 @@ unless EXPLICITLY mentioned in the input.
 SKIP unless EXPLICITLY mentioned in the input.
 
 COMPLEXITY SIGNALS:
-- **#HyperGrowth (+2)** — Documented rapid growth, major hiring, Inc. 5000, \
-or expansion. DO NOT apply for routine funding rounds.
-- **#100EE (+2)** — Firmographic size 201-500 or larger. NOT 1-50 or 51-200.
-- **#Locations (+2)** — Verified 3+ physical locations/offices/branches. \
-DO NOT apply for HAVING a single HQ city.
-- **#Entities (+2)** — Verified multiple subsidiaries/brands/legal entities.
-- **#HoldCo (+2)** — Name contains "Holdings" OR industry is "Holding \
-Companies & Conglomerates" OR description mentions multiple operating \
-subsidiaries.
-- **#Global (+2)** — Operations in 3+ countries OR HQ outside US/Canada.
-- **#Franchisor (+2)** — Company franchises its brand to others.
-- **#Franchisee (+2)** — Company operates franchised locations.
-- **#Legacy (+2)** — Verified legacy ERP in use (QuickBooks, Sage 50, \
-Dynamics GP, etc.). SKIP unless EXPLICITLY mentioned.
+- **#HyperGrowth (+2)** — Documented rapid growth, major hiring, strong \
+YoY growth, Inc. 5000, or major expansion. DO NOT apply for routine \
+funding rounds.
+- **#100EE (+2)** — VERIFIED 100+ employees. Firmographic size buckets \
+'201-500' and larger qualify automatically. A '51-200' bucket alone does \
+NOT verify 100+ — apply only if other evidence (headcount figure, \
+LinkedIn count) confirms ≥100.
+- **#Locations (+2)** — Verified multiple offices, stores, branches, \
+campuses, or facilities. DO NOT apply for HAVING a single HQ city.
+- **#Entities (+2)** — Verified multiple subsidiaries/brands/legal \
+entities/business units.
+- **#HoldCo (+2)** — Holding company, parent company, platform company, \
+or multi-brand operator (name contains "Holdings", industry is "Holding \
+Companies & Conglomerates", or evidence of multiple operating \
+subsidiaries).
+- **#Global (+2)** — Verified operations or offices in MULTIPLE COUNTRIES. \
+An out-of-US/Canada HQ alone is NOT #Global (territory fit is handled \
+elsewhere — do not award points for foreign HQ).
+- **#Franchisor (+2)** — Company sells or operates franchises.
+- **#Franchisee (+2)** — Company operates under another franchise brand.
+- **#Legacy (+2)** — Verified legacy ERP/accounting system in use \
+(QuickBooks, Sage 50, Dynamics GP, etc.). SKIP unless EXPLICITLY mentioned.
+- **#AssetManagerScale (+2)** — Verified asset-manager scale. For PE \
+firms: requires $1B+ AUM/AUA AND 2+ funds. For VC, RIA, wealth manager, \
+family office, REIT, or other asset managers, use AUM/AUA directionally: \
+<$250M usually too early; $250M-$500M needs clear complexity; $500M-$1B \
+needs other supporting signals; $1B+ is defensible; $5B+ is strong. More \
+funds/entities/vehicles/portfolio investments improves fit. Evidence \
+REQUIRED (AUM figure with source) — never infer scale from brand fame.
 
-When in doubt, DROP the hashtag.
+When in doubt, DROP the hashtag. Use as many approved hashtags as the \
+evidence supports — there is no maximum. Company-owned websites do NOT \
+count as independent validation (they can evidence locations/entities \
+facts, but confidence "High" requires at least one non-company source).
 
 GRADE MAPPING (based on numeric_score):
 - **A = 8+**
@@ -885,7 +1177,8 @@ def _build_companies_block(companies_data: list) -> str:
 # and probably more valuable than any other trigger".
 FINANCE_LEADERSHIP_PATTERNS = [
     'cfo', 'chief financial officer', 'chief financial',
-    'controller',
+    'controller', 'corporate controller',
+    'vp accounting', 'vp of accounting', 'vice president of accounting',
     'vp finance', 'vp of finance', 'vice president finance',
     'vice president of finance', 'head of finance',
     'director of finance', 'finance director',
@@ -912,19 +1205,187 @@ def _has_finance_leadership_trigger(event: dict) -> bool:
     return has_hire and has_role
 
 
-def grade_event(event: dict, companies_data: list) -> dict:
-    """Apply TAL V11 grading rules. Returns dict with grade/hashtags/confidence/
-    numeric_score/etc. On any failure returns an empty-graded record so the
-    rest of the pipeline can still write the event.
+_CONTROLLER_PATTERNS = ('controller', 'vp accounting', 'vp of accounting',
+                        'vice president of accounting', 'corporate controller')
+_CFO_EQUIV_PATTERNS = ('cfo', 'chief financial officer', 'chief financial',
+                       'vp finance', 'vp of finance', 'vice president finance',
+                       'vice president of finance', 'head of finance',
+                       'director of finance', 'finance director',
+                       'chief accounting officer', 'chief accountant')
 
-    V11 NOTES:
-    - Point-based scoring (vs V10.2's hashtag counting). LLM computes the sum.
-    - No code-side finance leadership override — the scoring rubric handles
-      it (CFO + 100EE = 6 = B, etc.).
-    - New fields: confidence (High/Medium/Low), numeric_score (int).
-    - Hashtag list is no longer capped at 6 — V11 says "use as many as
-      evidence supports" — but defense-in-depth, we still cap at 8 to prevent
-      runaway output."""
+
+def _finance_role(event: dict):
+    """Distinguish the finance role being hired: 'cfo' | 'controller' | None.
+
+    Why it matters: the rubric awards #NewCFO(+5) vs #NewController(+3).
+    The old code relabeled Controller hires to event_type=cfo_hire, which
+    then triggered #NewCFO on regrade — a +5/+3 double-count inflation loop
+    (audit 2026-07-16). Only true CFO-equivalents get relabeled now."""
+    if not _has_finance_leadership_trigger(event):
+        return None
+    text = ' '.join([(event.get('title') or ''),
+                     (event.get('description') or '')]).lower()
+    # Controller checked FIRST — "Controller" text must not fall through to
+    # cfo via the broader CFO-equivalent patterns.
+    if any(p in text for p in _CONTROLLER_PATTERNS):
+        # A release can mention both ("Controller promoted to CFO") — the
+        # destination role wins.
+        if any(p in text for p in ('as cfo', 'new cfo', 'to cfo',
+                                   'chief financial officer')):
+            return 'cfo'
+        return 'controller'
+    if event.get('event_type') == 'cfo_hire':
+        return 'cfo'
+    if any(p in text for p in _CFO_EQUIV_PATTERNS):
+        return 'cfo'
+    return None
+
+
+# ── Research probes — the evidence A.J.'s rubric was designed to consume ─────
+# All free: funding + AUM ride the existing Firecrawl/Tavily dispatcher (with
+# its persistent cache); nonprofit data uses ProPublica's public 990 API.
+
+ASSET_MANAGER_SUBINDUSTRIES = {
+    'Venture Capital & Private Equity', 'Investment Banking',
+    'Lending & Brokerage',
+}
+NONPROFIT_VERTICAL = 'Nonprofits & Organizations'
+
+
+def probe_funding_history(company_name: str) -> str:
+    """Search for funding events (rubric: #Funding = verified within last
+    18 months). Returns a compact evidence block ('' if nothing)."""
+    try:
+        res = tavily_search(company_name, 'funding round investment raised')
+        hits = (res or {}).get('results') or []
+        if not hits:
+            return ''
+        lines = [f'FUNDING SEARCH ("{company_name} funding"):']
+        for r in hits[:3]:
+            lines.append(f"- {r.get('title','')} | {r.get('url','')}")
+            snippet = (r.get('content') or '')[:200]
+            if snippet:
+                lines.append(f"  {snippet}")
+        return '\n'.join(lines)
+    except Exception as e:
+        log.debug(f'  funding probe failed: {e}')
+        return ''
+
+
+def probe_aum(company_name: str) -> str:
+    """Search for AUM/AUA evidence for asset managers (rubric:
+    #AssetManagerScale). Returns a compact evidence block ('' if nothing)."""
+    try:
+        res = tavily_search(company_name, 'AUM assets under management funds')
+        hits = (res or {}).get('results') or []
+        if not hits:
+            return ''
+        lines = [f'AUM SEARCH ("{company_name} assets under management"):']
+        for r in hits[:3]:
+            lines.append(f"- {r.get('title','')} | {r.get('url','')}")
+            snippet = (r.get('content') or '')[:200]
+            if snippet:
+                lines.append(f"  {snippet}")
+        return '\n'.join(lines)
+    except Exception as e:
+        log.debug(f'  AUM probe failed: {e}')
+        return ''
+
+
+def probe_nonprofit_990(company_name: str) -> str:
+    """ProPublica Nonprofit Explorer (free, no key): find the org, pull its
+    latest Form 990 financials. This is the rubric's required NPO source —
+    990 revenue + filing history evidence complexity and revenue band.
+    Returns a compact evidence block ('' if no match)."""
+    try:
+        s = requests.get(
+            'https://projects.propublica.org/nonprofits/api/v2/search.json',
+            params={'q': company_name}, timeout=12)
+        s.raise_for_status()
+        orgs = (s.json() or {}).get('organizations') or []
+        if not orgs:
+            return ''
+        org = orgs[0]
+        ein = org.get('ein')
+        lines = [
+            f'PROPUBLICA 990 ("{company_name}"):',
+            f"- Matched org: {org.get('name')} (EIN {ein}), "
+            f"{org.get('city')}, {org.get('state')} | "
+            f"https://projects.propublica.org/nonprofits/organizations/{ein}",
+        ]
+        try:
+            d = requests.get(
+                f'https://projects.propublica.org/nonprofits/api/v2/'
+                f'organizations/{ein}.json', timeout=12)
+            d.raise_for_status()
+            filings = (d.json() or {}).get('filings_with_data') or []
+            if filings:
+                f0 = filings[0]
+                rev = f0.get('totrevenue')
+                exp = f0.get('totfuncexpns')
+                yr = f0.get('tax_prd_yr')
+                lines.append(
+                    f"- Latest 990 ({yr}): total revenue ${rev:,} · "
+                    f"total expenses ${exp:,}" if rev is not None else
+                    f"- Latest filing year: {yr}")
+                lines.append(f"- 990 filings on record: {len(filings)} years")
+        except Exception:
+            pass
+        return '\n'.join(lines)
+    except Exception as e:
+        log.debug(f'  990 probe failed: {e}')
+        return ''
+
+
+def gather_extra_evidence(event: dict, companies_data: list,
+                          fit: dict) -> str:
+    """Run the rubric's research probes for the PRIMARY company, chosen by
+    what the rubric needs for this kind of account. Skips redundant work
+    (funding events already carry funding evidence)."""
+    primary = pick_primary(companies_data)
+    name = (primary.get('name') or '').strip()
+    if not name:
+        return ''
+    blocks = []
+    zi = fit.get('zi_subindustry') or ''
+    vertical = ZI_SUBINDUSTRIES.get(zi, '')
+
+    # Nonprofits → 990 (revenue + complexity evidence, per rubric NPO rules)
+    if vertical == NONPROFIT_VERTICAL:
+        b = probe_nonprofit_990(name)
+        if b:
+            blocks.append(b)
+    else:
+        # For-profits: funding lookback (skip when the event IS the funding
+        # announcement — that evidence is already in the title/description)
+        if (event.get('event_type') or '') != 'funding':
+            b = probe_funding_history(name)
+            if b:
+                blocks.append(b)
+
+    # Asset managers → AUM/AUA for #AssetManagerScale
+    if zi in ASSET_MANAGER_SUBINDUSTRIES:
+        b = probe_aum(name)
+        if b:
+            blocks.append(b)
+
+    return '\n\n'.join(blocks)
+
+
+def grade_event(event: dict, companies_data: list,
+                extra_evidence: str = '') -> dict:
+    """Apply TAL grading rules (A.J.'s latest rubric, 2026-07-16). Returns
+    dict with grade/hashtags/confidence/numeric_score/etc. On any failure
+    returns an empty-graded record so the pipeline can still write the event.
+
+    NOTES:
+    - Point-based scoring; LLM picks hashtags, code computes score + grade.
+    - extra_evidence: optional research-probe results (funding lookback,
+      ProPublica 990, AUM search) injected into the prompt so the rubric
+      has the evidence it was designed to consume.
+    - No hashtag cap — rubric says "use as many as evidence supports"
+      (17 valid hashtags exist; the closed-set filter below is the guard).
+    """
     empty = {
         'grade': None,
         'confidence': None,
@@ -943,6 +1404,7 @@ def grade_event(event: dict, companies_data: list) -> dict:
         article_url=event.get('source_url') or event.get('url') or '',
         description=(event.get('description') or '')[:600],
         companies_block=_build_companies_block(companies_data),
+        extra_evidence=extra_evidence.strip() or '(none)',
     )
     data = llm_json(prompt, max_tokens=900)  # +100 for new fields
     if not data:
@@ -968,11 +1430,15 @@ def grade_event(event: dict, companies_data: list) -> dict:
     hashtags = data.get('hashtags') or []
     if isinstance(hashtags, str):
         hashtags = [h.strip() for h in hashtags.split() if h.strip().startswith('#')]
-    # Keep only valid V11 hashtags — silently drop unknown/invented ones
+    # Keep only valid rubric hashtags — silently drop unknown/invented ones.
+    # No count cap (rubric: "use as many approved hashtags as evidence
+    # supports"); the closed set itself bounds the list at 17.
+    seen = set()
     hashtags = [
         h for h in hashtags
         if isinstance(h, str) and h in TAL_V11_HASHTAG_POINTS
-    ][:8]
+        and not (h in seen or seen.add(h))
+    ]
 
     # ── DETERMINISTIC scoring + grade (overrides LLM math) ──────────────
     if llm_says_unable:
@@ -1158,11 +1624,7 @@ def enrich_events(
         # Catches mining/steel/oil that slipped past the scrape-time text
         # filter (e.g. "Chilean Cobalt Corp." → industry "Critical Minerals
         # Exploration" → blocked here).
-        primary = next(
-            (c for c in enriched
-             if str(c.get('role', '')).lower() in PRIMARY_ROLES),
-            enriched[0]
-        )
+        primary = pick_primary(enriched)
         blocked, kw = industry_is_blocked(primary.get('industry') or '')
         if blocked:
             log.info(
@@ -1170,56 +1632,53 @@ def enrich_events(
                 f'"{primary.get("industry")}" matched "{kw}". Soft-deleting.'
             )
             if not dry_run:
-                # SOFT-DELETE: set blocked_at + enriched_at so:
-                #  - dashboard filters out (blocked_at IS NOT NULL)
-                #  - next enrichment skips (enriched_at IS NOT NULL)
-                #  - next GHA scrape's supabase_sync upsert is a no-op
-                #    (row still exists, blocked_at/enriched_at preserved)
-                # Hard-DELETE was getting silently reverted by the next
-                # supabase_sync's upsert from the GHA-cached SQLite.
-                soft_delete_payload = {
-                    'blocked_at':     datetime.utcnow().isoformat(),
-                    'blocked_reason': f'industry: {primary.get("industry")} (matched "{kw}")',
-                    'enriched_at':    datetime.utcnow().isoformat(),
-                }
-                try:
-                    client.table('events').update(soft_delete_payload).eq(
-                        'id', eid).execute()
-                except Exception as e:
-                    if 'does not exist' in str(e):
-                        # Fall back to hard delete if blocked_at column not yet
-                        # migrated. User will see events re-appear until they
-                        # run the migration SQL.
-                        log.warning(
-                            '    blocked_at column missing — falling back to '
-                            'hard DELETE (will re-appear on next sync until '
-                            'you add the column). Migration SQL:\n'
-                            '      ALTER TABLE events ADD COLUMN IF NOT EXISTS '
-                            'blocked_at     TIMESTAMPTZ;\n'
-                            '      ALTER TABLE events ADD COLUMN IF NOT EXISTS '
-                            'blocked_reason TEXT;'
-                        )
-                        try:
-                            client.table('events').delete().eq('id', eid).execute()
-                        except Exception as e2:
-                            log.error(f'    Hard-delete fallback also failed: {e2}')
-                    else:
-                        log.error(f'    Soft-delete failed: {e}')
+                _soft_delete(client, eid,
+                             f'industry: {primary.get("industry")} (matched "{kw}")')
             ok += 1  # count as processed (not failed)
             continue
 
-        # ── 4. TAL V10.2 grading ──────────────────────────────────────────
-        log.info(f'  Grading via TAL V10.2…')
-        grading = grade_event(event, enriched)
+        # ── 4. FIT GATES (deterministic, post-research) ───────────────────
+        # Territory × revenue band × ZI-subindustry allowlist. Confirmed-out
+        # on any dimension → soft-delete. Unknowns → keep, cap grade at B,
+        # flag for a 10-second rep verification.
+        fit = apply_fit_gates(enriched)
+        if fit['verdict'] == 'fail':
+            log.info(f'  🚫 Fit gate FAIL — {"; ".join(fit["reasons"])}. '
+                     f'Soft-deleting.')
+            if not dry_run:
+                _soft_delete(client, eid, f'fit_gate: {"; ".join(fit["reasons"])}')
+            ok += 1
+            continue
+        if fit['verdict'] == 'unverified':
+            log.info(f'  ⚠️  Fit unverified — {"; ".join(fit["reasons"])} '
+                     f'(grade capped at B)')
+
+        # ── 5. Research probes + TAL grading (A.J. rubric) ────────────────
+        extra_evidence = '' if dry_run else gather_extra_evidence(event, enriched, fit)
+        log.info(f'  Grading via TAL rubric…')
+        grading = grade_event(event, enriched, extra_evidence)
+
+        # Unverified-fit cap: an A grade needs confirmed fit. (Agreed with
+        # A.J. 2026-07-16: flag, don't hide.)
+        if fit['verdict'] == 'unverified' and grading.get('grade') == 'A':
+            grading['grade'] = 'B'
+            grading['grade_justification'] = (
+                '⚠️ Capped A→B: fit unverified '
+                f'({"; ".join(r for r in fit["reasons"] if "unverified" in r)}). '
+                + (grading.get('grade_justification') or '')
+            )[:1000]
+
         if grading.get('grade'):
             log.info(
                 f'    Grade={grading["grade"]}  '
+                f'Score={grading.get("numeric_score")}  '
                 f'Hashtags={" ".join(grading["hashtags"]) or "(none)"}'
             )
 
-        # ── 5. Write to Supabase ──────────────────────────────────────────
+        # ── 6. Write to Supabase ──────────────────────────────────────────
         if dry_run:
-            log.info(f'  Would write {len(enriched)} company record(s) + grade')
+            log.info(f'  Would write {len(enriched)} company record(s) + grade '
+                     f'(fit={fit["verdict"]})')
             ok += 1
             continue
 
@@ -1235,14 +1694,14 @@ def enrich_events(
         }
         if col_ok.get('enriched_at'):
             payload['enriched_at'] = datetime.utcnow().isoformat()
+        if col_ok.get('fit'):
+            payload['fit'] = fit
 
-        # Upgrade event_type to cfo_hire if we detected finance leadership in
-        # the text. Never downgrades — only changes executive_hire/other → cfo_hire.
-        # This backfills correct classification on existing events when re-enriched,
-        # and ensures dashboard CFO tab populates correctly.
+        # Upgrade event_type to cfo_hire ONLY for true CFO-equivalent hires.
+        # Controller/VP-Accounting hires stay executive_hire — relabeling them
+        # caused a #NewCFO(+5) vs #NewController(+3) double-count on regrade.
         current_etype = (event.get('event_type') or '').lower()
-        if (current_etype != 'cfo_hire'
-                and _has_finance_leadership_trigger(event)):
+        if current_etype != 'cfo_hire' and _finance_role(event) == 'cfo':
             payload['event_type'] = 'cfo_hire'
             log.info(f'    Reclassifying event_type {current_etype!r} → cfo_hire')
 
@@ -1336,11 +1795,7 @@ def regrade_only_events(limit: int = None, dry_run: bool = False):
             continue
 
         # ── Post-enrichment industry filter ───────────────────────────────
-        primary = next(
-            (c for c in cd
-             if str(c.get('role', '')).lower() in PRIMARY_ROLES),
-            cd[0]
-        )
+        primary = pick_primary(cd)
         blocked, kw = industry_is_blocked(primary.get('industry') or '')
         if blocked:
             log.info(
@@ -1348,34 +1803,36 @@ def regrade_only_events(limit: int = None, dry_run: bool = False):
                 f'→ soft-delete'
             )
             if not dry_run:
-                # Same SOFT-DELETE pattern as enrich_events — see comment there.
-                # Hard-DELETE was undone by next supabase_sync upsert.
-                soft_delete_payload = {
-                    'blocked_at':     datetime.utcnow().isoformat(),
-                    'blocked_reason': f'industry: {primary.get("industry")} (matched "{kw}")',
-                    'enriched_at':    datetime.utcnow().isoformat(),
-                }
-                try:
-                    client.table('events').update(soft_delete_payload).eq(
-                        'id', eid).execute()
-                    deleted += 1
-                except Exception as e:
-                    if 'does not exist' in str(e):
-                        try:
-                            client.table('events').delete().eq('id', eid).execute()
-                            deleted += 1
-                        except Exception as e2:
-                            log.error(f'  Hard-delete fallback failed: {e2}')
-                            fail += 1
-                    else:
-                        log.error(f'  Soft-delete failed: {e}')
-                        fail += 1
-            else:
-                deleted += 1
+                _soft_delete(client, eid,
+                             f'industry: {primary.get("industry")} (matched "{kw}")')
+            deleted += 1
             continue
 
-        # ── TAL grading (Ollama only, free) ───────────────────────────────
+        # ── FIT GATES (same policy as enrich_events) ──────────────────────
+        # Note: legacy events lack zi_subindustry (added 2026-07-16) — their
+        # vertical reads 'unknown', so most legacy events land 'unverified'
+        # (kept, capped at B, flagged) rather than 'fail'. Full re-enrichment
+        # is what upgrades them to confirmed fit.
+        fit = apply_fit_gates(cd)
+        if fit['verdict'] == 'fail':
+            log.info(f'  🚫 Fit gate FAIL — {"; ".join(fit["reasons"])} '
+                     f'→ soft-delete')
+            if not dry_run:
+                _soft_delete(client, eid, f'fit_gate: {"; ".join(fit["reasons"])}')
+            deleted += 1
+            continue
+
+        # ── TAL grading (local LLM, free — no search probes in this mode) ──
         grading = grade_event(event, cd)
+
+        if fit['verdict'] == 'unverified' and grading.get('grade') == 'A':
+            grading['grade'] = 'B'
+            grading['grade_justification'] = (
+                '⚠️ Capped A→B: fit unverified '
+                f'({"; ".join(r for r in fit["reasons"] if "unverified" in r)}). '
+                + (grading.get('grade_justification') or '')
+            )[:1000]
+
         if grading.get('grade'):
             log.info(
                 f'  Grade={grading["grade"]}  '
@@ -1396,11 +1853,13 @@ def regrade_only_events(limit: int = None, dry_run: bool = False):
             'cfo_status':          grading.get('cfo_status'),
             'research_notes':      grading.get('research_notes') or [],
         }
+        if col_ok.get('fit'):
+            payload['fit'] = fit
 
-        # event_type reclassification: only upgrade to cfo_hire when warranted
+        # event_type reclassification — CFO-equivalents only (Controllers
+        # stay executive_hire; see _finance_role for why)
         current_etype = (event.get('event_type') or '').lower()
-        if (current_etype != 'cfo_hire'
-                and _has_finance_leadership_trigger(event)):
+        if current_etype != 'cfo_hire' and _finance_role(event) == 'cfo':
             payload['event_type'] = 'cfo_hire'
             upgraded += 1
             log.info(f'  Reclassifying event_type {current_etype!r} → cfo_hire')
