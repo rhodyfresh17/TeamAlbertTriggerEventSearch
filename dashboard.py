@@ -1130,7 +1130,11 @@ def render_event_card(row, event_config, key_prefix: str = ''):
                         # across every event it appears in). Auto-saves on
                         # change; any status = "decided" and the account's
                         # events drop out of the active queue on next refresh.
-                        if co_name and acct_dispos is not None:
+                        # Confirmed NOT-A-FIT companies get NO selector — the
+                        # fit gate already dispositioned them (A.J. 2026-07-17);
+                        # a human re-verdict would be redundant clutter.
+                        if (co_name and acct_dispos is not None
+                                and not (co_fit and co_fit.get('verdict') == 'fail')):
                             wkey = f"{key_prefix}acct_{row['id']}_{_co_idx}"
                             cur = (acct_dispos.get(_account_key(co_name)) or {}).get('status')
                             opts = ['—'] + ACCOUNT_STATUSES
