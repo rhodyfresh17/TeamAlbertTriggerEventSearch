@@ -834,16 +834,31 @@ def render_event_card(row, event_config, key_prefix: str = ''):
         except Exception:
             fit_raw = None
     if isinstance(fit_raw, dict) and fit_raw.get('verdict') == 'unverified':
-        unk = [r for r in (fit_raw.get('reasons') or []) if 'unverified' in r]
-        tip = 'Fit not fully confirmed: ' + ('; '.join(unk) or 'verify manually')
-        fit_html = (
-            f'<span title="{tip}" '
-            f'style="display:inline-flex;align-items:center;'
-            f'padding:0.25rem 0.55rem;border-radius:6px;'
-            f'background:rgba(245,158,11,0.18);color:#fbbf24;'
-            f'font-size:0.7rem;font-weight:700;margin-left:0.4rem;'
-            f'cursor:help;">⚠️ VERIFY FIT</span>'
-        )
+        _unk_dims = [d for d in ('territory', 'revenue', 'vertical')
+                     if fit_raw.get(d) == 'unknown']
+        if _unk_dims == ['revenue']:
+            # Softer flag (A.J. 2026-07-18): territory + vertical ARE
+            # confirmed — only the revenue band needs a quick eyeball.
+            fit_html = (
+                f'<span title="Territory and vertical CONFIRMED — only the '
+                f'revenue band is unconfirmed (usually a 5-second check)" '
+                f'style="display:inline-flex;align-items:center;'
+                f'padding:0.25rem 0.55rem;border-radius:6px;'
+                f'background:rgba(96,165,250,0.16);color:#60a5fa;'
+                f'font-size:0.7rem;font-weight:700;margin-left:0.4rem;'
+                f'cursor:help;">💵 CONFIRM REVENUE</span>'
+            )
+        else:
+            unk = [r for r in (fit_raw.get('reasons') or []) if 'unverified' in r]
+            tip = 'Fit not fully confirmed: ' + ('; '.join(unk) or 'verify manually')
+            fit_html = (
+                f'<span title="{tip}" '
+                f'style="display:inline-flex;align-items:center;'
+                f'padding:0.25rem 0.55rem;border-radius:6px;'
+                f'background:rgba(245,158,11,0.18);color:#fbbf24;'
+                f'font-size:0.7rem;font-weight:700;margin-left:0.4rem;'
+                f'cursor:help;">⚠️ VERIFY FIT</span>'
+            )
 
     # Aging indicator — how long has this sat in the queue?
     age_html = ""
@@ -1016,6 +1031,11 @@ def render_event_card(row, event_config, key_prefix: str = ''):
                                       'fail':   ('✗ NOT A FIT', '#f87171'),
                                       'unverified': ('⚠ VERIFY', '#fbbf24')}
                             _txt, _clr = _v_map.get(co_fit.get('verdict'), (None, None))
+                            if co_fit.get('verdict') == 'unverified':
+                                _co_unk = [d for d in ('territory', 'revenue', 'vertical')
+                                           if co_fit.get(d) == 'unknown']
+                                if _co_unk == ['revenue']:
+                                    _txt, _clr = ('💵 REVENUE?', '#60a5fa')
                             if _txt:
                                 import html as _h2
                                 _reasons = co_fit.get('reasons') or []
