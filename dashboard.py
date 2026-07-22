@@ -1742,7 +1742,34 @@ def main():
     df = load_events(days=days, search=search if search else None)
 
     if df.empty:
-        st.info("📭 No events found. Run the scraper to populate data.")
+        # Distinguish "your search matched nothing" from "the database read
+        # itself returned nothing" (usually an RLS/key problem, not real data).
+        try:
+            client = get_supabase_client()
+            total = client.table('events').select('id', count='exact').limit(1).execute().count if client else 0
+        except Exception:
+            total = 0
+        if total:
+            st.info("📭 No events match the current search/time window. Try clearing filters.")
+            return
+        def _secret_val(name):
+            if hasattr(st, 'secrets') and name in st.secrets:
+                return st.secrets.get(name)
+            return os.environ.get(name)
+        if not _secret_val("SUPABASE_SERVICE_ROLE_KEY"):
+            st.error(
+                "🔑 No events loaded — the SUPABASE_SERVICE_ROLE_KEY secret is missing. "
+                "The database now requires the admin key for all access. "
+                "Add it in Streamlit Cloud → Settings → Secrets, then reboot the app."
+            )
+        else:
+            st.error(
+                "🔑 No events loaded, but the admin key IS configured — the app is "
+                "likely still holding an old database connection from before the key "
+                "was added. Reboot the app: share.streamlit.io → ⋮ → Reboot. "
+                "If it persists after reboot, re-copy the secret key from Supabase "
+                "(Project Settings → API Keys → Secret keys)."
+            )
         return
 
     df = filter_by_region(df, selected_regions)
