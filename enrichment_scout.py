@@ -64,6 +64,7 @@ except ImportError:
 # Tavily kept as optional fallback when SEARCH_BACKEND='tavily' or Firecrawl unreachable.
 SEARCH_BACKEND    = os.environ.get('SEARCH_BACKEND', 'firecrawl').lower()
 FIRECRAWL_URL     = os.environ.get('FIRECRAWL_URL', 'http://localhost:3002')
+SEARXNG_URL       = os.environ.get('SEARXNG_URL', 'http://localhost:8888')
 TAVILY_API_KEY    = os.environ.get('TAVILY_API_KEY', '')  # fallback only now
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
 CLAUDE_MODEL      = 'claude-3-5-haiku-20241022'  # optional cloud path — unused unless key set
@@ -769,6 +770,74 @@ def _firecrawl_search(company_name: str, industry_hint: str = '') -> dict:
         return {}
 
 
+def _searxng_search(company_name: str, industry_hint: str = '') -> dict:
+    """Search via the local SearXNG metasearch instance (the same one the
+    Hermes fleet uses, :8888). Free, no API quota. Independent of
+    Firecrawl's own search path, and rotates across multiple upstream
+    engines — when Firecrawl's backend is burst-throttled, one of
+    SearXNG's engines is often still answering. Returns the Tavily
+    envelope shape."""
+    query = _build_search_query(company_name, industry_hint)
+    try:
+        resp = requests.get(
+            f'{SEARXNG_URL}/search',
+            params={'q': query, 'format': 'json'},
+            timeout=20,
+        )
+        resp.raise_for_status()
+        results = resp.json().get('results') or []
+        return {
+            'answer': '',
+            'results': [
+                {
+                    'title':   r.get('title', ''),
+                    'url':     r.get('url', ''),
+                    'content': (r.get('content') or '')[:400],
+                }
+                for r in results[:6]
+            ],
+        }
+    except Exception as e:
+        log.warning(f'  SearXNG error for "{company_name}": {e}')
+        return {}
+
+
+def _google_cse_search(company_name: str, industry_hint: str = '') -> dict:
+    """Google Custom Search JSON API — dormant until GOOGLE_CSE_KEY +
+    GOOGLE_CSE_CX are set in the environment. Free tier: 100 queries/DAY
+    (resets daily — unlike Tavily's monthly cliff, a burned day only costs
+    that day). Server-side quota, so it keeps working when the Mac's IP is
+    CAPTCHA'd by the scraping backends. Over-quota returns HTTP 429 →
+    empty dict → dispatcher moves on."""
+    key = os.environ.get('GOOGLE_CSE_KEY')
+    cx  = os.environ.get('GOOGLE_CSE_CX')
+    if not key or not cx:
+        return {}
+    query = _build_search_query(company_name, industry_hint)
+    try:
+        resp = requests.get(
+            'https://www.googleapis.com/customsearch/v1',
+            params={'key': key, 'cx': cx, 'q': query, 'num': 6},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        items = resp.json().get('items') or []
+        return {
+            'answer': '',
+            'results': [
+                {
+                    'title':   i.get('title', ''),
+                    'url':     i.get('link', ''),
+                    'content': (i.get('snippet') or '')[:400],
+                }
+                for i in items
+            ],
+        }
+    except Exception as e:
+        log.warning(f'  Google CSE error for "{company_name}": {e}')
+        return {}
+
+
 def _tavily_search(company_name: str, industry_hint: str = '') -> dict:
     """Search Tavily — kept as fallback when SEARCH_BACKEND='tavily' OR
     Firecrawl is unreachable. Costs quota; use sparingly."""
@@ -865,7 +934,8 @@ def _cache_set(company_name: str, industry_hint: str, results: dict) -> None:
 # Per-run counters for the actual backend each search hit. Reset to 0
 # at the start of every enrich_events() / regrade_only_events() run.
 # The main loop reads these when printing the final summary.
-SEARCH_COUNTS: Dict[str, int] = {'cache': 0, 'firecrawl': 0, 'tavily': 0}
+SEARCH_COUNTS: Dict[str, int] = {'cache': 0, 'firecrawl': 0, 'searxng': 0,
+                                 'google_cse': 0, 'tavily': 0}
 
 
 def reset_search_counts() -> None:
@@ -924,12 +994,27 @@ def tavily_search(company_name: str, industry_hint: str = '') -> dict:
         results = _firecrawl_search(company_name, industry_hint)
         if not results or not results.get('results'):
             # Empty Firecrawl during bulk runs is usually TRANSIENT upstream
-            # rate-limiting (searxng's engines throttling a burst). One short
-            # wait + retry recovers most of them for free — verified: the
-            # same queries succeed seconds later.
+            # rate-limiting (its search backend throttling a burst). One
+            # short wait + retry recovers most of them for free — verified:
+            # the same queries succeed seconds later.
             time.sleep(2.5)
             SEARCH_COUNTS['firecrawl'] += 1
             results = _firecrawl_search(company_name, industry_hint)
+        # SearXNG fallback — free, quota-less, different upstream engines.
+        # Sits BEFORE Tavily so paid quota is only touched when both local
+        # backends come up empty.
+        if not results or not results.get('results'):
+            log.info('  → Firecrawl empty, falling back to SearXNG')
+            SEARCH_COUNTS['searxng'] += 1
+            results = _searxng_search(company_name, industry_hint)
+        # Google CSE fallback — dormant until GOOGLE_CSE_KEY/GOOGLE_CSE_CX
+        # are configured. API-quota based (100/day, daily reset), so it
+        # works even when the Mac's IP is throttled by every scraper.
+        if ((not results or not results.get('results'))
+                and os.environ.get('GOOGLE_CSE_KEY')):
+            log.info('  → SearXNG empty too, falling back to Google CSE')
+            SEARCH_COUNTS['google_cse'] += 1
+            results = _google_cse_search(company_name, industry_hint)
         # Tavily fallback — only if configured AND monthly budget remains
         if (not results or not results.get('results')) and TAVILY_API_KEY:
             used = _tavily_month_count()
@@ -2069,7 +2154,8 @@ def enrich_events(
     log.info(
         f'Done — enriched: {ok}, failed: {fail}  ·  '
         f'Searches: {sum(sc.values())} '
-        f'(cache:{sc["cache"]} firecrawl:{sc["firecrawl"]} tavily:{sc["tavily"]})'
+        f'(cache:{sc["cache"]} firecrawl:{sc["firecrawl"]} '
+        f'searxng:{sc["searxng"]} cse:{sc["google_cse"]} tavily:{sc["tavily"]})'
     )
 
 
