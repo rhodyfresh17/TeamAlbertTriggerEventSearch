@@ -534,8 +534,16 @@ def get_supabase_client():
         st.error("Supabase not installed. Run: pip install supabase")
         return None
 
-    url = st.secrets.get("SUPABASE_URL") if hasattr(st, 'secrets') and "SUPABASE_URL" in st.secrets else os.environ.get("SUPABASE_URL")
-    key = st.secrets.get("SUPABASE_KEY") if hasattr(st, 'secrets') and "SUPABASE_KEY" in st.secrets else os.environ.get("SUPABASE_KEY")
+    def _secret(name):
+        if hasattr(st, 'secrets') and name in st.secrets:
+            return st.secrets.get(name)
+        return os.environ.get(name)
+
+    url = _secret("SUPABASE_URL")
+    # Service-role key preferred: it bypasses Row-Level Security, so the
+    # dashboard keeps working after RLS is enabled on the tables. This app
+    # runs server-side only — the key is never exposed to viewers' browsers.
+    key = _secret("SUPABASE_SERVICE_ROLE_KEY") or _secret("SUPABASE_KEY")
 
     if not url or not key:
         return None
