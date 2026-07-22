@@ -258,7 +258,7 @@ loosen without A.J.
 ### Configuration
 - **`config.example.yaml`** ← edit this; gitignored `config.yaml` is generated via `cp`. Holds territory, keywords, RSS feeds, excluded industries, mega-bank exclusions, Adzuna/SEC settings.
 - **`.env`** (gitignored) — local secrets: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, TAVILY_API_KEY, ADZUNA_APP_ID, ADZUNA_APP_KEY
-- **`.streamlit/secrets.toml`** (gitignored) — Streamlit Cloud secrets: SUPABASE_URL, SUPABASE_KEY (anon), DASHBOARD_PASSWORD
+- **`.streamlit/secrets.toml`** (gitignored) — Streamlit Cloud secrets: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY (new-style `sb_secret_` admin key; added 2026-07-21), SUPABASE_KEY (legacy anon — now useless, RLS locks it out), DASHBOARD_PASSWORD
 - **`.github/workflows/scraper.yml`** — cron schedule + Actions secrets wiring
 - **`requirements.txt`** — Python deps
 
@@ -304,8 +304,10 @@ loosen without A.J.
 | Secret | Where it lives | Purpose |
 |---|---|---|
 | `SUPABASE_URL` | `.env`, Streamlit secrets, GitHub Secrets | Supabase project URL |
-| `SUPABASE_SERVICE_ROLE_KEY` | `.env`, GitHub Secrets | Server-side writes (bypasses RLS) |
-| `SUPABASE_KEY` (anon) | Streamlit secrets only | Dashboard reads |
+| `SUPABASE_SERVICE_ROLE_KEY` | `.env`, GitHub Secrets, Streamlit secrets | ALL reads/writes everywhere (bypasses RLS). Streamlit copy is the new-style `sb_secret_` key; `.env`/GHA copies are legacy JWTs — both work. |
+| `SUPABASE_KEY` (anon) | `.env`, Streamlit secrets | **Dead since 2026-07-21 RLS lockdown** — kept only as the negative probe for RLS verification (should always see 0 rows). |
+
+**Supabase RLS posture (since 2026-07-21):** RLS is ENABLED on all `public` tables (`events`, `account_dispositions`, `source_status`) with **zero policies** — the anon key can neither read nor write anything; every component uses the service-role key. Two standing rules: (1) any NEW table must get `alter table public.<name> enable row level security;` right after creation or Supabase's security emails resume; (2) never create permissive policies (`for select using (true)` etc.) — the original setup had such policies dormant on `events`/`source_status`, and enabling RLS woke them up until we dropped all policies. Verify anytime with the anon-key probe (expect 0 rows/APIError on all tables).
 | `TAVILY_API_KEY` | `.env`, GitHub Secrets (optional) | Web search for company enrichment. Was leaked in git history (commit `ac17b5b`), rotated in commit `536b57d`. Never re-hardcode a fallback. |
 | `ADZUNA_APP_ID` + `ADZUNA_APP_KEY` | `.env`, GitHub Secrets | Adzuna jobs API (free tier ~100-250 calls/month) |
 | `ANTHROPIC_API_KEY` | GitHub Secrets (optional) | Cloud-based LLM for enrichment fallback. If unset, enrichment uses local Ollama. |
