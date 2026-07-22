@@ -103,11 +103,18 @@ class SECScraper(BaseScraper):
         # Counter for blocked-by-SIC events (for the source_status reporting)
         self._sic_blocked_count: int = 0
 
-        # Set of accession numbers (adsh) for Item 5.02 filings that also
-        # mention "Chief Financial Officer" — pre-fetched once per scrape
-        # to correctly route CFO-related officer changes to event_type=CFO_HIRE
-        # (vs EXECUTIVE_HIRE for non-CFO officer departures/elections).
+        # Sets of accession numbers (adsh) for Item 5.02 filings, pre-fetched
+        # once per scrape via EFTS full-text search:
+        #   _cfo_adsh_set     — mention "Chief Financial Officer" → CFO_HIRE
+        #   _finance_adsh_set — mention ANY finance-leader role (CFO,
+        #                       Controller, Chief Accounting Officer).
+        # 5.02 filings OUTSIDE the finance set are board-of-directors
+        # elections / CEO changes / other officer noise — NOT NetSuite
+        # triggers (A.J. 2026-07-21) — and are skipped entirely.
         self._cfo_adsh_set: set = set()
+        self._finance_adsh_set: set = set()
+        self._finance_prefetch_ok: bool = False
+        self._board_skipped_count: int = 0
 
         # Track source status for the dashboard
         self.source_statuses: List[Dict[str, Any]] = []
@@ -119,12 +126,25 @@ class SECScraper(BaseScraper):
         if not self.enabled:
             return []
 
-        # Prefetch CFO-related Item 5.02 filing accession numbers so we can
-        # correctly classify them at hit-conversion time. One extra EFTS call.
-        self._cfo_adsh_set = self._fetch_cfo_filing_adsh_set()
+        # Prefetch finance-leader Item 5.02 accession numbers (3 extra EFTS
+        # calls, throttled). CFO set routes to CFO_HIRE; the wider finance
+        # set is the KEEP filter — 5.02 filings outside it (board elections,
+        # CEO changes) are dropped at ingestion.
+        self._cfo_adsh_set = self._fetch_phrase_adsh_set('Chief Financial Officer')
+        self._finance_adsh_set = (
+            self._cfo_adsh_set
+            | self._fetch_phrase_adsh_set('Chief Accounting Officer')
+            | self._fetch_phrase_adsh_set('Controller')
+        )
+        # Fail open: if the prefetch returned nothing (EFTS outage / rate
+        # limit), keep the old ingest-everything behavior rather than
+        # silently dropping ALL 5.02 filings. A real 7-day window always
+        # has finance-related 5.02 filings nationwide.
+        self._finance_prefetch_ok = bool(self._finance_adsh_set)
 
-        # Reset per-run counter so the count reflects this scrape only
+        # Reset per-run counters so the counts reflect this scrape only
         self._sic_blocked_count = 0
+        self._board_skipped_count = 0
 
         all_events: List[TriggerEvent] = []
         for item_code, item_def in ITEM_DEFINITIONS.items():
@@ -153,6 +173,10 @@ class SECScraper(BaseScraper):
         if self._sic_blocked_count > 0:
             print(f'  - SEC SIC prefilter: blocked {self._sic_blocked_count} '
                   f'off-target filings before enrichment')
+        if self._board_skipped_count > 0:
+            print(f'  - SEC 5.02 finance filter: skipped '
+                  f'{self._board_skipped_count} board/CEO-only officer '
+                  f'filings (no finance-leader mention)')
 
         return all_events
 
@@ -176,9 +200,9 @@ class SECScraper(BaseScraper):
 
         return events
 
-    def _fetch_cfo_filing_adsh_set(self) -> set:
-        """Pre-fetch the accession numbers of Item 5.02 filings that mention
-        'Chief Financial Officer' so we can route them to event_type=CFO_HIRE.
+    def _fetch_phrase_adsh_set(self, phrase: str) -> set:
+        """Pre-fetch the accession numbers of Item 5.02 filings whose full
+        text contains `phrase` (exact-phrase EFTS full-text search).
 
         Paginates through up to MAX_PAGES of results — EFTS returns ~100 hits
         per page, and busy weeks easily exceed that for CFO-related Item 5.02
@@ -193,7 +217,7 @@ class SECScraper(BaseScraper):
             for page in range(MAX_PAGES):
                 params = {
                     # EFTS treats quoted phrases as required; space = AND.
-                    'q':         '"Chief Financial Officer" "Item 5.02"',
+                    'q':         f'"{phrase}" "Item 5.02"',
                     'forms':     '8-K',
                     'dateRange': 'custom',
                     'startdt':   startdt,
@@ -214,11 +238,11 @@ class SECScraper(BaseScraper):
                 self.delay_request()
                 if len(hits) < 100:
                     break  # last page (partial) — done
-            print(f'  - SEC CFO prefetch: {len(adsh_set)} Item 5.02 filings '
-                  f'mention "Chief Financial Officer"')
+            print(f'  - SEC 5.02 prefetch: {len(adsh_set)} filings mention '
+                  f'"{phrase}"')
             return adsh_set
         except Exception as e:
-            print(f'  - SEC CFO prefetch failed (defaulting to EXEC for all): {e}')
+            print(f'  - SEC 5.02 prefetch for "{phrase}" failed: {e}')
             return adsh_set  # return whatever we got before the error
 
     # ── SIC code prefilter ───────────────────────────────────────────────
@@ -400,15 +424,22 @@ class SECScraper(BaseScraper):
         if self.is_public_company(company_name):
             return None
 
-        # Classify event_type. For Item 5.02 (officer changes), route to
-        # CFO_HIRE if the pre-fetched CFO set contains this filing's adsh,
-        # else EXECUTIVE_HIRE for other officer changes.
+        # Classify event_type. For Item 5.02 (officer changes): CFO mentions
+        # route to CFO_HIRE; other finance-leader mentions (Controller /
+        # Chief Accounting Officer) stay EXECUTIVE_HIRE; filings mentioning
+        # NO finance-leader role are board elections / CEO changes / other
+        # officer noise — not NetSuite triggers — and are dropped.
         event_type = item_def['event_type']
         if item_code == '5.02':
             if adsh in self._cfo_adsh_set:
                 event_type = EventType.CFO_HIRE
-            else:
+            elif adsh in self._finance_adsh_set:
                 event_type = EventType.EXECUTIVE_HIRE
+            elif self._finance_prefetch_ok:
+                self._board_skipped_count += 1
+                return None
+            else:
+                event_type = EventType.EXECUTIVE_HIRE  # prefetch failed — fail open
 
         title = (
             f'SEC 8-K Item {item_code} ({item_def["name"]}) — {company_name}'

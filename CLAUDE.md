@@ -246,6 +246,23 @@ Complexity-only 8+ (no trigger) → B. Low/unparseable confidence → cap C.
 Fit 'unverified' → cap B (⚠️ VERIFY FIT chip on dashboard). Solo #NewCFO = 5
 = B by design. No hashtag-count cap ("as many as evidence supports").
 
+**Finance-tag evidence guard (2026-07-21):** the LLM provably fabricates
+#NewCFO on non-CFO events ("+5 applied as highest-value single trigger for
+material definitive agreement events" — CNL). Deterministic backstop in the
+grading parser: #NewCFO requires event_type=cfo_hire OR a CFO-equivalent
+phrase in title/description; #NewController requires a Controller phrase.
+Otherwise the tag is stripped and score/grade recomputed. 26 inflated
+grades corrected in the one-off cleanup (incl. one fake A).
+
+**Board changes are NOT triggers (A.J. 2026-07-21):** directors aren't
+involved in ERP decisions. Three layers: (1) SEC scraper only ingests Item
+5.02 filings whose full text mentions a finance-leader role — CFO set →
+cfo_hire, Controller/Chief Accounting set → executive_hire, everything else
+(board elections, CEO changes) skipped at the source (fails open if the
+EFTS prefetch errors); (2) `_board_only_event()` gate tombstones
+board-only executive_hire events in both enrich + regrade paths
+(`board_change_only` reason); (3) prompt rule.
+
 FIT comes BEFORE grading: `apply_fit_gates` (territory × revenue × ZI
 vertical) soft-deletes confirmed-out events, so grades only rank workable
 accounts. Hashtag definitions are STRICT — history of LLM stuffing. Don't

@@ -1215,9 +1215,14 @@ a fixed point value. Sum all applicable points = numeric_score.
 HIGH-INTENT TRIGGERS:
 - **#NewCFO (+5)** — CFO or CFO-equivalent (Chief Financial Officer, VP \
 Finance, Head of Finance, Director of Finance, Chief Financial) hired \
-within last 18 months. Apply if event_type=cfo_hire OR title/description \
+within last 18 months. Apply ONLY if event_type=cfo_hire OR title/description \
 states a new CFO/VP Finance/Director Finance hire. NOT for Controllers — \
-use #NewController instead. \
+use #NewController instead. NEVER apply to M&A deals, material agreements, \
+funding rounds, or Board of Directors changes — those events do NOT imply \
+a new CFO, and there is no such thing as a "highest-value trigger applied \
+by default". Board of Directors appointments/elections/departures are NOT \
+finance-leader hires: directors are not involved in ERP decisions, so a \
+board change earns NEITHER #NewCFO nor #NewController. \
 NOTE: a solo #NewCFO (no other hashtag) = 5 points = Grade B — this is \
 intentional: a new CFO is the single highest-value NetSuite sales trigger.
 - **#NewController (+3)** — Controller, VP Accounting, or Chief Accounting \
@@ -1378,6 +1383,28 @@ _CFO_EQUIV_PATTERNS = ('cfo', 'chief financial officer', 'chief financial',
                        'vice president of finance', 'head of finance',
                        'director of finance', 'finance director',
                        'chief accounting officer', 'chief accountant')
+
+# Board-of-directors changes are NOT triggers (A.J. 2026-07-21: directors
+# aren't involved in ERP decisions like CFOs/Controllers are).
+_BOARD_PATTERNS = ('board of directors', 'to the board', 'to its board',
+                   'board member', 'board seat', 'joins board',
+                   'joins the board', 'named to board', 'elected director',
+                   'board appointment', 'board chair')
+
+
+def _board_only_event(event: dict) -> bool:
+    """True when an executive_hire event is purely a board-of-directors
+    change — no CFO/Controller/finance-leader involvement. These are noise:
+    directors don't drive ERP decisions, so the event gets tombstoned
+    instead of enriched/graded."""
+    if event.get('event_type') != 'executive_hire':
+        return False
+    text = ' '.join([(event.get('title') or ''),
+                     (event.get('description') or '')]).lower()
+    if not any(p in text for p in _BOARD_PATTERNS):
+        return False
+    return not (any(p in text for p in _CFO_EQUIV_PATTERNS)
+                or any(p in text for p in _CONTROLLER_PATTERNS))
 
 
 def _finance_role(event: dict):
@@ -1612,6 +1639,23 @@ def grade_event(event: dict, companies_data: list,
         and not (h in seen or seen.add(h))
     ]
 
+    # ── Evidence guard: finance-leader triggers need finance-leader text ──
+    # The LLM provably fabricates #NewCFO on non-CFO events despite the
+    # prompt rules (e.g. "+5 applied as highest-value single trigger for
+    # material definitive agreement events", CNL 2026-07-21). The research
+    # probes never return CFO facts, so the only legitimate evidence source
+    # for these two hashtags is the event itself: its type, title, or
+    # description must state the role, or the tag is stripped.
+    _evid_text = ' '.join([(event.get('title') or ''),
+                           (event.get('description') or '')]).lower()
+    if '#NewCFO' in hashtags and not (
+            event.get('event_type') == 'cfo_hire'
+            or any(p in _evid_text for p in _CFO_EQUIV_PATTERNS)):
+        hashtags.remove('#NewCFO')
+    if '#NewController' in hashtags and not any(
+            p in _evid_text for p in _CONTROLLER_PATTERNS):
+        hashtags.remove('#NewController')
+
     # ── DETERMINISTIC scoring + grade (overrides LLM math) ──────────────
     if llm_says_unable:
         grade = 'Unable to Grade'
@@ -1733,6 +1777,18 @@ def enrich_events(
         title = (event.get('title') or '')[:80]
         etype = event.get('event_type', '')
         log.info(f'[{idx}/{len(events)}] {title}')
+
+        # ── 0. Board-only gate (free, before any LLM/search spend) ────────
+        # Pure board-of-directors changes are not triggers — tombstone.
+        if _board_only_event(event):
+            log.info('  🚫 Board-of-directors change only (no finance role) '
+                     '— soft-deleting.')
+            if not dry_run:
+                _soft_delete(client, eid,
+                             'board_change_only: director/board appointment, '
+                             'no finance-leader role')
+            ok += 1
+            continue
 
         # ── 1. Extract companies + roles ──────────────────────────────────
         companies = extract_event_companies(event)
@@ -2068,6 +2124,17 @@ def regrade_only_events(limit: int = None, dry_run: bool = False):
         eid   = event['id']
         title = (event.get('title') or '')[:80]
         log.info(f'[{idx}/{len(events)}] {title}')
+
+        # Board-only gate — same rule as the enrich path
+        if _board_only_event(event):
+            log.info('  🚫 Board-of-directors change only (no finance role) '
+                     '— soft-deleting.')
+            if not dry_run:
+                _soft_delete(client, eid,
+                             'board_change_only: director/board appointment, '
+                             'no finance-leader role')
+            deleted += 1
+            continue
 
         # Unwrap companies_data
         cd = event.get('companies_data')
