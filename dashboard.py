@@ -1437,16 +1437,25 @@ def load_account_dispositions():
 
 
 def set_account_disposition(company_name: str, status):
-    """Upsert (or clear, when status falsy/'—') a company's disposition."""
+    """Upsert (or clear, when status falsy/'—') a company's disposition.
+
+    Runs inside selectbox on_change callbacks, where st.error output can be
+    silently dropped — so the outcome (success OR failure) is stashed in
+    session_state and rendered as a banner on the next rerun instead."""
     client = get_supabase_client()
     if not client or not company_name:
+        st.session_state['_dispo_receipt'] = (
+            "❌ Account status NOT saved — no database connection")
         return
     key = _account_key(company_name)
     if not key:
+        st.session_state['_dispo_receipt'] = (
+            f"❌ Account status NOT saved — couldn't derive a key from '{company_name}'")
         return
     try:
         if not status or status == '—':
             client.table('account_dispositions').delete().eq('company_key', key).execute()
+            st.session_state['_dispo_receipt'] = f"✅ Cleared account status for {company_name}"
         else:
             client.table('account_dispositions').upsert({
                 'company_key': key,
@@ -1454,8 +1463,10 @@ def set_account_disposition(company_name: str, status):
                 'status': status,
                 'updated_at': datetime.now().isoformat(),
             }, on_conflict='company_key').execute()
+            st.session_state['_dispo_receipt'] = f"✅ Saved: {company_name} → {status}"
     except Exception as e:
-        st.error(f"Couldn't save account disposition: {e}")
+        st.session_state['_dispo_receipt'] = (
+            f"❌ Account status NOT saved — {type(e).__name__}: {str(e)[:300]}")
 
 
 def _on_account_dispo_change(widget_key: str, company_name: str):
@@ -1737,6 +1748,12 @@ def main():
             key="flt_search",
         )
         st.markdown('</div>', unsafe_allow_html=True)
+
+    # Receipt from the last account-status change (set in the on_change
+    # callback, where direct st.error/success output can be swallowed)
+    _receipt = st.session_state.pop('_dispo_receipt', None)
+    if _receipt:
+        (st.success if _receipt.startswith('✅') else st.error)(_receipt)
 
     # Load all events
     df = load_events(days=days, search=search if search else None)
