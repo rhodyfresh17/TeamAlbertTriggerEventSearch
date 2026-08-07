@@ -12,7 +12,10 @@ env:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Normal runs take ~7 min; slow SEC/Google days spike past 10 (the
+    # 2026-08-06 17:44Z run was killed by the old 10-min cap → "All jobs
+    # were cancelled" email). 15 gives hang-protection with real headroom.
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4.2.2
