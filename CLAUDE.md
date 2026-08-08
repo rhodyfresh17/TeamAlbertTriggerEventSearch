@@ -490,6 +490,19 @@ doesn't re-search. Roughly 30-50% reduction in actual search calls when
 companies recur across events. Cache key = `(company_name + industry_hint).lower()`,
 stored in `trigger_events.db` → `firmographic_cache` table.
 
+**ZoomInfo-style aggregator probe (2026-08-06)**: when the general search
+leaves hq/revenue/size unknown, `enrich_one_company` fires ONE follow-up
+ladder search with hint `'zoominfo'` and re-extracts from the combined
+results (per-field merge, gaps only — never overwrites). Search-engine
+SNIPPETS of public aggregator profiles carry the missing fields free of
+charge: zoominfo.com `/pic/` pages → street address + headcount;
+rocketreach.co → "$X million in revenue and N employees ... City, State".
+No ZoomInfo login, no page scraping — reads only what engines publish in
+results. Context: ZI's official MCP server + Claude connector require a
+PAID ZI subscription (A.J.'s NetSuite seat is Oracle's — can't be used);
+ZoomInfo Lite free tier = 10 credits/month, manual-only, and its
+Community Edition upgrade harvests contact data (declined).
+
 **Auto-fallback chain (expanded 2026-07-21)**: Firecrawl → 2.5s retry →
 **SearXNG** (`SEARXNG_URL`, default `http://localhost:8888` — the Hermes
 fleet's metasearch instance; free, quota-less, 88 rotating engines) →

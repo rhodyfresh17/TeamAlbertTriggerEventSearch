@@ -1061,7 +1061,11 @@ fields rather than guessing.
 
 For REVENUE, be especially careful — only extract if a source explicitly states \
 revenue (Crunchbase, Bloomberg, IPO filings, press releases, official company \
-statements). NEVER guess from employee count or industry alone. If revenue \
+statements). B2B data-aggregator profile snippets (zoominfo.com, \
+rocketreach.co, growjo.com, leadiq.com) ARE valid sources for revenue, \
+employee count, and HQ address — e.g. "\\$28.2 million in revenue and 191 \
+employees ... located in Birmingham, Alabama" — cite the aggregator URL as \
+revenue_source. NEVER guess from employee count or industry alone. If revenue \
 is not explicitly stated, return null.
 
 Return ONLY a JSON object (no markdown, no explanation) with these keys \
@@ -1151,6 +1155,39 @@ def enrich_one_company(company_name: str, industry_hint: str = '',
         results_text='\n'.join(lines).strip()
     )
     data = llm_json(prompt, max_tokens=550)
+
+    # ── ZoomInfo-style aggregator probe (2026-08-06) ─────────────────────
+    # When the general search left HQ / revenue / size unknown, run ONE
+    # targeted follow-up. Search-engine SNIPPETS of public aggregator
+    # profiles (zoominfo.com, rocketreach.co, growjo, etc.) carry exactly
+    # these fields — e.g. ZoomInfo's employee-directory page snippet gives
+    # the full street address + headcount, RocketReach's gives "$28.2
+    # million in revenue and 191 employees ... Birmingham, Alabama". Free
+    # (rides the normal ladder + cache), no ZoomInfo login, and reads only
+    # what the engines publish in their results.
+    if data is not None and not (data.get('hq') and data.get('revenue')
+                                 and data.get('size')):
+        probe = tavily_search(company_name, 'zoominfo')
+        if probe.get('results'):
+            plines = [
+                f"- {r.get('title','')}\n"
+                f"  {r.get('url','')}\n"
+                f"  {(r.get('content','') or '')[:320]}\n"
+                for r in probe['results'][:4]
+            ]
+            prompt2 = FIRMOGRAPHIC_PROMPT.format(
+                company_name=company_name,
+                industry_hint=industry_hint or 'unknown',
+                article_context=(article_context or '(not provided)').strip(),
+                results_text=('\n'.join(lines + plines)).strip(),
+            )
+            data2 = llm_json(prompt2, max_tokens=550)
+            if data2:
+                # Per-field merge: second pass fills gaps, never overwrites
+                # a value the first pass already established.
+                for k, v in data2.items():
+                    if v and not data.get(k):
+                        data[k] = v
 
     # Only keep revenue_source if revenue itself was extracted (no point
     # citing a URL for a null revenue)
