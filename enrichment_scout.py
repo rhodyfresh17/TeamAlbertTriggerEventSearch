@@ -1608,6 +1608,35 @@ def probe_aum(company_name: str) -> str:
         return ''
 
 
+def probe_complexity(company_name: str) -> str:
+    """Search for COMPLEXITY evidence: multiple locations, subsidiaries/
+    brands, multi-country operations, franchising. These are the +2 rubric
+    signals (#Locations #Entities #Global #Franchisor/#Franchisee) that
+    separate Grade B (5-7) from Grade A (8+) — and before this probe
+    existed they were almost never evidenced (audit 2026-08-08: #Locations
+    on 2 of 440 events, #Entities on 0). Aggregator snippets leak exactly
+    this ("has locations in the United States, Canada, ..."), as do the
+    companies' own locations/franchise pages. Returns '' if nothing."""
+    try:
+        res = tavily_search(company_name,
+                            'locations offices subsidiaries franchise')
+        hits = (res or {}).get('results') or []
+        if not hits:
+            return ''
+        lines = [f'COMPLEXITY SEARCH ("{company_name} locations/'
+                 f'subsidiaries/franchise") — evidence for #Locations, '
+                 f'#Entities, #Global, #Franchisor/#Franchisee:']
+        for r in hits[:4]:
+            lines.append(f"- {r.get('title','')} | {r.get('url','')}")
+            snippet = (r.get('content') or '')[:220]
+            if snippet:
+                lines.append(f"  {snippet}")
+        return '\n'.join(lines)
+    except Exception as e:
+        log.debug(f'  Complexity probe failed: {e}')
+        return ''
+
+
 def probe_nonprofit_990(company_name: str) -> str:
     """ProPublica Nonprofit Explorer (free, no key): find the org, pull its
     latest Form 990 financials. This is the rubric's required NPO source —
@@ -1685,6 +1714,17 @@ def gather_extra_evidence(event: dict, companies_data: list,
     # Asset managers → AUM/AUA for #AssetManagerScale
     if zi in ASSET_MANAGER_SUBINDUSTRIES:
         b = probe_aum(name)
+        if b:
+            blocks.append(b)
+
+    # Complexity probe — only for events that can actually reach Grade A:
+    # a high-intent trigger type on a company whose fit isn't a hard fail.
+    # (A = 8+ points; the +2 complexity signals are the usual gap between
+    # a 5-point trigger and an 8-point A. One extra ladder search, cached.)
+    if ((event.get('event_type') or '') in
+            ('cfo_hire', 'merger_acquisition', 'funding')
+            and fit.get('verdict') != 'fail'):
+        b = probe_complexity(name)
         if b:
             blocks.append(b)
 
