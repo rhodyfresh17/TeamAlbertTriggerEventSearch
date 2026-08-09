@@ -1423,6 +1423,105 @@ def _account_key(name) -> str:
     return s.strip(' .,')
 
 
+@st.cache_data(ttl=900)
+def load_scorecard_events():
+    """Last 14 days of pipeline activity (visible AND tombstoned) for the
+    Weekly Scorecard — one cheap query, cached 15 min."""
+    client = get_supabase_client()
+    if not client:
+        return []
+    since = (datetime.utcnow() - timedelta(days=14)).isoformat()
+    try:
+        rows, off = [], 0
+        while True:
+            q = client.table('events').select(
+                'discovered_at,blocked_at,blocked_reason,grade,source_url'
+            ).gte('discovered_at', since).range(off, off + 999).execute()
+            rows += q.data or []
+            if len(q.data or []) < 1000:
+                break
+            off += 1000
+        return rows
+    except Exception:
+        return []
+
+
+def _scorecard_src(url):
+    """Bucket a source_url into a readable source label."""
+    from urllib.parse import urlparse
+    h = urlparse(url or '').netloc.replace('www.', '')
+    if 'sec.gov' in h:
+        return 'SEC EDGAR'
+    if 'adzuna' in h:
+        return 'Adzuna'
+    return h[:28] or 'other'
+
+
+def render_weekly_scorecard(df, acct_dispos):
+    """Trailing 7 days vs the 7 before: what came in, what got removed and
+    why, what the team picked up. Turns rep behavior into tuning signal."""
+    rows = load_scorecard_events()
+    now = datetime.utcnow()
+    wk_ago, wk2_ago = now - timedelta(days=7), now - timedelta(days=14)
+
+    def _ts(v):
+        try:
+            return datetime.fromisoformat((v or '').replace('Z', '')[:26])
+        except Exception:
+            return None
+
+    this_wk = [r for r in rows if (_ts(r['discovered_at']) or wk2_ago) >= wk_ago]
+    last_wk = [r for r in rows
+               if wk2_ago <= (_ts(r['discovered_at']) or now) < wk_ago]
+    tomb_wk = [r for r in rows
+               if r.get('blocked_at') and (_ts(r['blocked_at']) or wk2_ago) >= wk_ago]
+
+    with st.expander("📊 Weekly Scorecard — pipeline health & team activity",
+                     expanded=False):
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("New events (7d)", len(this_wk),
+                  delta=len(this_wk) - len(last_wk))
+        c2.metric("Auto-removed as noise (7d)", len(tomb_wk))
+        picked = [d for d in (acct_dispos or {}).values()
+                  if d.get('status') == 'Picked Up'
+                  and (_ts(d.get('updated_at')) or wk2_ago) >= wk_ago]
+        c3.metric("Accounts picked up (7d)", len(picked))
+        decided = [d for d in (acct_dispos or {}).values()
+                   if (_ts(d.get('updated_at')) or wk2_ago) >= wk_ago]
+        c4.metric("Accounts dispositioned (7d)", len(decided))
+
+        colA, colB = st.columns(2)
+        with colA:
+            st.caption("New events by source (7d)")
+            src_c = {}
+            for r in this_wk:
+                s = _scorecard_src(r.get('source_url'))
+                src_c[s] = src_c.get(s, 0) + 1
+            for s, n in sorted(src_c.items(), key=lambda kv: -kv[1])[:8]:
+                st.markdown(f"- **{s}** — {n}")
+            if not src_c:
+                st.markdown("*none yet*")
+        with colB:
+            st.caption("Noise removed, by reason (7d)")
+            reason_c = {}
+            for r in tomb_wk:
+                key = (r.get('blocked_reason') or 'other').split(':')[0]
+                reason_c[key] = reason_c.get(key, 0) + 1
+            LABELS = {'fit_gate': 'Failed fit gate (territory/revenue/vertical)',
+                      'industry': 'Blocked industry',
+                      'board_change_only': 'Board-of-directors change only',
+                      'dismissed by rep (NOT RELEVANT)': 'Dismissed by a rep'}
+            for k, n in sorted(reason_c.items(), key=lambda kv: -kv[1])[:6]:
+                st.markdown(f"- **{LABELS.get(k, k)}** — {n}")
+            if not reason_c:
+                st.markdown("*none this week*")
+
+        st.caption(
+            "Reading this: 'New events' is raw intake; 'noise removed' is the "
+            "filter doing its job (high is GOOD); pickups are the ground truth "
+            "— if a source never produces a pickup, tell Claude to tune it.")
+
+
 def load_account_dispositions():
     """Return {company_key: {status, company_name, updated_at}} or None when
     the table hasn't been migrated yet."""
@@ -2007,6 +2106,12 @@ def main():
                         render_event_card(row, event_config)
 
     st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── Weekly Scorecard ───────────────────────────────────────────────────
+    try:
+        render_weekly_scorecard(df, acct_dispos)
+    except Exception as _sc_err:
+        st.caption(f"(scorecard unavailable: {_sc_err})")
 
     # ── Dispositioned Accounts (decided — hidden from active views) ────────
     if acct_dispos:
