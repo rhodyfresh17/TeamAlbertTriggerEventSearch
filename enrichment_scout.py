@@ -1128,6 +1128,65 @@ US/Canada only unless clearly elsewhere — or null",
 }}'''
 
 
+_US_STATE_NAMES = {
+    'alabama': 'AL', 'alaska': 'AK', 'arizona': 'AZ', 'arkansas': 'AR',
+    'california': 'CA', 'colorado': 'CO', 'connecticut': 'CT',
+    'delaware': 'DE', 'florida': 'FL', 'georgia': 'GA', 'hawaii': 'HI',
+    'idaho': 'ID', 'illinois': 'IL', 'indiana': 'IN', 'iowa': 'IA',
+    'kansas': 'KS', 'kentucky': 'KY', 'louisiana': 'LA', 'maine': 'ME',
+    'maryland': 'MD', 'massachusetts': 'MA', 'michigan': 'MI',
+    'minnesota': 'MN', 'mississippi': 'MS', 'missouri': 'MO',
+    'montana': 'MT', 'nebraska': 'NE', 'nevada': 'NV',
+    'new hampshire': 'NH', 'new jersey': 'NJ', 'new mexico': 'NM',
+    'new york': 'NY', 'north carolina': 'NC', 'north dakota': 'ND',
+    'ohio': 'OH', 'oklahoma': 'OK', 'oregon': 'OR', 'pennsylvania': 'PA',
+    'rhode island': 'RI', 'south carolina': 'SC', 'south dakota': 'SD',
+    'tennessee': 'TN', 'texas': 'TX', 'utah': 'UT', 'vermont': 'VT',
+    'virginia': 'VA', 'washington': 'WA', 'west virginia': 'WV',
+    'wisconsin': 'WI', 'wyoming': 'WY', 'district of columbia': 'DC',
+    'ontario': 'ON', 'quebec': 'QC', 'new brunswick': 'NB',
+    'nova scotia': 'NS', 'prince edward island': 'PE',
+    'newfoundland and labrador': 'NL', 'newfoundland': 'NL',
+}
+
+
+def _parse_hq_size_from_snippets(results: list) -> dict:
+    """Deterministically parse HQ city/state and employee count from
+    aggregator search snippets — no LLM involved, so no extraction misses.
+
+    Handles the two dominant phrasings:
+      ZoomInfo /pic/:  "... is located in 850 X Pkwy Ste 200, Birmingham,
+                        Alabama, 35209, United States and has 178 employees"
+      RocketReach:     "... located in Birmingham, Alabama with $28.2
+                        million in revenue and 191 employees"
+    Returns {'hq': 'City, ST' | None, 'size': '178' | '201-500' | None}.
+    """
+    import re as _re
+    hq = size = None
+    state_alt = '|'.join(sorted(_US_STATE_NAMES, key=len, reverse=True))
+    loc_re = _re.compile(
+        r'located in (?:[^,]{1,60}, )*?([A-Z][A-Za-z .\'-]{1,30}), '
+        r'(' + state_alt + r')\b', _re.I)
+    emp_re = _re.compile(r'(?:has|and|with) ([\d,]+(?:-[\d,]+)?)\+? employees',
+                         _re.I)
+    for r in results or []:
+        text = (r.get('content') or '')
+        if not hq:
+            m = loc_re.search(text)
+            if m:
+                city = m.group(1).strip()
+                code = _US_STATE_NAMES.get(m.group(2).lower())
+                if code and not city.isdigit():
+                    hq = f'{city}, {code}'
+        if not size:
+            m = emp_re.search(text)
+            if m:
+                size = m.group(1).replace(',', '')
+        if hq and size:
+            break
+    return {'hq': hq, 'size': size}
+
+
 def enrich_one_company(company_name: str, industry_hint: str = '',
                        article_context: str = '') -> dict:
     empty = {'url': None, 'industry': None, 'zi_subindustry': None,
@@ -1165,10 +1224,12 @@ def enrich_one_company(company_name: str, industry_hint: str = '',
     # million in revenue and 191 employees ... Birmingham, Alabama". Free
     # (rides the normal ladder + cache), no ZoomInfo login, and reads only
     # what the engines publish in their results.
+    _probe_results = []
     if data is not None and not (data.get('hq') and data.get('revenue')
                                  and data.get('size')):
         probe = tavily_search(company_name, 'zoominfo')
         if probe.get('results'):
+            _probe_results = probe['results']
             plines = [
                 f"- {r.get('title','')}\n"
                 f"  {r.get('url','')}\n"
@@ -1188,6 +1249,17 @@ def enrich_one_company(company_name: str, industry_hint: str = '',
                 for k, v in data2.items():
                     if v and not data.get(k):
                         data[k] = v
+
+    # Deterministic snippet parse — regex beats LLM extraction for the
+    # rigid aggregator phrasings ("located in City, State ... N employees").
+    # Fill-if-missing only; runs over BOTH search passes' results.
+    if data is not None and (not data.get('hq') or not data.get('size')):
+        parsed = _parse_hq_size_from_snippets(
+            list(search.get('results') or []) + _probe_results)
+        if parsed['hq'] and not data.get('hq'):
+            data['hq'] = parsed['hq']
+        if parsed['size'] and not data.get('size'):
+            data['size'] = parsed['size']
 
     # Only keep revenue_source if revenue itself was extracted (no point
     # citing a URL for a null revenue)
