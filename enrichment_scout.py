@@ -1940,6 +1940,7 @@ def enrich_events(
     dry_run: bool = False,
     missing_fit_only: bool = False,
     reverify_unverified: bool = False,
+    complexity_sweep: bool = False,
 ):
     check_required_keys()
     client  = get_supabase()
@@ -1976,6 +1977,16 @@ def enrich_events(
         # still-unknown stay flagged. Run when the search backend is healthy
         # (e.g. after burst throttling subsided).
         query = query.eq('fit->>verdict', 'unverified')
+    if complexity_sweep and col_ok.get('fit'):
+        # A-hunt mode: fit-CONFIRMED Grade-B events with a high-intent
+        # trigger type — the only population the complexity probe
+        # (#Locations/#Entities/#Global/#Franchisor, +2 each) can promote
+        # to Grade A. Firmographic searches ride the 30-day cache, so the
+        # marginal cost is ~1 complexity search + regrade per event.
+        query = (query.eq('grade', 'B')
+                      .eq('fit->>verdict', 'pass')
+                      .in_('event_type',
+                           ['cfo_hire', 'merger_acquisition', 'funding']))
     # NEVER process tombstoned events — they're already decided (industry/
     # fit-gate blocked or rep-dismissed). Re-enriching them is pure waste
     # (~15s each) and re-grades rows the dashboard will never show.
@@ -2569,6 +2580,10 @@ if __name__ == '__main__':
                    help='With --re-enrich: only re-process events whose fit '
                         'is unverified (the ⚠️ VERIFY FIT population) — '
                         'fresh research to confirm or refute fit')
+    p.add_argument('--complexity-sweep', action='store_true',
+                   help='With --re-enrich: only fit-confirmed Grade-B events '
+                        'with a high-intent trigger — runs the complexity '
+                        'probe so eligible B accounts can reach Grade A')
     p.add_argument('--dry-run',       action='store_true',
                    help='Preview without writing to Supabase')
     args = p.parse_args()
@@ -2584,4 +2599,5 @@ if __name__ == '__main__':
             dry_run=args.dry_run,
             missing_fit_only=args.missing_fit_only,
             reverify_unverified=args.reverify_unverified,
+            complexity_sweep=args.complexity_sweep,
         )
