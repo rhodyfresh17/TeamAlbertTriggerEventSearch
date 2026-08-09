@@ -1258,16 +1258,29 @@ adzuna:
   max_days_old: 14
   # Max results per API call (50 = max for free tier)
   results_per_page: 50
-  # Job titles to search — Adzuna uses OR-semantics across these
+  # API query terms (one title_only call each; sort_by=date). US runs all
+  # daily, CA alternates one per day → 3 calls/day ≈ 90/month free tier.
+  # (The old what_or strategy matched loose words in the DESCRIPTION and
+  # surfaced noise; changed 2026-08-09.)
+  title_queries:
+    - controller
+    - cfo
+  # In-code strict title filter — a posting must contain one of these.
+  # Recruiter/staffing-agency postings and non-finance "controller" titles
+  # (air traffic, pest control, machine ops) are dropped in code.
   titles:
     - CFO
     - Chief Financial Officer
     - VP Finance
     - Vice President Finance
+    - VP of Finance
     - Controller
+    - Corporate Controller
     - Finance Director
     - Director of Finance
     - Head of Finance
+    - Chief Accounting Officer
+    - VP Accounting
 
 job_search:
   enabled: true

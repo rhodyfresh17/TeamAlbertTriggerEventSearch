@@ -47,9 +47,33 @@ CA_TERRITORY_PROVINCES: Set[str] = {
 
 DEFAULT_TITLES: List[str] = [
     'CFO', 'Chief Financial Officer',
-    'VP Finance', 'Vice President Finance',
-    'Controller', 'Finance Director', 'Director of Finance',
+    'VP Finance', 'Vice President Finance', 'VP of Finance',
+    'Controller', 'Corporate Controller',
+    'Finance Director', 'Director of Finance',
     'Head of Finance',
+    'Chief Accounting Officer', 'VP Accounting',
+]
+
+# "Controller" is a heavily-overloaded job title — these are NOT finance
+# roles and must not become trigger events.
+NON_FINANCE_CONTROLLER_TITLES: List[str] = [
+    'air traffic', 'document controller', 'quality controller',
+    'inventory controller', 'stock controller', 'traffic controller',
+    'controls engineer', 'controller technician', 'motion controller',
+    'production controller', 'material controller', 'credit controller',
+    'pasteuriz', 'machine controller', 'process controller',
+]
+
+# Staffing/recruiting agencies post on behalf of ANONYMOUS end-clients —
+# there is no account to work, so the posting is noise. Blacklist by
+# company display-name substring (case-insensitive).
+RECRUITER_NAME_PATTERNS: List[str] = [
+    'robert half', 'vaco', 'kforce', 'randstad', 'aston carter',
+    'michael page', 'lhh', 'addison group', 'beacon hill', 'jobot',
+    'cybercoders', 'creative financial staffing', 'korn ferry',
+    'heidrick', 'spencer stuart', 'staffing', 'recruit', 'headhunt',
+    'executive search', 'search partners', 'search group', 'talent',
+    'personnel', 'workforce', 'employment', 'placement',
 ]
 
 
@@ -80,6 +104,12 @@ class AdzunaScraper(BaseScraper):
         # = 60 calls/month for US+CA = fits 100 free tier).
         # Set to null/empty to run every cycle.
         self.run_hours: Optional[Iterable[int]] = adz_cfg.get('run_hours', [12])
+
+        # title_only query terms — one API call each (see scrape() for the
+        # call-budget math). 'controller' also stems to Corporate Controller;
+        # 'cfo' catches CFO / Chief Financial Officer postings.
+        self.title_queries: List[str] = adz_cfg.get('title_queries',
+                                                    ['controller', 'cfo'])
 
         # Override territory sets from config if provided
         self.us_states = set(adz_cfg.get('us_states', US_TERRITORY_STATES))
@@ -115,15 +145,25 @@ class AdzunaScraper(BaseScraper):
                       f'{sorted(self.run_hours)}')
                 return []
 
-        # Build the "what_or" query: CFO OR Chief Financial Officer OR ...
-        # Adzuna uses what_or for OR-semantics across titles
-        what_or = ' '.join(f'"{t}"' for t in self.titles)
+        # Query strategy (changed 2026-08-09): what_or matched ANY loose
+        # word across title+description — with sort_by=date the page filled
+        # with non-finance noise and real postings never surfaced. Now we
+        # run one title_only query per role family; Adzuna stems (matching
+        # "controls"/"control"), and the strict in-code title check drops
+        # the stemmed noise.
+        # Budget: US runs all queries daily; CA alternates one query/day.
+        # Defaults = 3 calls/day ≈ 90/month — inside the ~100 free tier.
+        day_idx = datetime.now(timezone.utc).timetuple().tm_yday
 
         all_events: List[TriggerEvent] = []
         for country in self.countries:
+            queries = (self.title_queries if country == 'us'
+                       else [self.title_queries[day_idx % len(self.title_queries)]])
             label = f'Adzuna ({country.upper()})'
             try:
-                events = self._scrape_country(country, what_or)
+                events = []
+                for q in queries:
+                    events.extend(self._scrape_country(country, q))
                 all_events.extend(events)
                 self.source_statuses.append({
                     'source_name':   label,
@@ -148,13 +188,17 @@ class AdzunaScraper(BaseScraper):
 
     # ── Per-country scrape (1 API call per country) ───────────────────────
 
-    def _scrape_country(self, country: str, what_or: str) -> List[TriggerEvent]:
+    def _scrape_country(self, country: str, title_q: str) -> List[TriggerEvent]:
         params = {
             'app_id':           self.app_id,
             'app_key':          self.app_key,
             'results_per_page': self.results_per_page,
-            'what_or':          what_or,
+            'title_only':       title_q,
             'max_days_old':     self.max_days_old,
+            # Newest first — the default (relevance) resurfaces the same
+            # "best-matching" postings every day and NEW postings never
+            # make the one page we fetch. A trigger tool wants recency.
+            'sort_by':          'date',
             'content-type':     'application/json',
         }
         url = self.BASE_URL.format(country=country)
@@ -194,10 +238,13 @@ class AdzunaScraper(BaseScraper):
             return None
 
         # 2. Title sanity check — Adzuna's what_or can be loose; verify
-        #    the returned title actually mentions a target role
+        #    the returned title actually mentions a target role, and is not
+        #    an overloaded non-finance "controller" (air traffic, QA, ...)
         title = (job.get('title') or '').strip()
         title_lower = title.lower()
         if not any(t.lower() in title_lower for t in self.titles):
+            return None
+        if any(p in title_lower for p in NON_FINANCE_CONTROLLER_TITLES):
             return None
 
         # 3. URL is the dedup + click target
@@ -207,6 +254,13 @@ class AdzunaScraper(BaseScraper):
 
         # 4. Industry exclusion — drop mining/steel/oil-gas/etc. jobs
         company_name = ((job.get('company') or {}).get('display_name') or '').strip()
+
+        # 4b. No company = no account to work; recruiter posting = the real
+        #     employer is anonymous. Both are dead ends for a sales tool.
+        if not company_name:
+            return None
+        if any(p in company_name.lower() for p in RECRUITER_NAME_PATTERNS):
+            return None
         description  = (job.get('description') or '')[:600]
         full_text = f'{title} {company_name} {description}'
         _matches_target, matches_excluded = self.matches_industry(full_text)
