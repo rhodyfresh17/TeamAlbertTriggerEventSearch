@@ -263,6 +263,16 @@ EFTS prefetch errors); (2) `_board_only_event()` gate tombstones
 board-only executive_hire events in both enrich + regrade paths
 (`board_change_only` reason); (3) prompt rule.
 
+**Complexity probe (2026-08-09):** `probe_complexity()` — one cached
+ladder search (locations/subsidiaries/franchise) for high-intent event
+types with non-failed fit. Feeds #Locations/#Entities/#Global/#Franchisor
+evidence into grading — the +2 signals that bridge B (5-7) to A (8+);
+before it, #Locations appeared on 2/440 events and #Entities on 0.
+`_parse_hq_size_from_snippets()` deterministically regexes HQ + headcount
+from aggregator snippet phrasings (fill-if-missing, both search passes).
+Dashboard has a "📊 Weekly Scorecard" expander (intake by source, noise
+removed by reason, pickups 7d-vs-prior) — read it before tuning sources.
+
 FIT comes BEFORE grading: `apply_fit_gates` (territory × revenue × ZI
 vertical) soft-deletes confirmed-out events, so grades only rank workable
 accounts. Hashtag definitions are STRICT — history of LLM stuffing. Don't
@@ -283,7 +293,19 @@ loosen without A.J.
 - **`base.py`** — `BaseScraper` parent class. **`extract_company_name()`** (40+ verb patterns, case-insensitive) and **`matches_industry()`** live here. Both used heavily downstream.
 - **`rss_scraper.py`** — handles all RSS feeds in `config.sources.rss_feeds`
 - **`sec_scraper.py`** — SEC EDGAR EFTS search. Item 5.02 (officer changes), 2.01 (M&A completion), 1.01 (material agreements). **Pre-fetches CFO-related accession numbers in one extra EFTS call, paginated to 5 pages.**
-- **`adzuna_scraper.py`** — Adzuna jobs API. Throttled to noon UTC only to stay under free tier (~60 calls/month).
+- **`adzuna_scraper.py`** — Adzuna jobs API. Throttled to noon UTC; since
+  2026-08-09 runs `title_only` queries ('controller','cfo') with
+  sort_by=date (~3 calls/day ≈ 90/mo) — the old what_or matched loose
+  words in descriptions and never surfaced new postings. In-code strict
+  title filter + non-finance-"controller" exclusions (air traffic, pest
+  control...) + staffing-agency blacklist + no-company-name drop.
+- **`sec_scraper.py :: FormDScraper`** — SEC Form D private capital raises
+  (added 2026-08-09). EFTS forms=D + server-side territory filter via
+  locationCodes; pooled-fund vehicles dropped via exemption items 3C/3C.1,
+  name patterns, SIC 6722/6726/6770; offering amount + industry group
+  parsed from primary XML; HTTP budget capped (newest-first,
+  `form_d.max_lookups`/run). Catches private in-territory companies that
+  never hit the news wires → event_type=funding.
 - **`job_scraper.py`** — Google Jobs (other boards disabled — Indeed/ZipRecruiter/SimplyHired/Ladders/CFO.com all bot-blocked)
 - **`news_scraper.py`** — Google News
 - **`bing_scraper.py`** — Bing News (disabled — needs paid API key)
