@@ -26,7 +26,7 @@ from .database import DatabaseManager
 from .alerts import AlertManager
 from .scrapers import (
     RSSScraper, GoogleNewsScraper, JobScraper, BingNewsScraper,
-    FinSMEsScraper, SECScraper, AdzunaScraper,
+    FinSMEsScraper, SECScraper, FormDScraper, AdzunaScraper,
 )
 from .enrichment import CompanyEnricher
 
@@ -60,6 +60,7 @@ class TriggerEventMonitor:
             BingNewsScraper(self.config),
             FinSMEsScraper(self.config),
             SECScraper(self.config),
+            FormDScraper(self.config),
             AdzunaScraper(self.config),
         ]
 

@@ -1211,6 +1211,16 @@ sec_filings:
   # Update this to YOUR contact info to be a good API citizen.
   user_agent: "TeamAlbert Sales Intelligence (sales-leads@teamalbert.local)"
 
+# ── SEC Form D — private capital raises (Reg D exempt offerings) ────────
+# Private companies raising money that never hit the news wires. EFTS
+# filters to territory server-side; pooled-fund vehicles (hedge/PE/VC
+# funds) are excluded via exemption items 3C/3C.1 + name/SIC patterns.
+form_d:
+  enabled: true
+  lookback_days: 3     # scraper runs every ~4h; URL dedup handles overlap
+  max_results: 300     # EFTS pages of 100
+  fetch_details: true  # pull offering amount + industry group from the XML
+
 # ── Adzuna job board API ───────────────────────────────────────────────
 # Structured API source for finance leadership job postings — replaces the
 # 5 broken HTML scrapers (Indeed/ZipRecruiter/SimplyHired/Ladders/CFO.com).

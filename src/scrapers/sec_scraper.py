@@ -499,3 +499,244 @@ class SECScraper(BaseScraper):
     def _lookup_filer_state(self, cik: str) -> str:
         """Backward-compatible wrapper around _lookup_filer_info."""
         return self._lookup_filer_info(cik).get('state', '')
+
+
+class FormDScraper(SECScraper):
+    """SEC Form D — private exempt-offering filings (Reg D capital raises).
+
+    Why: private LMM/MM companies raising money are prime NetSuite funding
+    triggers, but most never issue a press release — Form D is the only
+    public footprint. EFTS filters server-side to territory states via
+    locationCodes and exposes exemption items, letting us drop pooled
+    investment-fund vehicles (hedge/PE/VC funds, items 3C/3C.1) before any
+    lookup. Name patterns + SIC catch the stragglers.
+    """
+
+    FUND_VEHICLE_ITEMS = {'3C', '3C.1'}
+    # lower-case substring match against the filer name
+    FUND_NAME_PATTERNS = (
+        ' fund', 'fund l', 'fund,', 'fund i', 'fund v', 'fund x',
+        'partners lp', 'partners, lp', 'partners l.p', 'holdings spv',
+        ' spv', 'capital i', 'investments l', 'a series of', 'series 0',
+        'lending co l', 'real assets', 'acquisition co l', 'feeder l',
+        'co-invest', 'coinvest',
+    )
+    # Investment offices / trusts / blank-check SPACs — vehicles, not
+    # operating companies (BLOCKED_SIC_CODES doesn't cover these because
+    # Financial Services IS a target vertical for 8-K events).
+    FUND_SIC_CODES = {'6722', '6726', '6770'}
+
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__(config)
+        fd_cfg = config.get('form_d', {}) or {}
+        self.enabled = fd_cfg.get('enabled', True)
+        # Short lookback: the scraper runs every ~4h and URL-dedup drops
+        # repeats, so 3 days gives ample overlap without page-limit risk.
+        self.lookback_days = int(fd_cfg.get('lookback_days', 3))
+        self.max_results = int(fd_cfg.get('max_results', 300))
+        self.fetch_details = bool(fd_cfg.get('fetch_details', True))
+        # HTTP budget: each surviving candidate costs 1-3 SEC requests
+        # (filer info + index.json + XML). Cap per run so the whole scrape
+        # stays inside the GHA job window; newest filings get priority and
+        # the 4-hourly cadence + URL dedup pick up the tail next cycle.
+        self.max_lookups = int(fd_cfg.get('max_lookups', 50))
+        # SEC allows 10 req/s with a proper User-Agent — the polite-crawl
+        # delay used for news sites would take minutes here.
+        self.sec_sleep = float(fd_cfg.get('request_sleep', 0.25))
+
+    def scrape(self) -> List[TriggerEvent]:
+        self.source_statuses = []
+        if not self.enabled:
+            return []
+
+        label = 'SEC Form D (private raises)'
+        events: List[TriggerEvent] = []
+        skipped_funds = 0
+        try:
+            startdt = (date.today() - timedelta(days=self.lookback_days)).isoformat()
+            enddt = date.today().isoformat()
+            loc = ','.join(sorted(self.territory_codes))
+
+            # Phase 1 — collect hits and apply the FREE filters (no HTTP)
+            candidates = []
+            for page in range(max(1, self.max_results // 100)):
+                params = {
+                    'q': '', 'forms': 'D', 'dateRange': 'custom',
+                    'startdt': startdt, 'enddt': enddt,
+                    'locationCodes': loc, 'from': page * 100,
+                }
+                resp = self.session.get(self.EFTS_URL, params=params,
+                                        timeout=self.timeout)
+                resp.raise_for_status()
+                hits = resp.json().get('hits', {}).get('hits', []) or []
+                if not hits:
+                    break
+                for hit in hits:
+                    cand, is_fund = self._formd_cheap_filter(hit)
+                    if is_fund:
+                        skipped_funds += 1
+                    elif cand:
+                        candidates.append(cand)
+                time.sleep(self.sec_sleep)
+                if len(hits) < 100:
+                    break
+
+            # Phase 2 — newest first, capped HTTP budget
+            candidates.sort(key=lambda c: c['file_date'], reverse=True)
+            for cand in candidates[:self.max_lookups]:
+                ev, is_fund = self._formd_finalize(cand)
+                if is_fund:
+                    skipped_funds += 1
+                elif ev:
+                    events.append(ev)
+
+            self.source_statuses.append({
+                'source_name':   label,
+                'source_type':   'sec_edgar',
+                'status':        'success' if events else 'partial',
+                'error_message': None if events else 'No operating-company Form Ds in territory',
+                'events_found':  len(events),
+            })
+            print(f'  - {label}: {len(events)} operating-company raises in '
+                  f'territory ({skipped_funds} fund vehicles skipped)')
+        except Exception as e:
+            self.source_statuses.append({
+                'source_name':   label,
+                'source_type':   'sec_edgar',
+                'status':        'error',
+                'error_message': str(e)[:200],
+                'events_found':  0,
+            })
+            print(f'  - {label}: ERROR {e}')
+        return events
+
+    def _formd_cheap_filter(self, hit):
+        """Free filters only (no HTTP). Returns (candidate_or_None, is_fund)."""
+        source = hit.get('_source', {}) or {}
+        if (source.get('file_type') or '') != 'D':
+            return None, False  # skip D/A amendments — not a NEW raise
+
+        items = set(source.get('items') or [])
+        if items & self.FUND_VEHICLE_ITEMS:
+            return None, True  # pooled investment fund (Inv. Co. Act 3(c))
+
+        ciks = source.get('ciks') or []
+        display_names = source.get('display_names') or []
+        adsh = source.get('adsh') or ''
+        if not (ciks and display_names and adsh):
+            return None, False
+        company_name = re.split(r'\s*\(', display_names[0])[0].strip()
+
+        low = f' {company_name.lower()} '
+        if any(p in low for p in self.FUND_NAME_PATTERNS):
+            return None, True
+
+        state = (source.get('biz_states') or [''])[0] or ''
+        if not state or state.upper() not in self.territory_codes:
+            return None, False  # defensive — locationCodes should ensure this
+
+        if self.is_public_company(company_name):
+            return None, False
+
+        return {
+            'cik': str(ciks[0]),
+            'company_name': company_name,
+            'adsh': adsh,
+            'state': state,
+            'file_date': source.get('file_date') or '',
+        }, False
+
+    def _formd_finalize(self, cand):
+        """HTTP phase: filer SIC gates + offering details → TriggerEvent.
+        Returns (event_or_None, is_fund_vehicle)."""
+        cik, company_name = cand['cik'], cand['company_name']
+        state, adsh = cand['state'], cand['adsh']
+        file_date_str = cand['file_date']
+
+        filer_info = self._lookup_filer_info(cik)
+        time.sleep(self.sec_sleep)
+        sic = filer_info.get('sic', '')
+        if sic and sic in self.FUND_SIC_CODES:
+            return None, True
+        if sic and sic in self.BLOCKED_SIC_CODES:
+            self._sic_blocked_count += 1
+            return None, False
+
+        try:
+            published = datetime.fromisoformat(file_date_str).replace(tzinfo=timezone.utc)
+        except Exception:
+            published = datetime.now(timezone.utc)
+
+        adsh_clean = adsh.replace('-', '')
+        url = (f'https://www.sec.gov/Archives/edgar/data/'
+               f'{int(cik)}/{adsh_clean}/{adsh}-index.htm')
+
+        amount_txt, industry_grp = '', ''
+        if self.fetch_details:
+            amount_txt, industry_grp, is_fund = self._formd_details(cik, adsh_clean)
+            if is_fund:
+                return None, True
+
+        desc_bits = [f'SEC Form D filed by {company_name} ({state}) — '
+                     f'private capital raise (Reg D exempt offering).']
+        if amount_txt:
+            desc_bits.append(f'Total offering: {amount_txt}.')
+        if industry_grp:
+            desc_bits.append(f'Form D industry group: {industry_grp}.')
+        desc_bits.append(f'Filing date: {file_date_str}.')
+
+        return TriggerEvent(
+            id=self.generate_event_id(url, company_name),
+            title=f'SEC Form D (Private Capital Raise) — {company_name}',
+            event_type=EventType.FUNDING,
+            source=EventSource.SEC_EDGAR,
+            source_name='SEC EDGAR',
+            url=url,
+            published_date=published,
+            company_name=company_name,
+            company_location=state,
+            description=' '.join(desc_bits),
+            relevance_score=80.0,
+            matched_regions=[state],
+        ), False
+
+    def _formd_details(self, cik: str, adsh_clean: str):
+        """Fetch the Form D primary XML for offering amount + industry.
+        Returns (amount_text, industry_group, is_fund_vehicle). Best-effort:
+        any failure returns blanks rather than dropping the event."""
+        try:
+            idx = self.session.get(
+                f'https://www.sec.gov/Archives/edgar/data/{int(cik)}/'
+                f'{adsh_clean}/index.json', timeout=self.timeout)
+            idx.raise_for_status()
+            xml_name = next(
+                (f['name'] for f in idx.json().get('directory', {}).get('item', [])
+                 if f.get('name', '').endswith('.xml')
+                 and 'primary' in f.get('name', '').lower()), None)
+            if not xml_name:
+                return '', '', False
+            time.sleep(self.sec_sleep)
+            xml = self.session.get(
+                f'https://www.sec.gov/Archives/edgar/data/{int(cik)}/'
+                f'{adsh_clean}/{xml_name}', timeout=self.timeout).text
+
+            if '<investmentFundInfo>' in xml or 'Pooled Investment Fund' in xml:
+                return '', '', True
+
+            m = re.search(r'<totalOfferingAmount>([^<]+)</totalOfferingAmount>', xml)
+            amount = ''
+            if m:
+                raw = m.group(1).strip()
+                if raw.lower() == 'indefinite':
+                    amount = 'Indefinite'
+                else:
+                    try:
+                        amount = f'${int(float(raw)):,}'
+                    except Exception:
+                        amount = raw
+            g = re.search(r'<industryGroupType>([^<]+)</industryGroupType>', xml)
+            industry = g.group(1).strip() if g else ''
+            time.sleep(self.sec_sleep)
+            return amount, industry, False
+        except Exception:
+            return '', '', False
