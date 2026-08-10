@@ -273,6 +273,10 @@ from aggregator snippet phrasings (fill-if-missing, both search passes).
 Dashboard has a "📊 Weekly Scorecard" expander (intake by source, noise
 removed by reason, pickups 7d-vs-prior) — read it before tuning sources.
 
+**Public school districts = automatic fail** (A.J. 2026-08-09: RFP
+procurement dead ends). Name-pattern gate in `company_fit()`
+(`_is_public_school_district`) — private/charter schools stay in-vertical.
+
 FIT comes BEFORE grading: `apply_fit_gates` (territory × revenue × ZI
 vertical) soft-deletes confirmed-out events, so grades only rank workable
 accounts. Hashtag definitions are STRICT — history of LLM stuffing. Don't
