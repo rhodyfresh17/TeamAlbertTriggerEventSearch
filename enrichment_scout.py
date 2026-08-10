@@ -304,6 +304,23 @@ WORKABLE_ROLES = [
 ]
 
 
+# Public school districts procure through RFPs — dead ends, never workable
+# (A.J. 2026-08-09: "we don't like public school districts"). Name-pattern
+# gate so it holds regardless of how the ZI classifier labels them.
+# NOTE: private/charter schools stay in-vertical (K-12 Schools) — only
+# clearly-PUBLIC district naming is blocked.
+_PUBLIC_DISTRICT_PATTERNS = (
+    'school district', 'public schools', 'board of education',
+    'unified school', 'school corporation', 'county schools',
+    'city schools', 'school board', 'department of education',
+)
+
+
+def _is_public_school_district(name: str) -> bool:
+    n = f' {(name or "").lower()} '
+    return any(p in n for p in _PUBLIC_DISTRICT_PATTERNS)
+
+
 def company_fit(c: dict) -> dict:
     """Fit for ONE company — the atom of the model (per A.J. 2026-07-17:
     'we should be filtering out at the company level based on industry/
@@ -311,6 +328,11 @@ def company_fit(c: dict) -> dict:
 
     Returns {'verdict': 'pass'|'fail'|'unverified', 'territory': ...,
              'revenue': ..., 'vertical': ..., 'reasons': [...]}"""
+    if _is_public_school_district(c.get('name') or ''):
+        return {'verdict': 'fail', 'territory': 'n/a', 'revenue': 'n/a',
+                'vertical': 'out',
+                'reasons': ['public school district (RFP procurement — dead end)']}
+
     territory = hq_territory_status(c.get('hq') or '')
 
     rev = (c.get('revenue') or '').strip()
