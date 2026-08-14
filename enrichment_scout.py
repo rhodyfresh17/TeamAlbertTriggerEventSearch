@@ -958,7 +958,7 @@ def _cache_set(company_name: str, industry_hint: str, results: dict) -> None:
 # at the start of every enrich_events() / regrade_only_events() run.
 # The main loop reads these when printing the final summary.
 SEARCH_COUNTS: Dict[str, int] = {'cache': 0, 'firecrawl': 0, 'searxng': 0,
-                                 'google_cse': 0, 'tavily': 0}
+                                 'google_cse': 0, 'tavily': 0, 'throttled': 0}
 
 
 def reset_search_counts() -> None:
@@ -997,6 +997,69 @@ def _tavily_month_count(increment: bool = False) -> int:
         return 0  # fail open — guard is best-effort
 
 
+# ── IP-hygiene throttles (2026-08-09) ────────────────────────────────────────
+# The scraping rungs (Firecrawl's Google scrape + SearXNG's engines) all fire
+# from ONE residential IP that the whole Hermes fleet shares. Bulk passes ran
+# ~600 scraped searches/hour for hours — a bot signature that got the IP
+# CAPTCHA'd across engines and broke the fleet agents' web search too
+# (A.J. 2026-08-09). Two mechanisms:
+#
+# 1. HOURLY CAP — cross-process sliding window in the cache DB (launchd
+#    cycles + manual bulk passes share it). Over cap → scraping rungs are
+#    skipped; API rungs (CSE/Tavily) still run. Bulk passes stretch out
+#    instead of burning the IP.
+# 2. CIRCUIT BREAKER — consecutive both-scrape-rungs-empty results mean the
+#    IP is already being throttled; continuing to fire scrape attempts only
+#    deepens the block. Breaker opens for a cool-down and the ladder runs
+#    API-rungs-only until it closes.
+SCRAPE_HOURLY_CAP = int(os.environ.get('SCRAPE_HOURLY_CAP', '150'))
+_BREAKER_THRESHOLD = 6      # consecutive all-scrape-empty searches
+_BREAKER_COOLDOWN = 900     # seconds the breaker stays open (15 min)
+_breaker = {'streak': 0, 'open_until': 0.0}
+
+
+def _scrape_budget_ok(record: bool = False) -> bool:
+    """Sliding 1-hour window of scraped-search calls, shared across
+    processes via the cache DB. Fail-open on any sqlite error."""
+    try:
+        now = time.time()
+        conn = sqlite3.connect(CACHE_DB_PATH, timeout=5)
+        cur = conn.cursor()
+        cur.execute('CREATE TABLE IF NOT EXISTS scrape_calls (ts REAL)')
+        cur.execute('DELETE FROM scrape_calls WHERE ts < ?', (now - 3600,))
+        if record:
+            cur.execute('INSERT INTO scrape_calls VALUES (?)', (now,))
+        cur.execute('SELECT COUNT(*) FROM scrape_calls')
+        n = cur.fetchone()[0]
+        conn.commit()
+        conn.close()
+        return n < SCRAPE_HOURLY_CAP
+    except Exception:
+        return True
+
+
+def _scrape_rungs_available() -> bool:
+    """True when it's civil to hit the scraping backends right now."""
+    if time.time() < _breaker['open_until']:
+        return False
+    return _scrape_budget_ok()
+
+
+def _note_scrape_outcome(got_results: bool) -> None:
+    """Feed the circuit breaker after a full scrape-rung attempt."""
+    if got_results:
+        _breaker['streak'] = 0
+        return
+    _breaker['streak'] += 1
+    if _breaker['streak'] >= _BREAKER_THRESHOLD:
+        _breaker['open_until'] = time.time() + _BREAKER_COOLDOWN
+        _breaker['streak'] = 0
+        log.warning(f'  🔌 Scrape circuit OPEN — {_BREAKER_THRESHOLD} '
+                    f'consecutive empty scrape results (IP likely being '
+                    f'throttled). Cooling down {_BREAKER_COOLDOWN // 60} min; '
+                    f'API rungs only.')
+
+
 def tavily_search(company_name: str, industry_hint: str = '') -> dict:
     """Public search interface. Despite the legacy name, dispatches to the
     configured SEARCH_BACKEND (firecrawl by default) with persistent caching.
@@ -1013,23 +1076,30 @@ def tavily_search(company_name: str, industry_hint: str = '') -> dict:
         _tavily_month_count(increment=True)
         results = _tavily_search(company_name, industry_hint)
     elif SEARCH_BACKEND == 'firecrawl':
-        SEARCH_COUNTS['firecrawl'] += 1
-        results = _firecrawl_search(company_name, industry_hint)
-        if not results or not results.get('results'):
-            # Empty Firecrawl during bulk runs is usually TRANSIENT upstream
-            # rate-limiting (its search backend throttling a burst). One
-            # short wait + retry recovers most of them for free — verified:
-            # the same queries succeed seconds later.
-            time.sleep(2.5)
+        results = {}
+        if _scrape_rungs_available():
             SEARCH_COUNTS['firecrawl'] += 1
+            _scrape_budget_ok(record=True)
             results = _firecrawl_search(company_name, industry_hint)
-        # SearXNG fallback — free, quota-less, different upstream engines.
-        # Sits BEFORE Tavily so paid quota is only touched when both local
-        # backends come up empty.
-        if not results or not results.get('results'):
-            log.info('  → Firecrawl empty, falling back to SearXNG')
-            SEARCH_COUNTS['searxng'] += 1
-            results = _searxng_search(company_name, industry_hint)
+            if not results or not results.get('results'):
+                # Empty Firecrawl during bulk runs is usually TRANSIENT
+                # upstream rate-limiting. One short wait + retry recovers
+                # most of them for free.
+                time.sleep(2.5)
+                SEARCH_COUNTS['firecrawl'] += 1
+                _scrape_budget_ok(record=True)
+                results = _firecrawl_search(company_name, industry_hint)
+            # SearXNG fallback — free, quota-less, different upstream
+            # engines. Sits BEFORE the API rungs so quota is only touched
+            # when both local backends come up empty.
+            if not results or not results.get('results'):
+                log.info('  → Firecrawl empty, falling back to SearXNG')
+                SEARCH_COUNTS['searxng'] += 1
+                _scrape_budget_ok(record=True)
+                results = _searxng_search(company_name, industry_hint)
+            _note_scrape_outcome(bool(results and results.get('results')))
+        else:
+            SEARCH_COUNTS['throttled'] = SEARCH_COUNTS.get('throttled', 0) + 1
         # Google CSE fallback — dormant until GOOGLE_CSE_KEY/GOOGLE_CSE_CX
         # are configured. API-quota based (100/day, daily reset), so it
         # works even when the Mac's IP is throttled by every scraper.
@@ -2090,6 +2160,34 @@ def enrich_events(
             role      = co['role']
             cache_key = name.lower().strip()
 
+            # ── Search-avoidance gates (IP hygiene, 2026-08-09) ──────────
+            # Every skipped search protects the shared home IP that the
+            # Hermes fleet's SearXNG also depends on.
+            # (a) Non-workable roles (advisors, sellers, ...) can never
+            #     become the account — don't spend searches on them when
+            #     the event has at least one workable company.
+            _role_l = (role or '').lower()
+            if (_role_l and _role_l not in WORKABLE_ROLES
+                    and any((c2.get('role') or '').lower() in WORKABLE_ROLES
+                            for c2 in companies)):
+                log.info(f'  → Skipping search ({role}): {name}')
+                enriched.append({'name': name, 'role': role, 'url': None,
+                                 'industry': None, 'zi_subindustry': None,
+                                 'size': None, 'revenue': None,
+                                 'revenue_source': None, 'hq': None,
+                                 'linkedin': None})
+                continue
+            # (b) Auto-fail names (public school districts) fail the fit
+            #     gate on name alone — researching them is pure waste.
+            if _is_public_school_district(name):
+                log.info(f'  → Skipping search (public school district): {name}')
+                enriched.append({'name': name, 'role': role, 'url': None,
+                                 'industry': None, 'zi_subindustry': None,
+                                 'size': None, 'revenue': None,
+                                 'revenue_source': None, 'hq': None,
+                                 'linkedin': None})
+                continue
+
             # Build a NEUTRAL disambiguation hint. Never inject industry
             # guesses: the old 'financial services private equity' hint for
             # M&A/funding events biased BOTH the web search AND the ZI
@@ -2128,6 +2226,23 @@ def enrich_events(
                 log.info(f'  → Cached:   {name}')
 
             firm = firm_cache[cache_key]
+
+            # SEC filings state the filer's STATE authoritatively — seed it
+            # instead of leaving territory to web research (fill-if-missing;
+            # saves searches and kills false "territory unverified" flags).
+            if (not firm.get('hq')
+                    and 'sec.gov' in (event.get('source_url') or '')
+                    and name.strip().lower() ==
+                        (event.get('company_name') or '').strip().lower()):
+                import re as _re2
+                m = _re2.search(r'\(([A-Z]\d|[A-Z]{2})\)',
+                                event.get('description') or '')
+                if m:
+                    code = {'A3': 'NB', 'A4': 'NL', 'A5': 'NS', 'A6': 'ON',
+                            'A7': 'PE', 'A8': 'QC'}.get(m.group(1), m.group(1))
+                    firm = dict(firm, hq=code)
+                    log.info(f'     hq seeded from SEC filing: {code}')
+
             found = [f'{k}: {v}' for k, v in firm.items() if v]
             if found:
                 log.info(f'     {" | ".join(found)}')
@@ -2338,7 +2453,8 @@ def enrich_events(
         f'Done — enriched: {ok}, failed: {fail}  ·  '
         f'Searches: {sum(sc.values())} '
         f'(cache:{sc["cache"]} firecrawl:{sc["firecrawl"]} '
-        f'searxng:{sc["searxng"]} cse:{sc["google_cse"]} tavily:{sc["tavily"]})'
+        f'searxng:{sc["searxng"]} cse:{sc["google_cse"]} tavily:{sc["tavily"]} '
+        f'throttled:{sc.get("throttled", 0)})'
     )
 
 

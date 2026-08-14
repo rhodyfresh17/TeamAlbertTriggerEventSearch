@@ -544,6 +544,23 @@ The API-quota rungs (CSE, Tavily) are immune to IP reputation; that's why
 they sit last as the true safety net, and why bulk passes should stay
 paced rather than parallelized.
 
+**IP-hygiene throttles (2026-08-09 — bulk bursts got the home IP blocked
+and broke the Hermes fleet's SearXNG too):**
+- `SCRAPE_HOURLY_CAP` (default 150) — cross-process sliding-window cap on
+  scraped searches (Firecrawl+SearXNG), persisted in the cache DB
+  (`scrape_calls` table) so launchd cycles + manual passes share it. Over
+  cap → scrape rungs skipped, API rungs still run, counted as `throttled`
+  in the run summary. Bulk passes stretch out instead of burning the IP.
+- Circuit breaker — 6 consecutive all-scrape-rungs-empty searches = the
+  IP is being throttled; firing more scrapes deepens the block. Opens for
+  15 min (API rungs only), closes on the next scrape success.
+- Search avoidance: non-workable-role companies (advisors/sellers) and
+  auto-fail names (school districts) never get searched; SEC-sourced
+  events seed the filer's HQ from the filing's own state code.
+Never "fix" a slow bulk pass by raising SCRAPE_HOURLY_CAP into bot
+territory — convert the backlog across multiple nights or add API quota
+(Google CSE keys) instead.
+
 **Important context**:
 - **Scout (the `hermes-sales` Hermes agent)** uses Firecrawl directly for
   its own open-ended sales research — separate from this app's pipeline.
