@@ -22,6 +22,13 @@ if [[ -z "$CSE_CX" ]]; then
   echo "FAIL — empty Search engine ID. Nothing was saved; run me again."
   exit 1
 fi
+if [[ "$CSE_CX" =~ ^AIza ]]; then
+  echo "FAIL — that's the API key again, not the Search engine ID."
+  echo "The Search engine ID is on programmablesearchengine.google.com →"
+  echo "your engine → Overview, labeled 'Search engine ID' (it does NOT"
+  echo "start with AIza). Nothing was saved; run me again."
+  exit 1
+fi
 
 {
   echo ""

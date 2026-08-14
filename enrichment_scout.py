@@ -857,7 +857,13 @@ def _google_cse_search(company_name: str, industry_hint: str = '') -> dict:
             ],
         }
     except Exception as e:
-        log.warning(f'  Google CSE error for "{company_name}": {e}')
+        # NEVER echo the exception itself — requests' HTTPError repr embeds
+        # the full request URL including key= and cx= (leaked once,
+        # 2026-08-09; key rotated). Status code only.
+        status = getattr(getattr(e, 'response', None), 'status_code', None)
+        log.warning(f'  Google CSE error for "{company_name}": '
+                    f'{type(e).__name__}'
+                    f'{f" HTTP {status}" if status else ""}')
         return {}
 
 
