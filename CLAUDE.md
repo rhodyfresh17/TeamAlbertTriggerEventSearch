@@ -547,6 +547,14 @@ The API-quota rungs (CSE, Tavily) are immune to IP reputation; that's why
 they sit last as the true safety net, and why bulk passes should stay
 paced rather than parallelized.
 
+**Search-spend tiers (2026-08-14)** — Tavily's 900/mo is rationed by
+`_event_search_tier()` from FREE pre-search signals: Tier 1 (finance-leader
+events, M&A, funding ≥$1M or unknown) = full ladder incl. Tavily; Tier 2
+(generic executive/other) = Firecrawl-only, empties stay unverified for a
+later free retry; Tier 3 (Form D offerings <$1M — too small for up-market)
+= NO searches, graded from the filing text alone. Tavily rung checks the
+tier; tier 3 passes `no_search=True` through `enrich_one_company`.
+
 **IP-hygiene throttles (2026-08-09 — bulk bursts got the home IP blocked
 and broke the Hermes fleet's SearXNG too):**
 - `SCRAPE_HOURLY_CAP` (default 150) — cross-process sliding-window cap on

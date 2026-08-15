@@ -930,6 +930,43 @@ def _tavily_month_count(increment: bool = False) -> int:
         return 0  # fail open — guard is best-effort
 
 
+# ── Search-spend tiers (2026-08-14) ──────────────────────────────────────────
+# 900 Tavily credits/month is the ONLY paid-quality search we have — it must
+# be spent on the events most likely to become worked accounts, decided from
+# FREE signals before any search fires (A.J.: "how are we making sure only
+# the best possible companies are getting searched").
+#   Tier 1 — full ladder incl. Tavily: finance-leader events (CFO/Controller
+#            — the #1 trigger), M&A, funding raises ≥$1M or unknown size.
+#   Tier 2 — scrape-only (Firecrawl, no Tavily): generic executive events
+#            and everything else. Empty results stay unverified and get
+#            retried on a later pass for free.
+#   Tier 3 — NO searches at all: micro-raises (<$1M Form D offerings — too
+#            small to be an up-market account). Graded from the filing text.
+# The tier is set per-event in the enrich loop via _SEARCH_TIER (single-
+# threaded process; default 1 so standalone probe callers keep full access).
+_SEARCH_TIER = {'tier': 1}
+
+
+def _event_search_tier(event: dict) -> int:
+    et = (event.get('event_type') or '').strip()
+    if et == 'cfo_hire' or _finance_role(event):
+        return 1
+    if et == 'merger_acquisition':
+        return 1
+    if et == 'funding':
+        import re as _re3
+        m = _re3.search(r'Total offering: \$([\d,]+)',
+                        event.get('description') or '')
+        if m:
+            try:
+                if int(m.group(1).replace(',', '')) < 1_000_000:
+                    return 3
+            except ValueError:
+                pass
+        return 1
+    return 2
+
+
 # ── IP-hygiene throttles (2026-08-09) ────────────────────────────────────────
 # The scraping rungs (Firecrawl's Google scrape + SearXNG's engines) all fire
 # from ONE residential IP that the whole Hermes fleet shares. Bulk passes ran
@@ -1032,7 +1069,11 @@ def tavily_search(company_name: str, industry_hint: str = '') -> dict:
         else:
             SEARCH_COUNTS['throttled'] = SEARCH_COUNTS.get('throttled', 0) + 1
         # Tavily fallback — only if configured AND monthly budget remains
-        if (not results or not results.get('results')) and TAVILY_API_KEY:
+        # Tavily is TIER-1-ONLY: the 900/month goes to finance-leader, M&A,
+        # and substantive funding events. Tier-2 events stay scrape-only.
+        if (_SEARCH_TIER['tier'] == 1
+                and (not results or not results.get('results'))
+                and TAVILY_API_KEY):
             used = _tavily_month_count()
             if used >= TAVILY_MONTHLY_BUDGET:
                 log.info(f'  → Firecrawl empty; Tavily budget spent '
@@ -1203,12 +1244,13 @@ def _parse_hq_size_from_snippets(results: list) -> dict:
 
 
 def enrich_one_company(company_name: str, industry_hint: str = '',
-                       article_context: str = '') -> dict:
+                       article_context: str = '',
+                       no_search: bool = False) -> dict:
     empty = {'url': None, 'industry': None, 'zi_subindustry': None,
              'size': None, 'revenue': None,
              'revenue_source': None, 'hq': None, 'linkedin': None}
 
-    search = tavily_search(company_name, industry_hint)
+    search = {} if no_search else tavily_search(company_name, industry_hint)
     if not search.get('results') and not (article_context or '').strip():
         return empty  # nothing to extract from at all
 
@@ -1240,8 +1282,9 @@ def enrich_one_company(company_name: str, industry_hint: str = '',
     # (rides the normal ladder + cache), no ZoomInfo login, and reads only
     # what the engines publish in their results.
     _probe_results = []
-    if data is not None and not (data.get('hq') and data.get('revenue')
-                                 and data.get('size')):
+    if (not no_search and data is not None
+            and not (data.get('hq') and data.get('revenue')
+                     and data.get('size'))):
         probe = tavily_search(company_name, 'zoominfo')
         if probe.get('results'):
             _probe_results = probe['results']
@@ -2077,6 +2120,13 @@ def enrich_events(
         log.info(f'  Companies: {co_summary}')
 
         # ── 2. Enrich each company ────────────────────────────────────────
+        tier = _event_search_tier(event)
+        _SEARCH_TIER['tier'] = tier
+        if tier == 3:
+            log.info('  Search tier 3 (micro-raise/minimal) — grading from '
+                     'article evidence only, no web searches')
+        elif tier == 2:
+            log.info('  Search tier 2 — scrape-only (no Tavily spend)')
         enriched = []
         for co in companies:
             name      = co['name']
@@ -2137,7 +2187,8 @@ def enrich_events(
                         f"{(event.get('description') or '')[:500]}"
                     )
                     firm_cache[cache_key] = enrich_one_company(
-                        name, industry_hint, article_context=_article_ctx)
+                        name, industry_hint, article_context=_article_ctx,
+                        no_search=(tier == 3))
                     time.sleep(RATE_LIMIT_SECONDS)
                 else:
                     firm_cache[cache_key] = {
