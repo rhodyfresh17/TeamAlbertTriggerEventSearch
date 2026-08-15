@@ -825,48 +825,6 @@ def _searxng_search(company_name: str, industry_hint: str = '') -> dict:
         return {}
 
 
-def _brave_search(company_name: str, industry_hint: str = '') -> dict:
-    """Brave Search API — dormant until BRAVE_SEARCH_API_KEY is set. Free
-    tier: 2,000 queries/month, 1 req/s, independent whole-web index.
-    Server-side quota, so it keeps working when the Mac's IP is CAPTCHA'd
-    by the scraping backends. (Replaced Google CSE 2026-08-09: Google
-    closed the Custom Search JSON API to new customers — new projects get
-    403 on every call regardless of console setup; full shutdown 2027.)"""
-    key = os.environ.get('BRAVE_SEARCH_API_KEY')
-    if not key:
-        return {}
-    query = _build_search_query(company_name, industry_hint)
-    try:
-        resp = requests.get(
-            'https://api.search.brave.com/res/v1/web/search',
-            params={'q': query, 'count': 6},
-            headers={'X-Subscription-Token': key,
-                     'Accept': 'application/json'},
-            timeout=15,
-        )
-        resp.raise_for_status()
-        items = (resp.json().get('web') or {}).get('results') or []
-        return {
-            'answer': '',
-            'results': [
-                {
-                    'title':   i.get('title', ''),
-                    'url':     i.get('url', ''),
-                    'content': (i.get('description') or '')[:400],
-                }
-                for i in items
-            ],
-        }
-    except Exception as e:
-        # Redaction discipline: never echo the exception repr (HTTPError
-        # embeds the request URL; headers carry the key). Status code only.
-        status = getattr(getattr(e, 'response', None), 'status_code', None)
-        log.warning(f'  Brave search error for "{company_name}": '
-                    f'{type(e).__name__}'
-                    f'{f" HTTP {status}" if status else ""}')
-        return {}
-
-
 def _tavily_search(company_name: str, industry_hint: str = '') -> dict:
     """Search Tavily — kept as fallback when SEARCH_BACKEND='tavily' OR
     Firecrawl is unreachable. Costs quota; use sparingly."""
@@ -963,8 +921,10 @@ def _cache_set(company_name: str, industry_hint: str, results: dict) -> None:
 # Per-run counters for the actual backend each search hit. Reset to 0
 # at the start of every enrich_events() / regrade_only_events() run.
 # The main loop reads these when printing the final summary.
+# NOTE: no Brave rung, ever — the Hermes fleet's search depends on Brave
+# and a TeamAlbert consumer would collide with it (A.J. 2026-08-09).
 SEARCH_COUNTS: Dict[str, int] = {'cache': 0, 'firecrawl': 0, 'searxng': 0,
-                                 'brave': 0, 'tavily': 0, 'throttled': 0}
+                                 'tavily': 0, 'throttled': 0}
 
 
 def reset_search_counts() -> None:
@@ -1106,14 +1066,6 @@ def tavily_search(company_name: str, industry_hint: str = '') -> dict:
             _note_scrape_outcome(bool(results and results.get('results')))
         else:
             SEARCH_COUNTS['throttled'] = SEARCH_COUNTS.get('throttled', 0) + 1
-        # Brave fallback — dormant until BRAVE_SEARCH_API_KEY is set.
-        # API-quota based (2,000/month), so it works even when the Mac's
-        # IP is throttled by every scraper.
-        if ((not results or not results.get('results'))
-                and os.environ.get('BRAVE_SEARCH_API_KEY')):
-            log.info('  → SearXNG empty too, falling back to Brave')
-            SEARCH_COUNTS['brave'] += 1
-            results = _brave_search(company_name, industry_hint)
         # Tavily fallback — only if configured AND monthly budget remains
         if (not results or not results.get('results')) and TAVILY_API_KEY:
             used = _tavily_month_count()
@@ -2459,7 +2411,7 @@ def enrich_events(
         f'Done — enriched: {ok}, failed: {fail}  ·  '
         f'Searches: {sum(sc.values())} '
         f'(cache:{sc["cache"]} firecrawl:{sc["firecrawl"]} '
-        f'searxng:{sc["searxng"]} brave:{sc["brave"]} tavily:{sc["tavily"]} '
+        f'searxng:{sc["searxng"]} tavily:{sc["tavily"]} '
         f'throttled:{sc.get("throttled", 0)})'
     )
 

@@ -532,10 +532,12 @@ Community Edition upgrade harvests contact data (declined).
 **Auto-fallback chain (expanded 2026-07-21)**: Firecrawl → 2.5s retry →
 **SearXNG** (`SEARXNG_URL`, default `http://localhost:8888` — the Hermes
 fleet's metasearch instance; free, quota-less, 88 rotating engines) →
-**Brave Search API** (dormant until `BRAVE_SEARCH_API_KEY` set; free
-2,000/mo, independent index — replaced Google CSE 2026-08-09: Google
-CLOSED the Custom Search JSON API to new customers, 403 on every call,
-full shutdown 2027 — never recommend CSE again) →
+(NO fourth free-API rung — both candidates are off-limits: Google CSE is
+CLOSED to new customers since Jan 2026 [403 on every call, shutdown 2027 —
+never recommend it again], and **Brave Search API is RESERVED for the
+Hermes fleet's search** — a TeamAlbert consumer would starve the fleet,
+which is the exact shared-resource collision that broke fleet search on
+2026-08-09. Never wire Brave into this repo.) →
 **Tavily** (budget-guarded, `TAVILY_MONTHLY_BUDGET`). If everything is
 empty, the event stays unenriched/flagged and gets retried on a later pass.
 Per-run usage printed in the summary line (cache/firecrawl/searxng/cse/
