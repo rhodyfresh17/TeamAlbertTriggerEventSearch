@@ -825,43 +825,43 @@ def _searxng_search(company_name: str, industry_hint: str = '') -> dict:
         return {}
 
 
-def _google_cse_search(company_name: str, industry_hint: str = '') -> dict:
-    """Google Custom Search JSON API — dormant until GOOGLE_CSE_KEY +
-    GOOGLE_CSE_CX are set in the environment. Free tier: 100 queries/DAY
-    (resets daily — unlike Tavily's monthly cliff, a burned day only costs
-    that day). Server-side quota, so it keeps working when the Mac's IP is
-    CAPTCHA'd by the scraping backends. Over-quota returns HTTP 429 →
-    empty dict → dispatcher moves on."""
-    key = os.environ.get('GOOGLE_CSE_KEY')
-    cx  = os.environ.get('GOOGLE_CSE_CX')
-    if not key or not cx:
+def _brave_search(company_name: str, industry_hint: str = '') -> dict:
+    """Brave Search API — dormant until BRAVE_SEARCH_API_KEY is set. Free
+    tier: 2,000 queries/month, 1 req/s, independent whole-web index.
+    Server-side quota, so it keeps working when the Mac's IP is CAPTCHA'd
+    by the scraping backends. (Replaced Google CSE 2026-08-09: Google
+    closed the Custom Search JSON API to new customers — new projects get
+    403 on every call regardless of console setup; full shutdown 2027.)"""
+    key = os.environ.get('BRAVE_SEARCH_API_KEY')
+    if not key:
         return {}
     query = _build_search_query(company_name, industry_hint)
     try:
         resp = requests.get(
-            'https://www.googleapis.com/customsearch/v1',
-            params={'key': key, 'cx': cx, 'q': query, 'num': 6},
+            'https://api.search.brave.com/res/v1/web/search',
+            params={'q': query, 'count': 6},
+            headers={'X-Subscription-Token': key,
+                     'Accept': 'application/json'},
             timeout=15,
         )
         resp.raise_for_status()
-        items = resp.json().get('items') or []
+        items = (resp.json().get('web') or {}).get('results') or []
         return {
             'answer': '',
             'results': [
                 {
                     'title':   i.get('title', ''),
-                    'url':     i.get('link', ''),
-                    'content': (i.get('snippet') or '')[:400],
+                    'url':     i.get('url', ''),
+                    'content': (i.get('description') or '')[:400],
                 }
                 for i in items
             ],
         }
     except Exception as e:
-        # NEVER echo the exception itself — requests' HTTPError repr embeds
-        # the full request URL including key= and cx= (leaked once,
-        # 2026-08-09; key rotated). Status code only.
+        # Redaction discipline: never echo the exception repr (HTTPError
+        # embeds the request URL; headers carry the key). Status code only.
         status = getattr(getattr(e, 'response', None), 'status_code', None)
-        log.warning(f'  Google CSE error for "{company_name}": '
+        log.warning(f'  Brave search error for "{company_name}": '
                     f'{type(e).__name__}'
                     f'{f" HTTP {status}" if status else ""}')
         return {}
@@ -964,7 +964,7 @@ def _cache_set(company_name: str, industry_hint: str, results: dict) -> None:
 # at the start of every enrich_events() / regrade_only_events() run.
 # The main loop reads these when printing the final summary.
 SEARCH_COUNTS: Dict[str, int] = {'cache': 0, 'firecrawl': 0, 'searxng': 0,
-                                 'google_cse': 0, 'tavily': 0, 'throttled': 0}
+                                 'brave': 0, 'tavily': 0, 'throttled': 0}
 
 
 def reset_search_counts() -> None:
@@ -1106,14 +1106,14 @@ def tavily_search(company_name: str, industry_hint: str = '') -> dict:
             _note_scrape_outcome(bool(results and results.get('results')))
         else:
             SEARCH_COUNTS['throttled'] = SEARCH_COUNTS.get('throttled', 0) + 1
-        # Google CSE fallback — dormant until GOOGLE_CSE_KEY/GOOGLE_CSE_CX
-        # are configured. API-quota based (100/day, daily reset), so it
-        # works even when the Mac's IP is throttled by every scraper.
+        # Brave fallback — dormant until BRAVE_SEARCH_API_KEY is set.
+        # API-quota based (2,000/month), so it works even when the Mac's
+        # IP is throttled by every scraper.
         if ((not results or not results.get('results'))
-                and os.environ.get('GOOGLE_CSE_KEY')):
-            log.info('  → SearXNG empty too, falling back to Google CSE')
-            SEARCH_COUNTS['google_cse'] += 1
-            results = _google_cse_search(company_name, industry_hint)
+                and os.environ.get('BRAVE_SEARCH_API_KEY')):
+            log.info('  → SearXNG empty too, falling back to Brave')
+            SEARCH_COUNTS['brave'] += 1
+            results = _brave_search(company_name, industry_hint)
         # Tavily fallback — only if configured AND monthly budget remains
         if (not results or not results.get('results')) and TAVILY_API_KEY:
             used = _tavily_month_count()
@@ -2459,7 +2459,7 @@ def enrich_events(
         f'Done — enriched: {ok}, failed: {fail}  ·  '
         f'Searches: {sum(sc.values())} '
         f'(cache:{sc["cache"]} firecrawl:{sc["firecrawl"]} '
-        f'searxng:{sc["searxng"]} cse:{sc["google_cse"]} tavily:{sc["tavily"]} '
+        f'searxng:{sc["searxng"]} brave:{sc["brave"]} tavily:{sc["tavily"]} '
         f'throttled:{sc.get("throttled", 0)})'
     )
 
