@@ -352,7 +352,7 @@ loosen without A.J.
 
 **Supabase RLS posture (since 2026-07-21):** RLS is ENABLED on all `public` tables (`events`, `account_dispositions`, `source_status`) with **zero policies** — the anon key can neither read nor write anything; every component uses the service-role key. Two standing rules: (1) any NEW table must get `alter table public.<name> enable row level security;` right after creation or Supabase's security emails resume; (2) never create permissive policies (`for select using (true)` etc.) — the original setup had such policies dormant on `events`/`source_status`, and enabling RLS woke them up until we dropped all policies. Verify anytime with the anon-key probe (expect 0 rows/APIError on all tables).
 | `TAVILY_API_KEY` | `.env`, GitHub Secrets (optional) | Web search for company enrichment. Was leaked in git history (commit `ac17b5b`), rotated in commit `536b57d`. Never re-hardcode a fallback. |
-| `GOOGLE_CSE_KEY` + `GOOGLE_CSE_CX` | `.env` (optional — NOT yet created) | Google Custom Search JSON API fallback rung. Dormant until set. Free 100 queries/day, daily reset. Setup: console.cloud.google.com API key + programmablesearchengine.google.com engine (search whole web) → cx id. |
+| `BRAVE_SEARCH_API_KEY` | `.env` (optional — NOT yet created) | Brave Search API fallback rung. Dormant until set. Free 2,000/mo. Signup at brave.com/search/api (card on file required, $0). Add via `scripts/add_brave_key.sh`. Google CSE is DEAD for new customers — don't resurrect it. |
 | `ADZUNA_APP_ID` + `ADZUNA_APP_KEY` | `.env`, GitHub Secrets | Adzuna jobs API (free tier ~100-250 calls/month) |
 | `ANTHROPIC_API_KEY` | GitHub Secrets (optional) | Cloud-based LLM for enrichment fallback. If unset, enrichment uses local Ollama. |
 | `DASHBOARD_PASSWORD` | Streamlit secrets | Dashboard login |
@@ -532,8 +532,10 @@ Community Edition upgrade harvests contact data (declined).
 **Auto-fallback chain (expanded 2026-07-21)**: Firecrawl → 2.5s retry →
 **SearXNG** (`SEARXNG_URL`, default `http://localhost:8888` — the Hermes
 fleet's metasearch instance; free, quota-less, 88 rotating engines) →
-**Google CSE** (dormant until `GOOGLE_CSE_KEY` + `GOOGLE_CSE_CX` are set;
-free 100/day with DAILY reset — can't die for a whole month like Tavily) →
+**Brave Search API** (dormant until `BRAVE_SEARCH_API_KEY` set; free
+2,000/mo, independent index — replaced Google CSE 2026-08-09: Google
+CLOSED the Custom Search JSON API to new customers, 403 on every call,
+full shutdown 2027 — never recommend CSE again) →
 **Tavily** (budget-guarded, `TAVILY_MONTHLY_BUDGET`). If everything is
 empty, the event stays unenriched/flagged and gets retried on a later pass.
 Per-run usage printed in the summary line (cache/firecrawl/searxng/cse/
