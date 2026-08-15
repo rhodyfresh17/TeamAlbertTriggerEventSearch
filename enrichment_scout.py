@@ -65,7 +65,6 @@ except ImportError:
 # Tavily kept as optional fallback when SEARCH_BACKEND='tavily' or Firecrawl unreachable.
 SEARCH_BACKEND    = os.environ.get('SEARCH_BACKEND', 'firecrawl').lower()
 FIRECRAWL_URL     = os.environ.get('FIRECRAWL_URL', 'http://localhost:3002')
-SEARXNG_URL       = os.environ.get('SEARXNG_URL', 'http://localhost:8888')
 TAVILY_API_KEY    = os.environ.get('TAVILY_API_KEY', '')  # fallback only now
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
 CLAUDE_MODEL      = 'claude-3-5-haiku-20241022'  # optional cloud path — unused unless key set
@@ -793,38 +792,6 @@ def _firecrawl_search(company_name: str, industry_hint: str = '') -> dict:
         return {}
 
 
-def _searxng_search(company_name: str, industry_hint: str = '') -> dict:
-    """Search via the local SearXNG metasearch instance (the same one the
-    Hermes fleet uses, :8888). Free, no API quota. Independent of
-    Firecrawl's own search path, and rotates across multiple upstream
-    engines — when Firecrawl's backend is burst-throttled, one of
-    SearXNG's engines is often still answering. Returns the Tavily
-    envelope shape."""
-    query = _build_search_query(company_name, industry_hint)
-    try:
-        resp = requests.get(
-            f'{SEARXNG_URL}/search',
-            params={'q': query, 'format': 'json'},
-            timeout=20,
-        )
-        resp.raise_for_status()
-        results = resp.json().get('results') or []
-        return {
-            'answer': '',
-            'results': [
-                {
-                    'title':   r.get('title', ''),
-                    'url':     r.get('url', ''),
-                    'content': (r.get('content') or '')[:400],
-                }
-                for r in results[:6]
-            ],
-        }
-    except Exception as e:
-        log.warning(f'  SearXNG error for "{company_name}": {e}')
-        return {}
-
-
 def _tavily_search(company_name: str, industry_hint: str = '') -> dict:
     """Search Tavily — kept as fallback when SEARCH_BACKEND='tavily' OR
     Firecrawl is unreachable. Costs quota; use sparingly."""
@@ -923,7 +890,7 @@ def _cache_set(company_name: str, industry_hint: str, results: dict) -> None:
 # The main loop reads these when printing the final summary.
 # NOTE: no Brave rung, ever — the Hermes fleet's search depends on Brave
 # and a TeamAlbert consumer would collide with it (A.J. 2026-08-09).
-SEARCH_COUNTS: Dict[str, int] = {'cache': 0, 'firecrawl': 0, 'searxng': 0,
+SEARCH_COUNTS: Dict[str, int] = {'cache': 0, 'firecrawl': 0,
                                  'tavily': 0, 'throttled': 0}
 
 
@@ -1055,14 +1022,12 @@ def tavily_search(company_name: str, industry_hint: str = '') -> dict:
                 SEARCH_COUNTS['firecrawl'] += 1
                 _scrape_budget_ok(record=True)
                 results = _firecrawl_search(company_name, industry_hint)
-            # SearXNG fallback — free, quota-less, different upstream
-            # engines. Sits BEFORE the API rungs so quota is only touched
-            # when both local backends come up empty.
-            if not results or not results.get('results'):
-                log.info('  → Firecrawl empty, falling back to SearXNG')
-                SEARCH_COUNTS['searxng'] += 1
-                _scrape_budget_ok(record=True)
-                results = _searxng_search(company_name, industry_hint)
+            # NO SearXNG rung — the shared :8888 instance is FLEET
+            # infrastructure and enrichment's fallback traffic got its
+            # engines suspended twice (outages tracked the enrichment
+            # schedule exactly; fleet had to move to Brave 2026-08-14).
+            # This pipeline searches only via its own Firecrawl stack and
+            # its own Tavily key. Never re-add shared-infra rungs.
             _note_scrape_outcome(bool(results and results.get('results')))
         else:
             SEARCH_COUNTS['throttled'] = SEARCH_COUNTS.get('throttled', 0) + 1
@@ -2411,7 +2376,7 @@ def enrich_events(
         f'Done — enriched: {ok}, failed: {fail}  ·  '
         f'Searches: {sum(sc.values())} '
         f'(cache:{sc["cache"]} firecrawl:{sc["firecrawl"]} '
-        f'searxng:{sc["searxng"]} tavily:{sc["tavily"]} '
+        f'tavily:{sc["tavily"]} '
         f'throttled:{sc.get("throttled", 0)})'
     )
 

@@ -529,15 +529,14 @@ PAID ZI subscription (A.J.'s NetSuite seat is Oracle's — can't be used);
 ZoomInfo Lite free tier = 10 credits/month, manual-only, and its
 Community Edition upgrade harvests contact data (declined).
 
-**Auto-fallback chain (expanded 2026-07-21)**: Firecrawl → 2.5s retry →
-**SearXNG** (`SEARXNG_URL`, default `http://localhost:8888` — the Hermes
-fleet's metasearch instance; free, quota-less, 88 rotating engines) →
-(NO fourth free-API rung — both candidates are off-limits: Google CSE is
-CLOSED to new customers since Jan 2026 [403 on every call, shutdown 2027 —
-never recommend it again], and **Brave Search API is RESERVED for the
-Hermes fleet's search** — a TeamAlbert consumer would starve the fleet,
-which is the exact shared-resource collision that broke fleet search on
-2026-08-09. Never wire Brave into this repo.) →
+**Auto-fallback chain (final form 2026-08-14)**: Firecrawl → 2.5s retry →
+(NO other rungs — every candidate is off-limits: **SearXNG :8888 is FLEET
+infrastructure** — enrichment's fallback traffic suspended its engines
+twice, outages tracking the enrichment schedule exactly, forcing the
+fleet onto Brave; **Brave is RESERVED for the fleet**; **Google CSE is
+CLOSED to new customers** [403 always, shutdown 2027]. This pipeline
+searches ONLY via its own Firecrawl stack and its own Tavily key. Never
+re-add a shared-infra or fleet-dependent rung.) →
 **Tavily** (budget-guarded, `TAVILY_MONTHLY_BUDGET`). If everything is
 empty, the event stays unenriched/flagged and gets retried on a later pass.
 Per-run usage printed in the summary line (cache/firecrawl/searxng/cse/
