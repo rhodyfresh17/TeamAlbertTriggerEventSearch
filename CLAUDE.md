@@ -549,10 +549,13 @@ paced rather than parallelized.
 
 **Search-spend tiers (2026-08-14)** — Tavily's 900/mo is rationed by
 `_event_search_tier()` from FREE pre-search signals: Tier 1 (finance-leader
-events, M&A, funding ≥$1M or unknown) = full ladder incl. Tavily; Tier 2
-(generic executive/other) = Firecrawl-only, empties stay unverified for a
-later free retry; Tier 3 (Form D offerings <$1M — too small for up-market)
-= NO searches, graded from the filing text alone. Tavily rung checks the
+events, M&A, funding ≥$10M — A.J. 2026-08-14: "even a 1M raise isn't a
+company growing enough to buy NetSuite") = full ladder incl. Tavily;
+Tier 2 (generic executive/other, funding $1M–$10M or undisclosed) =
+Firecrawl-only, empties stay unverified for a later free retry; Tier 3
+(raises <$1M) = NO searches, graded from the filing/article text alone.
+Amounts parsed from titles AND descriptions ($6.8 Million / $37M / $1.2B /
+Total offering: $2,500,000 all handled). Tavily rung checks the
 tier; tier 3 passes `no_search=True` through `enrich_one_company`.
 
 **IP-hygiene throttles (2026-08-09 — bulk bursts got the home IP blocked

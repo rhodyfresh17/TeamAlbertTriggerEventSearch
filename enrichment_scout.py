@@ -954,17 +954,41 @@ def _event_search_tier(event: dict) -> int:
     if et == 'merger_acquisition':
         return 1
     if et == 'funding':
-        import re as _re3
-        m = _re3.search(r'Total offering: \$([\d,]+)',
-                        event.get('description') or '')
-        if m:
-            try:
-                if int(m.group(1).replace(',', '')) < 1_000_000:
-                    return 3
-            except ValueError:
-                pass
-        return 1
+        # A.J. 2026-08-14: "even a 1M raise isn't a company growing enough
+        # to buy NetSuite" — the Tavily-worthy bar is $10M+.
+        amt = _parse_funding_amount(
+            f"{event.get('title') or ''} {event.get('description') or ''}")
+        if amt is None:
+            return 2       # undisclosed — free search only
+        if amt >= 10_000_000:
+            return 1
+        if amt >= 1_000_000:
+            return 2
+        return 3           # micro-raise — not worth any search
     return 2
+
+
+def _parse_funding_amount(text: str):
+    """Largest dollar amount in the text, in dollars ('$6.8 Million',
+    '$37M', '$2,500,000', '$1.2B'). None if nothing parseable."""
+    import re as _re3
+    best = None
+    for m in _re3.finditer(
+            r'\$\s?([\d][\d,]*(?:\.\d+)?)\s*'
+            r'(billion|bn|million|mm|[bmk])?\b', text, _re3.I):
+        try:
+            val = float(m.group(1).replace(',', ''))
+        except ValueError:
+            continue
+        unit = (m.group(2) or '').lower()
+        if unit in ('billion', 'bn', 'b'):
+            val *= 1_000_000_000
+        elif unit in ('million', 'mm', 'm'):
+            val *= 1_000_000
+        elif unit == 'k':
+            val *= 1_000
+        best = max(best or 0, val)
+    return best
 
 
 # ── IP-hygiene throttles (2026-08-09) ────────────────────────────────────────
