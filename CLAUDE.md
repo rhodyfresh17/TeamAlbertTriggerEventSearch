@@ -123,7 +123,7 @@ Elon will: pull the repo, walk recent diffs, apply the §8 playbook, and report.
 This is a **sales lead intelligence tool** for A.J. Albert's NetSuite Up-Market Sales team. It:
 
 1. **Scrapes** news/SEC/job sources every 4 hours (via GitHub Actions cron)
-2. **Enriches** each event with firmographic data (Firecrawl primary + Tavily fallback + local Ollama) — extracts companies involved, industry, size, revenue, HQ, LinkedIn
+2. **Enriches** each event with firmographic data (search-spend tiers → own Firecrawl stack → own Tavily key; LLM = shared local llama.cpp Qwen3.6 at :8091) — extracts companies involved, industry, size, revenue, HQ, LinkedIn
 3. **Gates** each event on researched fit (territory × revenue band × ZI subindustry), then **grades** survivors with A.J.'s point-based TAL rubric (A/B/C/D + score + confidence)
 4. **Surfaces** results on a Streamlit Cloud dashboard at https://teamalbertfy27leads.streamlit.app/ — password-protected, filterable by region, revenue segment, grade
 
@@ -144,7 +144,8 @@ User: **A.J. Albert** — NetSuite Up-Market Sales rep on Team Albert. Non-techn
 │     ├── BingNewsScraper   (disabled, no API key)                    │
 │     ├── FinSMEsScraper    (disabled, permanent 403)                 │
 │     ├── SECScraper        (EFTS API, 8-K Items 5.02 / 2.01 / 1.01) │
-│     └── AdzunaScraper     (free-tier API, once/day at noon UTC)     │
+│     ├── FormDScraper      (private raises, territory-filtered)      │
+│     └── AdzunaScraper     (title_only queries, 3 calls/day)         │
 │                                                                       │
 │     Two-pass dedup (URL hash → recent title match) before write       │
 │     Industry exclusion check (mining/steel/oil/hospitality/etc.)      │
@@ -352,9 +353,9 @@ loosen without A.J.
 
 **Supabase RLS posture (since 2026-07-21):** RLS is ENABLED on all `public` tables (`events`, `account_dispositions`, `source_status`) with **zero policies** — the anon key can neither read nor write anything; every component uses the service-role key. Two standing rules: (1) any NEW table must get `alter table public.<name> enable row level security;` right after creation or Supabase's security emails resume; (2) never create permissive policies (`for select using (true)` etc.) — the original setup had such policies dormant on `events`/`source_status`, and enabling RLS woke them up until we dropped all policies. Verify anytime with the anon-key probe (expect 0 rows/APIError on all tables).
 | `TAVILY_API_KEY` | `.env`, GitHub Secrets (optional) | Web search for company enrichment. Was leaked in git history (commit `ac17b5b`), rotated in commit `536b57d`. Never re-hardcode a fallback. |
-| `BRAVE_SEARCH_API_KEY` | `.env` (optional — NOT yet created) | Brave Search API fallback rung. Dormant until set. Free 2,000/mo. Signup at brave.com/search/api (card on file required, $0). Add via `scripts/add_brave_key.sh`. Google CSE is DEAD for new customers — don't resurrect it. |
+| *(no other search keys)* | — | ⛔ Brave = RESERVED for the Hermes fleet (never add here). Google CSE = closed to new customers (dead). SearXNG :8888 = fleet infra (severed). Only vetted future candidate if the scorecard shows sustained `throttled` starvation: SerpAPI free 100/mo — ask A.J. first. |
 | `ADZUNA_APP_ID` + `ADZUNA_APP_KEY` | `.env`, GitHub Secrets | Adzuna jobs API (free tier ~100-250 calls/month) |
-| `ANTHROPIC_API_KEY` | GitHub Secrets (optional) | Cloud-based LLM for enrichment fallback. If unset, enrichment uses local Ollama. |
+| `ANTHROPIC_API_KEY` | GitHub Secrets (optional) | Cloud-based LLM for enrichment fallback. If unset, enrichment uses the shared local llama.cpp (Qwen3.6, :8091). |
 | `DASHBOARD_PASSWORD` | Streamlit secrets | Dashboard login |
 | `EMAIL_PASSWORD` + `SENDER_EMAIL` | GitHub Secrets | Email alerts (legacy — currently unused) |
 
@@ -366,7 +367,7 @@ A single script — `monitor_health.py` — runs end-to-end diagnostics. Three m
 
 | Mode | Runtime | What it checks |
 |---|---|---|
-| `--quick` *(default)* | ~10s | env creds, Tavily API, Ollama, Supabase reachable, scrape freshness, enrichment lag, local SQLite, launchd job loaded |
+| `--quick` *(default)* | ~10s | env creds, Tavily API, local LLM (llama.cpp :8091), Supabase reachable, scrape freshness, enrichment lag, local SQLite, launchd job loaded |
 | `--daily` | ~30s | all of the above + source health (productive vs silent feeds) + 7-day-vs-prior volume trend |
 | `--weekly` | ~60s | all of the above + cleanup_legacy_events.py dry-run (catches new noise patterns) |
 
@@ -539,10 +540,10 @@ searches ONLY via its own Firecrawl stack and its own Tavily key. Never
 re-add a shared-infra or fleet-dependent rung.) →
 **Tavily** (budget-guarded, `TAVILY_MONTHLY_BUDGET`). If everything is
 empty, the event stays unenriched/flagged and gets retried on a later pass.
-Per-run usage printed in the summary line (cache/firecrawl/searxng/cse/
-tavily). KNOWN CORRELATION: Firecrawl + SearXNG both scrape from the Mac's
-single home IP — heavy bulk runs can CAPTCHA/throttle them TOGETHER
-(observed 2026-07-21: brave 429 + ddg/startpage CAPTCHA simultaneously).
+Per-run usage printed in the summary line (cache/firecrawl/tavily/
+throttled). KNOWN CONSTRAINT: Firecrawl's search scrapes Google from the
+Mac's single home IP — heavy bulk runs get it CAPTCHA'd/throttled, which
+is what the hourly cap + circuit breaker exist to prevent.
 The API-quota rungs (CSE, Tavily) are immune to IP reputation; that's why
 they sit last as the true safety net, and why bulk passes should stay
 paced rather than parallelized.
@@ -561,7 +562,7 @@ tier; tier 3 passes `no_search=True` through `enrich_one_company`.
 **IP-hygiene throttles (2026-08-09 — bulk bursts got the home IP blocked
 and broke the Hermes fleet's SearXNG too):**
 - `SCRAPE_HOURLY_CAP` (default 150) — cross-process sliding-window cap on
-  scraped searches (Firecrawl+SearXNG), persisted in the cache DB
+  scraped searches (Firecrawl), persisted in the cache DB
   (`scrape_calls` table) so launchd cycles + manual passes share it. Over
   cap → scrape rungs skipped, API rungs still run, counted as `throttled`
   in the run summary. Bulk passes stretch out instead of burning the IP.
@@ -604,7 +605,7 @@ var on any Hermes container that uses Tavily — or accept that those agents
 will stop working on web search until updated.
 
 ### Other dead ends / things that don't work
-- **Hermes gateway is messaging-only** — port 8084 on `hermes-sales` container is for Telegram/Discord, not an HTTP API. Use Ollama (localhost:11434) directly for LLM calls, not the Hermes gateway.
+- **Hermes gateway is messaging-only** — port 8084 on `hermes-sales` container is for messaging, not an HTTP API. Use the shared llama.cpp server (localhost:8091, OpenAI /v1) for LLM calls, not the Hermes gateway.
 - **X/Twitter monitoring** is not viable on free tier. X killed the free API in 2023. Public Nitter/RSSHub instances are unreliable. If A.J. revisits, options are $200/mo X Basic API or Apify scrapers ($20-100/mo).
 - **Indeed/ZipRecruiter/SimplyHired/Ladders/CFO.com** are all bot-blocked. The scraper code is left in `job_scraper.py` for reference but disabled in config. Adzuna replaces them.
 - **BusinessWire RSS** now requires a registered channel ID — the legacy URL returns 0 items. If A.J. wants BW back, he must sign up free at services.businesswire.com and add the generated URL to config.
