@@ -208,6 +208,67 @@ statuses drop >20%.
 re-gates the existing queue with zero paid search. Phases 2–4 (classify-then-research reorder,
 typed columns, yield monitoring, supply sources, accounts table) are in the plan file.
 
+### Phase 2 (2026-09-07) — classify-then-research, typed columns, yield monitoring
+
+**Enrichment order is now** extract → free gates (unchanged) → **STAGE A (free)**: structured
+SEC seeds → `AccountCache` firmographics → ONE article-only local-LLM pass that also returns
+`classification_confidence` (High/Medium/Low) → **early exit** (tombstone with ZERO searches)
+only on: structured SEC verdict, entity/name gates, `zi_subindustry=OTHER` at **High**
+confidence (`ARTICLE_OTHER_TOMBSTONE_MIN_CONFIDENCE='High'`, and the description must be >150
+chars — `ARTICLE_TOMBSTONE_MIN_DESCRIPTION_CHARS`), or the industry blocklist at High.
+Article-only HQ/revenue are hints, never grounds for a pre-search tombstone, and are never
+persisted to the AccountCache. → **STAGE B (budgeted)**: search only survivors, only for
+fields still unknown (`needs`), under the tier `SearchBudget`; a cached lookup costs no
+budget. → fit gates → probes → grade → write. Benchmark 2026-09-07 on 120 already-decided
+rows: P(out | OTHER-High) = 0.974, recall 0.62 — Medium is NOT safe (0.94) — do not lower it.
+
+**`verify_state`** (typed column, mirrors `fit.verdict`): `verified` (pass) ·
+`researched_ambiguous` (searched, still unknown; retried on a ladder: attempt 1 → +7d,
+attempt 2 → +30d, attempt 3 → stop = negative-cached until a NEW event arrives;
+`RETRY_BACKOFF_DAYS=(7, 30)`, `MAX_ENRICH_ATTEMPTS=3`) · `staged` (vertical unknown, not yet
+searched; retried free) · `decided` (rep) · `not_fit` (tombstoned). **Deferred/throttled
+passes never count as attempts** (only `fit.deferred_attempts` moves). Local LLM unreachable
+(ConnectionError/5xx — a slow Timeout is just a bad answer) → nothing stamped, `enrich_attempts+1`,
+`retry_after=+4h`; three consecutive → re-run the canary, stop only if it fails too.
+
+**Typed columns** (`src/pipeline/typed.py`, contract in its docstring): `source`, `account_key`,
+`fit_verdict`, `verify_state`, `hq_state`, `in_territory`, `vertical`, `zi_subindustry`,
+`revenue_segment`, `expires_at`, `sic`, `formd_*`, `enrich_attempts`, `retry_after`,
+`classification_confidence`, `classified_by`; `source_status.items_fetched/filtered_out`.
+**They do not exist until A.J. runs `supabase/migrations/002_v2_typed_columns.sql` in the
+Supabase SQL Editor**, then `venv/bin/python scripts/backfill_typed_columns.py` (dry-run) and
+`--apply` (fills NULLs only; relabels legacy Adzuna rows to `finance_seat_open`). Every
+writer/reader probes (`typed.probe_columns`) and runs JSON-only until then; `typed_payload`
+is fill-only (never writes NULL over a learned fact; `retry_after=None` is the one explicit
+clear). Enrichment selection honors `retry_after`/`enrich_attempts` when the columns exist.
+
+**Caches** (`src/pipeline/cache.py`, in `trigger_events.db`): `search_cache` keyed on
+`(account_key, kind)` with per-kind TTL (firmographic/zoominfo 90d, aum/complexity 180d,
+nonprofit_990 365d), `account_firmographics` with per-field TTL (hq/industry/url 365d, size
+180d, revenue 90d), and `negative_cache` (known-empty accounts, backoff 7/30/90d, rung-aware:
+a scrape-only empty never blocks a later paid attempt). A Firecrawl transport failure is a
+DEFER, never a known-empty. The legacy `firmographic_cache` table is dead (not migrated).
+Counters: `lookups` (once per search), `firecrawl_attempts` (HTTP calls), `negative_cache`.
+
+**Run safety**: `state/enrichment.lock` (flock; a second run exits 0) and `state/PAUSE`
+(`touch state/PAUSE` makes `run_enrichment.sh` skip runs — used while editing/migrating;
+delete it to resume). httpx request logging is silenced.
+
+**Monitoring (yield, not liveness)** — daily: `Source yield` (survivors per source, 7d vs prior
+21d; "went quiet" needs ≥12 prior survivors (Poisson: P(0|4/wk)=1.8%) and is REMEMBERED in
+`state/quiet_sources.json` until the feed recovers — delete the entry to silence by hand),
+`Fetched vs filtered` (needs `items_fetched`; a label is dead only when EVERY feed under it
+fetched 0), `Retry backlog` (typed columns only). Weekly: `Finance-leader source mix` (WARN
+only when the top source flips or moves >15 pts; baseline `state/finance_leader_mix.json`).
+`Local SQLite` now checks the AccountCache tables. The cleanup dry-run check is gone.
+
+**Sync**: sends `events.source` and the counters only when the live columns exist (probe per
+run); legacy Adzuna rows are relabeled `finance_seat_open` at sync time (idempotent); stale
+`source_status` rows (>60d, never a name the scraper reported this window) are reaped with
+their names logged (`--no-reap` keeps them). **Dashboard**: server-side `verify_state` filter
+when the column exists (NULL + `fit.verdict=pass` counts as verified — in-flight rows during
+the migration), legacy client-side path otherwise; hidden-count caption is window-wide.
+
 ## 1. Architecture (data flow)
 
 ```
@@ -444,9 +505,9 @@ A single script — `monitor_health.py` — runs end-to-end diagnostics. Three m
 
 | Mode | Runtime | What it checks |
 |---|---|---|
-| `--quick` *(default)* | ~10s | env creds, Tavily budget counter (local — never spends a credit), Firecrawl usefulness canary (→ `state/search_mode`), rep-state intact, local LLM (llama.cpp :8091), Supabase reachable, scrape freshness, enrichment lag, local SQLite (WARN when empty — authoritative DB lives in the GHA cache), launchd job loaded |
-| `--daily` | ~30s | all of the above + source health (productive vs silent feeds) + 7-day-vs-prior volume trend |
-| `--weekly` | ~60s | all of the above + cleanup_legacy_events.py dry-run (catches new noise patterns) |
+| `--quick` *(default)* | ~10s | env creds, Tavily budget counter (local — never spends a credit), Firecrawl usefulness canary (→ `state/search_mode`), rep-state intact, local LLM (llama.cpp :8091), Supabase reachable, scrape freshness, enrichment lag, local SQLite (checks the AccountCache tables; the scrape DB lives in the GHA cache by design), launchd job loaded |
+| `--daily` | ~30s | all of the above + source health + 7-day-vs-prior volume trend + **source yield** (survivors per source 7d vs prior 21d, quiet feeds remembered in `state/quiet_sources.json`) + fetched-vs-filtered + retry backlog |
+| `--weekly` | ~60s | all of the above + **finance-leader source mix** (WARNs only on a change vs `state/finance_leader_mix.json`) |
 
 Each check returns 🟢 PASS / 🟡 WARN / 🔴 FAIL with a one-liner. **Exit code is non-zero if any FAIL**, so cron and Elon can detect failures programmatically.
 
@@ -553,6 +614,11 @@ source venv/bin/activate
 | Manual scrape cycle (locally, mirrors GitHub Actions) | `python -m src.main` |
 | Enrich only NEW events | `python enrichment_scout.py` |
 | Re-grade ALL events (free, no search API) | `python enrichment_scout.py --regrade-only` |
+| Re-grade one event type (free) | `python enrichment_scout.py --regrade-only --event-type finance_seat_open` |
+| **Pause / resume the launchd enrichment runs** | `touch state/PAUSE` … `rm state/PAUSE` (wrapper skips runs while the file exists) |
+| **Typed-column migration (one-time, A.J.)** | paste `supabase/migrations/002_v2_typed_columns.sql` into Supabase → SQL Editor → Run; then `python scripts/backfill_typed_columns.py` (dry-run) and `--apply` |
+| Re-verify hidden accounts (ranked, capped 50, honors retry_after) | `python enrichment_scout.py --re-enrich --reverify-unverified` |
+| Re-gate the queue with zero paid search | `python scripts/migrate_v2.py` (dry-run) / `--apply` |
 | Full re-enrich (hits Firecrawl by default; Tavily only on fallbacks ~3%) | `python enrichment_scout.py --re-enrich` |
 | Cleanup industry leaks + dupes (dry-run) | `python cleanup_legacy_events.py` |
 | Cleanup — actually delete | `python cleanup_legacy_events.py --apply` |
@@ -589,10 +655,10 @@ fallback. Configured via `SEARCH_BACKEND` env var: `firecrawl` (default) or
 we were hitting the cap. Firecrawl is already running on A.J.'s Mac Studio
 (for Scout), self-hosted, no quota.
 
-**Persistent SQLite cache** layered on top: same company name within 30 days
-doesn't re-search. Roughly 30-50% reduction in actual search calls when
-companies recur across events. Cache key = `(company_name + industry_hint).lower()`,
-stored in `trigger_events.db` → `firmographic_cache` table.
+**Persistent SQLite cache** layered on top (Phase 2, 2026-09-07 — `src/pipeline/cache.py`):
+`search_cache` keyed on `(account_key, kind)` with per-kind TTL (90d firmographic), plus
+`account_firmographics` (per-field TTL) and `negative_cache` (known-empty accounts, 7/30/90d
+backoff). The pre-Phase-2 `firmographic_cache` table (name+hint key, 30d) is no longer read.
 
 **ZoomInfo-style aggregator probe (2026-08-06)**: when the general search
 leaves hq/revenue/size unknown, `enrich_one_company` fires ONE follow-up
@@ -700,6 +766,8 @@ Today's session (commit `14157c2` and back, in chronological order):
 
 | Commit | What |
 |---|---|
+| *(2026-09-07, Phase 2)* | Classify-then-research reorder, typed columns (+migration 002, backfill), AccountCache + negative cache, run lock + PAUSE, LLM-outage handling, yield monitoring, sync source column/relabel/reaper, dashboard server-side verify_state filter — see §0b |
+| `747d54d` | v2 Phase 1: cheap-first gates, hard exclusions, rationed search, honest 'unknown' (2026-09-07) |
 | `6cd73c5` | Rebuilt SEC 8-K scraper using EFTS search API + added PR Newswire Personnel/M&A feeds |
 | `83cb1ca` | Expanded mega-bank exclusion list + added `cleanup_legacy_events.py` |
 | `55edb64` | gitignored logs/ |

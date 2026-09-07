@@ -2,12 +2,21 @@
 """
 enrichment_scout.py — Multi-company enrichment for trigger events.
 
-For every event, this script:
-  1. Reads the title + description and asks an LLM to identify ALL companies
-     involved and their roles (Acquirer/Target, Investor/Portfolio Co., etc.)
-  2. Searches Tavily for each company's firmographic data
-  3. Uses an LLM to extract: website URL, industry, employee size, HQ, LinkedIn
-  4. Writes the full list as a JSONB array to events.companies_data in Supabase
+For every event, this script (Phase 2 order, 2026-09-07 — CLASSIFY, then
+RESEARCH; every free signal is consumed before a search is spent):
+  1. Reads the title + description and asks the local LLM to identify ALL
+     companies involved and their roles (Acquirer/Target, Portfolio Co., etc.)
+  2. Free gates: board-only, junk names, workable role, rep verdicts,
+     structured SEC facts, entity shape — no LLM firmographics, no search.
+  3. STAGE A (free): per company, structured seeds (SEC filer state, Form D
+     revenue) → account firmographic cache → ONE article-only LLM pass that
+     classifies zi_subindustry/hq with a confidence. A High-confidence OTHER
+     (or a structured 'out') tombstones the event with ZERO searches.
+  4. STAGE B (budgeted): survivors with something left to learn get the
+     Firecrawl/Tavily ladder (SearchBudget per tier), merged fill-if-missing.
+  5. Fit gates → probes → TAL grading → write companies_data / fit / grade,
+     plus the Phase 2 typed columns (verify_state, retry_after, …) when the
+     migration has been run — probed at start, JSON-only otherwise.
 
 LLM backend (auto-selected):
   - If ANTHROPIC_API_KEY is set → uses claude-3-5-haiku (fast, cloud, works in CI)
@@ -25,20 +34,27 @@ Supabase migration (run once in SQL Editor before first use):
     ALTER TABLE events ADD COLUMN IF NOT EXISTS enriched_at    TIMESTAMPTZ;
 
 Usage:
-    python enrichment_scout.py                  # Enrich all unenriched events
+    python enrichment_scout.py                  # Enrich unenriched events (retry_after honoured)
     python enrichment_scout.py --limit 10       # Process up to 10 events
     python enrichment_scout.py --re-enrich      # Re-enrich already-enriched events
-    python enrichment_scout.py --dry-run        # Preview without writing to Supabase
+    python enrichment_scout.py --re-enrich --reverify-unverified   # staged/ambiguous, ranked, ≤50
+    python enrichment_scout.py --regrade-only --event-type finance_seat_open  # free regrade
+    python enrichment_scout.py --dry-run        # No searches, no writes (local LLM still runs)
+
+A single-instance run lock (state/enrichment.lock) makes an overlapping
+launchd + terminal run exit 0 instead of double-spending the search budget.
 """
 
 import os
+import re
 import sys
+import copy
 import json
 import time
 import sqlite3
 import argparse
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict
 import subprocess
@@ -52,6 +68,16 @@ from src.pipeline.gates import (  # noqa: E402
     hq_territory_status as _gates_hq_status, is_non_operating_entity,
     is_bad_company_name, sic_to_verdict, formd_to_verdict,
     account_key as _gates_account_key,
+)
+# Phase 2 (2026-09-07): account-keyed search/firmographic/negative cache,
+# single-instance run lock, and the typed-column layer (probed per run —
+# the migration is a manual step A.J. runs later; JSON-only until then).
+from src.pipeline.cache import AccountCache  # noqa: E402
+from src.pipeline.runlock import RunLock  # noqa: E402
+from src.pipeline.typed import (  # noqa: E402
+    TYPED_EVENT_COLUMNS, probe_columns, verify_state_for, retry_after_for,
+    llm_retry_after, typed_payload, not_fit_payload, MAX_ENRICH_ATTEMPTS,
+    LLM_RETRY_HOURS,
 )
 
 # ── .env ─────────────────────────────────────────────────────────────────────
@@ -89,6 +115,31 @@ SCOUT_CONTAINER   = os.environ.get('SCOUT_CONTAINER', 'hermes-sales')
 # CACHE_TTL_DAYS doesn't re-search — saves time + quota for repeat companies.
 CACHE_DB_PATH      = os.environ.get('CACHE_DB_PATH', 'trigger_events.db')
 CACHE_TTL_DAYS     = int(os.environ.get('CACHE_TTL_DAYS', '30'))
+
+# Article-first classification (Phase 2, 2026-09-07). When the article-only
+# LLM pass says a company is OTHER (off-vertical), how sure must it be before
+# the event is tombstoned WITHOUT spending a search? 'High' (default) |
+# 'Medium' | 'never' (always research an OTHER). A benchmark decides the
+# final value; a structured SEC 'out' verdict tombstones regardless.
+# Benchmark 2026-09-07 (120 decided rows): P(out | OTHER-High) = 0.974, so
+# 'High' stays. Guard added on review the same day: an article-only OTHER
+# may tombstone only when the article gave the model something to read —
+# a description LONGER than ARTICLE_TOMBSTONE_MIN_DESCRIPTION_CHARS. A
+# one-line stub ("X names Y as CFO") earns High confidence from the name
+# alone; those fall through to Stage B. Structured SEC 'out' is unaffected.
+ARTICLE_OTHER_TOMBSTONE_MIN_CONFIDENCE = 'High'
+ARTICLE_TOMBSTONE_MIN_DESCRIPTION_CHARS = 150
+
+# Local-LLM availability (Phase 2). llama.cpp being DOWN is not the same as it
+# answering badly: a connection error or a 5xx flips 'unavailable' (a read
+# timeout does NOT — the shared server is alive, just busy; review
+# 2026-09-07); any successful llm_json() clears it. enrich_events() runs a
+# canary before touching the queue and re-checks after every event — an
+# unavailable event is neither stamped nor tombstoned, only pushed out by
+# LLM_RETRY_HOURS. LLM_UNAVAILABLE_STOP_AFTER consecutive ones re-run the
+# canary and end the run only if the canary fails too.
+LLM_STATE = {'unavailable': False, 'consecutive': 0}
+LLM_UNAVAILABLE_STOP_AFTER = 3
 
 RATE_LIMIT_SECONDS = 1.2
 
@@ -532,6 +583,10 @@ logging.basicConfig(
     format='%(asctime)s  %(message)s',
     datefmt='%H:%M:%S'
 )
+# httpx (the Supabase client's transport) logs every request at INFO, so
+# probe_columns alone printed 19 'HTTP Request … 400' lines per run while it
+# discovers which typed columns exist (review 2026-09-07). Warnings still show.
+logging.getLogger('httpx').setLevel(logging.WARNING)
 log = logging.getLogger(__name__)
 
 
@@ -558,12 +613,21 @@ def llm_json(prompt: str, max_tokens: int = 600) -> dict:
     if ANTHROPIC_API_KEY:
         result = _anthropic_json(prompt, max_tokens)
         if result:
+            LLM_STATE['unavailable'] = False
             return result
     result = _llamacpp_json(prompt, max_tokens)
     if result:
+        LLM_STATE['unavailable'] = False
         return result
     log.warning('  llama.cpp empty/unreachable — falling back to Scout agent')
-    return _scout_json(prompt, max_tokens)
+    result = _scout_json(prompt, max_tokens)
+    if result:
+        LLM_STATE['unavailable'] = False
+    elif LLM_STATE['unavailable']:
+        # Scout shares the same local server, so its failure confirms the
+        # outage rather than covering it — leave 'unavailable' set.
+        log.warning('  Scout fallback also failed — local LLM treated as unavailable')
+    return result
 
 
 def _anthropic_json(prompt: str, max_tokens: int) -> dict:
@@ -615,7 +679,15 @@ def _loads_json_object(text: str) -> dict:
 
 
 def _llamacpp_json(prompt: str, max_tokens: int) -> dict:
-    """Primary: local llama.cpp OpenAI-compatible endpoint, JSON mode, non-thinking."""
+    """Primary: local llama.cpp OpenAI-compatible endpoint, JSON mode, non-thinking.
+
+    Availability bookkeeping (Phase 2): ONLY a connection error or a 5xx
+    marks the server UNAVAILABLE (LLM_STATE) so the run can stop stamping
+    rows. A READ timeout is a slow-but-alive shared server (the fleet's
+    agents queue on the same :8091) — that is a bad answer for this prompt,
+    not an outage, so it returns {} without the flag (review 2026-09-07).
+    ConnectTimeout is a ConnectionError subclass in requests and stays an
+    outage. A 200 whose body doesn't parse is likewise just a bad answer."""
     try:
         resp = requests.post(
             f'{LLAMACPP_URL}/v1/chat/completions',
@@ -628,6 +700,21 @@ def _llamacpp_json(prompt: str, max_tokens: int) -> dict:
             },
             timeout=90
         )
+    except requests.exceptions.ConnectionError as e:
+        LLM_STATE['unavailable'] = True
+        log.warning(f'  llama.cpp unreachable: {e}')
+        return {}
+    except requests.exceptions.Timeout as e:
+        log.warning(f'  llama.cpp timed out (server busy, not down): {e}')
+        return {}
+    except Exception as e:
+        log.warning(f'  llama.cpp error: {e}')
+        return {}
+    if resp.status_code >= 500:
+        LLM_STATE['unavailable'] = True
+        log.warning(f'  llama.cpp HTTP {resp.status_code} — server unavailable')
+        return {}
+    try:
         resp.raise_for_status()
         return _loads_json_object(resp.json()['choices'][0]['message']['content'])
     except Exception as e:
@@ -710,14 +797,26 @@ def check_columns(client):
             'not persist until you run:\n'
             '  ALTER TABLE events ADD COLUMN IF NOT EXISTS fit JSONB;'
         )
+    # Phase 2 typed columns (002_v2_typed_columns.sql). A.J. runs the
+    # migration by hand later, so every writer filters its typed payload to
+    # this set and the JSON-only path is untouched until then.
+    exists['typed'] = probe_columns(client, 'events', TYPED_EVENT_COLUMNS)
+    if exists['typed']:
+        log.info(f'typed columns present: {len(exists["typed"])}/{len(TYPED_EVENT_COLUMNS)}')
+    else:
+        log.info('typed columns absent — JSON-only mode (run 002_v2_typed_columns.sql to enable)')
     return exists
 
 
-def _soft_delete(client, event_id: str, reason: str, extra: dict = None) -> None:
+def _soft_delete(client, event_id: str, reason: str, extra: dict = None,
+                 typed: dict = None) -> None:
     """Tombstone an event: sets blocked_at (hidden from dashboard, immune to
     supabase_sync resurrection) + enriched_at (skipped by future enrichment).
     `extra` (e.g. companies_data / fit) is persisted too so paid research is
     never thrown away (v1 discarded it for ~52% of tombstones).
+    `typed` (Phase 2) is the typed-column half — already filtered to the
+    columns that exist (see _tombstone_typed) — merged verbatim, None values
+    included, because a None there CLEARS a stale retry_after.
     Falls back to hard DELETE only if the blocked_at column is missing."""
     payload = {
         'blocked_at':     datetime.utcnow().isoformat(),
@@ -727,6 +826,7 @@ def _soft_delete(client, event_id: str, reason: str, extra: dict = None) -> None
     for k, v in (extra or {}).items():
         if v is not None:
             payload[k] = v
+    payload.update(typed or {})
     try:
         client.table('events').update(payload).eq('id', event_id).execute()
     except Exception as e:
@@ -854,10 +954,18 @@ def _build_search_query(company_name: str, industry_hint: str = '') -> str:
     )
 
 
-def _firecrawl_search(company_name: str, industry_hint: str = '') -> dict:
+def _firecrawl_search(company_name: str, industry_hint: str = ''):
     """Search via local self-hosted Firecrawl. Returns dict in the Tavily
     response shape so downstream code doesn't change. Free, unlimited,
-    private. Default backend."""
+    private. Default backend.
+
+    Return contract (review 2026-09-07): a dict ONLY when Firecrawl actually
+    ANSWERED — a genuine zero-result answer is {'answer': '', 'results': []}.
+    None means it did not answer (connection error, timeout, non-2xx,
+    success=false) and the caller must treat that like a throttle: the old
+    {} on every failure made tavily_search negative-cache the account for
+    7/30/90 days, so a 12-hour Firecrawl outage stamped 'known empty' on
+    every account it touched."""
     query = _build_search_query(company_name, industry_hint)
     try:
         resp = requests.post(
@@ -867,33 +975,38 @@ def _firecrawl_search(company_name: str, industry_hint: str = '') -> dict:
         )
         resp.raise_for_status()
         data = resp.json()
-        if not data.get('success'):
-            log.warning(f'  Firecrawl returned success=false for "{company_name}"')
-            return {}
-        # Adapt Firecrawl response → Tavily-shaped envelope
-        results = data.get('data') or []
-        return {
-            'answer':  '',  # Firecrawl doesn't summarize like Tavily; leave blank
-            'results': [
-                {
-                    'title':   r.get('title', ''),
-                    'url':     r.get('url', ''),
-                    # Firecrawl uses 'description'; Tavily extractor reads 'content'
-                    'content': (r.get('description') or '')[:400],
-                }
-                for r in results
-            ]
-        }
     except Exception as e:
-        log.warning(f'  Firecrawl error for "{company_name}": {e}')
-        return {}
+        log.warning(f'  Firecrawl did not answer for "{company_name}": {e}')
+        return None
+    if not isinstance(data, dict) or not data.get('success'):
+        log.warning(f'  Firecrawl returned success=false for "{company_name}" '
+                    f'— treated as no answer, not as empty')
+        return None
+    # Adapt Firecrawl response → Tavily-shaped envelope
+    results = data.get('data') or []
+    return {
+        'answer':  '',  # Firecrawl doesn't summarize like Tavily; leave blank
+        'results': [
+            {
+                'title':   r.get('title', ''),
+                'url':     r.get('url', ''),
+                # Firecrawl uses 'description'; Tavily extractor reads 'content'
+                'content': (r.get('description') or '')[:400],
+            }
+            for r in results
+        ]
+    }
 
 
-def _tavily_search(company_name: str, industry_hint: str = '') -> dict:
+def _tavily_search(company_name: str, industry_hint: str = ''):
     """Search Tavily — kept as fallback when SEARCH_BACKEND='tavily' OR
-    Firecrawl is unreachable. Costs quota; use sparingly."""
+    Firecrawl is unreachable. Costs quota; use sparingly.
+
+    Same contract as _firecrawl_search (review 2026-09-07): None when Tavily
+    did not answer (no key, transport error, non-2xx) — never {} — so a
+    failed paid call can't be recorded as a 'paid' negative-cache strike."""
     if not TAVILY_API_KEY:
-        return {}
+        return None
     query = _build_search_query(company_name, industry_hint)
     try:
         resp = requests.post(
@@ -908,13 +1021,19 @@ def _tavily_search(company_name: str, industry_hint: str = '') -> dict:
             timeout=20
         )
         resp.raise_for_status()
-        return resp.json()
+        data = resp.json()
     except Exception as e:
-        log.warning(f'  Tavily error for "{company_name}": {e}')
-        return {}
+        log.warning(f'  Tavily did not answer for "{company_name}": {e}')
+        return None
+    return data if isinstance(data, dict) else None
 
 
-# ── Persistent search cache ─────────────────────────────────────────────────
+# ── Persistent search cache (LEGACY) ────────────────────────────────────────
+# Superseded by AccountCache (src/pipeline/cache.py) 2026-09-07: the key here
+# is name||free-text hint, so the same account rarely hit twice and an empty
+# result was re-searched on every event. _cache_get/_cache_set are kept for
+# reference/rollback but are NO LONGER CALLED. The 3,469-row legacy
+# firmographic_cache table is not migrated — cold start accepted.
 
 def _cache_key(company_name: str, industry_hint: str = '') -> str:
     """Normalized cache key — case + whitespace insensitive."""
@@ -987,14 +1106,37 @@ def _cache_set(company_name: str, industry_hint: str, results: dict) -> None:
 # The main loop reads these when printing the final summary.
 # NOTE: no Brave rung, ever — the Hermes fleet's search depends on Brave
 # and a TeamAlbert consumer would collide with it (A.J. 2026-08-09).
-SEARCH_COUNTS: Dict[str, int] = {'cache': 0, 'firecrawl': 0,
-                                 'tavily': 0, 'throttled': 0}
+# 'lookups' = tavily_search calls that ENTERED the backend ladder (past the
+# cache, the negative cache and the budget) — exactly one per call, so a
+# Firecrawl→Tavily fallback is one lookup, not two (review 2026-09-07: the
+# old summary summed the rungs and double-counted every fallback).
+# 'firecrawl' counts lookups that reached Firecrawl; 'firecrawl_attempts'
+# counts HTTP attempts (the empty-retry adds one); 'tavily' counts paid
+# attempts; 'transport_failed' = a backend that did not ANSWER (connection
+# error / non-2xx / success=false) — deferred, never a known empty.
+# 'negative_cache' = lookups answered "known empty" without a search.
+SEARCH_COUNTS: Dict[str, int] = {'lookups': 0, 'cache': 0, 'negative_cache': 0,
+                                 'firecrawl': 0, 'firecrawl_attempts': 0,
+                                 'tavily': 0, 'throttled': 0,
+                                 'transport_failed': 0, 'budget_skipped': 0}
 
 
 def reset_search_counts() -> None:
     """Zero the SEARCH_COUNTS dict — call at the start of each run."""
     for k in SEARCH_COUNTS:
         SEARCH_COUNTS[k] = 0
+
+
+_ACCOUNT_CACHE = {'obj': None, 'path': None}
+
+
+def _account_cache() -> AccountCache:
+    """Module-level lazy AccountCache on CACHE_DB_PATH — re-opened when the
+    path changes (tests point CACHE_DB_PATH at a temp file)."""
+    if _ACCOUNT_CACHE['obj'] is None or _ACCOUNT_CACHE['path'] != CACHE_DB_PATH:
+        _ACCOUNT_CACHE['obj'] = AccountCache(CACHE_DB_PATH)
+        _ACCOUNT_CACHE['path'] = CACHE_DB_PATH
+    return _ACCOUNT_CACHE['obj']
 
 
 # Monthly Tavily budget guard — free tier is 1000 calls/month. The 2026-07-16
@@ -1205,6 +1347,9 @@ class SearchBudget:
         self.used += 1
         return True
 
+    def exhausted(self) -> bool:
+        return self.used >= self.max_searches
+
 
 _BUDGET = {'obj': SearchBudget(1)}   # default: standalone callers keep full access
 
@@ -1225,7 +1370,7 @@ def _note_scrape_outcome(got_results: bool) -> None:
 
 
 def tavily_search(company_name: str, industry_hint: str = '',
-                  paid_ok: bool = True) -> dict:
+                  paid_ok: bool = True, kind: str = None) -> dict:
     """Public search interface. Despite the legacy name, dispatches to the
     configured SEARCH_BACKEND (firecrawl by default) with persistent caching.
     Function name kept for backwards-compat with the rest of the file.
@@ -1236,42 +1381,74 @@ def tavily_search(company_name: str, industry_hint: str = '',
     the monthly budget AND daily ration have room. When the scrape rungs are
     unavailable (cap / breaker / defer mode) the call returns
     {'deferred': True} so the event waits for a free retry instead of
-    escalating to paid quota."""
-    # Cache check first — saves cost regardless of backend
-    cached = _cache_get(company_name, industry_hint)
+    escalating to paid quota.
+
+    Phase 2 (2026-09-07): results are keyed on account_key(company_name) +
+    `kind` in the AccountCache (hit → no search), then the NEGATIVE cache is
+    consulted — a known empty returns {} (NOT deferred: we looked, there is
+    nothing) so an unfindable account stops costing a search per event —
+    then the budget/rung ladder runs as before. A genuine empty is recorded
+    at rung 'scrape' or 'paid' so a free miss never blocks a later paid try.
+
+    Review 2026-09-07: only a backend that actually ANSWERED with zero
+    results records an empty. A rung that did not answer (None from the
+    backend helper — transport error, non-2xx, success=false) is treated
+    like a throttle: it feeds the circuit breaker and the call returns
+    {'deferred': True}, so an outage can never poison the negative cache."""
+    if kind is None:
+        kind = 'zoominfo' if industry_hint == 'zoominfo' else 'firmographic'
+    key = _gates_account_key(company_name)
+    cache = _account_cache()
+    cached = cache.get_search(key, kind) if key else None
     if cached:
         SEARCH_COUNTS['cache'] += 1
         return cached
 
     budget = _BUDGET['obj']
-    if not budget.take():
-        SEARCH_COUNTS['budget_skipped'] = SEARCH_COUNTS.get('budget_skipped', 0) + 1
-        return {}
     paid_allowed = (paid_ok and budget.allow_paid and bool(TAVILY_API_KEY)
                     and not _search_mode_defer())
+    if key and cache.should_skip(key, kind, want_paid=paid_allowed):
+        SEARCH_COUNTS['negative_cache'] += 1
+        return {}
+    if not budget.take():
+        SEARCH_COUNTS['budget_skipped'] += 1
+        return {}
+    # One lookup per call that enters the ladder, whatever rungs it climbs
+    # (the summary's 'Searches:' figure — review 2026-09-07).
+    SEARCH_COUNTS['lookups'] += 1
 
+    def _defer():
+        budget.deferred = True
+        return {'deferred': True}
+
+    scrape_ran = tavily_ran = False   # a rung ANSWERED (empty or not)
     # Backend dispatch
     if SEARCH_BACKEND == 'tavily':
         if not (paid_allowed and _tavily_budget_ok()):
             return {}
         SEARCH_COUNTS['tavily'] += 1
         results = _tavily_search(company_name, industry_hint)
-        if results and results.get('results'):
+        if results is None:
+            SEARCH_COUNTS['transport_failed'] += 1
+            return _defer()
+        tavily_ran = True
+        if results.get('results'):
             _tavily_month_count(increment=True)
             _tavily_day_count(increment=True)
     elif SEARCH_BACKEND == 'firecrawl':
         results = {}
         scrape_ran = _scrape_rungs_available()
         if scrape_ran:
-            SEARCH_COUNTS['firecrawl'] += 1
+            SEARCH_COUNTS['firecrawl'] += 1            # one lookup …
+            SEARCH_COUNTS['firecrawl_attempts'] += 1   # … one or two attempts
             _scrape_budget_ok(record=True)
             results = _firecrawl_search(company_name, industry_hint)
-            if not results or not results.get('results'):
+            if results is None or not results.get('results'):
                 # Empty Firecrawl during bulk runs is usually TRANSIENT
                 # upstream rate-limiting. One short wait + retry recovers
                 # most of them for free.
                 time.sleep(2.5)
-                SEARCH_COUNTS['firecrawl'] += 1
+                SEARCH_COUNTS['firecrawl_attempts'] += 1
                 _scrape_budget_ok(record=True)
                 results = _firecrawl_search(company_name, industry_hint)
             # NO SearXNG rung — the shared :8888 instance is FLEET
@@ -1280,39 +1457,64 @@ def tavily_search(company_name: str, industry_hint: str = '',
             # schedule exactly; fleet had to move to Brave 2026-08-14).
             # This pipeline searches only via its own Firecrawl stack and
             # its own Tavily key. Never re-add shared-infra rungs.
-            _note_scrape_outcome(bool(results and results.get('results')))
+            if results is None:
+                # Firecrawl did not answer (both attempts). Counts toward
+                # the breaker — a dead backend opens it after
+                # _BREAKER_THRESHOLD lookups — but is NOT a known empty and
+                # never escalates to paid quota: the event waits.
+                SEARCH_COUNTS['transport_failed'] += 1
+                _note_scrape_outcome(False)
+                return _defer()
+            _note_scrape_outcome(bool(results.get('results')))
         else:
-            SEARCH_COUNTS['throttled'] = SEARCH_COUNTS.get('throttled', 0) + 1
+            SEARCH_COUNTS['throttled'] += 1
         # Tavily fallback — ONLY after a genuine Firecrawl empty (never as a
         # substitute for a throttled scrape), only for tier-1 firmographic
         # lookups, only within the monthly budget AND the daily ration.
-        if (paid_allowed and scrape_ran
-                and (not results or not results.get('results'))):
+        if paid_allowed and scrape_ran and not results.get('results'):
             if _tavily_budget_ok():
                 log.info('  → Firecrawl empty, falling back to Tavily')
                 SEARCH_COUNTS['tavily'] += 1
-                results = _tavily_search(company_name, industry_hint)
-                if results and results.get('results'):
-                    _tavily_month_count(increment=True)
-                    _tavily_day_count(increment=True)
+                paid = _tavily_search(company_name, industry_hint)
+                if paid is None:
+                    # The paid rung did not answer; Firecrawl's genuine
+                    # empty still stands, at the 'scrape' rung only.
+                    SEARCH_COUNTS['transport_failed'] += 1
+                else:
+                    tavily_ran = True
+                    results = paid
+                    if results.get('results'):
+                        _tavily_month_count(increment=True)
+                        _tavily_day_count(increment=True)
             else:
                 log.info(f'  → Firecrawl empty; Tavily ration exhausted '
                          f'(month {_tavily_month_count()}/{TAVILY_MONTHLY_BUDGET}, '
                          f'today {_tavily_day_count()}/{TAVILY_DAILY_RATION}) — deferring')
-                budget.deferred = True
-                return {'deferred': True}
-        if not scrape_ran and not (results and results.get('results')):
+                return _defer()
+        if not scrape_ran and not results.get('results'):
             # Throttled/defer mode: this is NOT 'searched and found nothing'.
             # Signal DEFER so the event is retried free on a later run.
-            budget.deferred = True
-            return {'deferred': True}
+            return _defer()
     else:
         log.warning(f'  Unknown SEARCH_BACKEND={SEARCH_BACKEND!r}, defaulting to firecrawl')
         SEARCH_COUNTS['firecrawl'] += 1
+        SEARCH_COUNTS['firecrawl_attempts'] += 1
         results = _firecrawl_search(company_name, industry_hint)
+        if results is None:
+            SEARCH_COUNTS['transport_failed'] += 1
+            _note_scrape_outcome(False)
+            return _defer()
+        scrape_ran = True
 
-    if results and results.get('results'):
-        _cache_set(company_name, industry_hint, results)
+    if results.get('results'):
+        if key:
+            cache.set_search(key, kind, results)
+            cache.clear_negative(key, kind)
+    elif key and (scrape_ran or tavily_ran):
+        # Genuine empty — a rung actually ANSWERED and found nothing.
+        # Recorded at the highest rung that struck out; the ladder
+        # (7/30/90d) lives in the cache module.
+        cache.record_empty(key, kind, rung='paid' if tavily_ran else 'scrape')
     return results
 
 
@@ -1403,7 +1605,10 @@ figure was found (e.g. 'https://www.crunchbase.com/organization/acme'). \
 Must be one of the URLs in the search results above. null if revenue is null.",
   "hq":       "City, ST abbreviation (e.g. 'Boston, MA' or 'Toronto, ON'), \
 US/Canada only unless clearly elsewhere — or null",
-  "linkedin": "full https://www.linkedin.com/company/... URL or null"
+  "linkedin": "full https://www.linkedin.com/company/... URL or null",
+  "classification_confidence": "High|Medium|Low — how sure you are of \
+zi_subindustry given the evidence (High only when the company's business is \
+explicitly described)"
 }}'''
 
 
@@ -1468,16 +1673,26 @@ def _parse_hq_size_from_snippets(results: list) -> dict:
 
 def enrich_one_company(company_name: str, industry_hint: str = '',
                        article_context: str = '',
-                       no_search: bool = False) -> dict:
+                       no_search: bool = False,
+                       require_search: bool = False) -> dict:
+    """Firmographics for one company. `no_search=True` is the Phase 2 Stage A
+    article-only pass (one local LLM call, zero searches); `require_search`
+    makes an empty/deferred search return without an LLM call (Stage B —
+    the article was already read in Stage A, re-reading it learns nothing).
+    Adds `classification_confidence` (High|Medium|Low|None) and
+    `classified_by` ('article' | 'search') to the returned dict."""
+    classified_by = 'article' if no_search else 'search'
     empty = {'url': None, 'industry': None, 'zi_subindustry': None,
              'size': None, 'revenue': None,
-             'revenue_source': None, 'hq': None, 'linkedin': None}
+             'revenue_source': None, 'hq': None, 'linkedin': None,
+             'classification_confidence': None, 'classified_by': classified_by}
 
     search = {} if no_search else tavily_search(company_name, industry_hint)
     deferred = bool(search.get('deferred'))
     if deferred:
         search = {}
-    if not search.get('results') and not (article_context or '').strip():
+    if not search.get('results') and (require_search
+                                      or not (article_context or '').strip()):
         return dict(empty, deferred=deferred)  # nothing to extract from at all
 
     lines = []
@@ -1560,6 +1775,8 @@ def enrich_one_company(company_name: str, industry_hint: str = '',
         zi_val = 'OTHER' if zi_raw.upper() == 'OTHER' else zi_raw
     else:
         zi_val = None
+    conf_raw = str(data.get('classification_confidence') or '').strip().title()
+    conf_val = conf_raw if conf_raw in ('High', 'Medium', 'Low') else None
 
     return {
         'url':            data.get('url')      or None,
@@ -1570,6 +1787,8 @@ def enrich_one_company(company_name: str, industry_hint: str = '',
         'revenue_source': revenue_src,
         'hq':             data.get('hq')       or None,
         'linkedin':       data.get('linkedin') or None,
+        'classification_confidence': conf_val,
+        'classified_by':  classified_by,
         'deferred':       deferred,
     }
 
@@ -1931,7 +2150,8 @@ def probe_funding_history(company_name: str) -> str:
     """Search for funding events (rubric: #Funding = verified within last
     18 months). Returns a compact evidence block ('' if nothing)."""
     try:
-        res = tavily_search(company_name, 'funding round investment raised', paid_ok=False)
+        res = tavily_search(company_name, 'funding round investment raised',
+                            paid_ok=False, kind='funding_history')
         hits = (res or {}).get('results') or []
         if not hits:
             return ''
@@ -1951,7 +2171,8 @@ def probe_aum(company_name: str) -> str:
     """Search for AUM/AUA evidence for asset managers (rubric:
     #AssetManagerScale). Returns a compact evidence block ('' if nothing)."""
     try:
-        res = tavily_search(company_name, 'AUM assets under management funds', paid_ok=False)
+        res = tavily_search(company_name, 'AUM assets under management funds',
+                            paid_ok=False, kind='aum')
         hits = (res or {}).get('results') or []
         if not hits:
             return ''
@@ -1977,7 +2198,8 @@ def probe_complexity(company_name: str) -> str:
     this ("has locations in the United States, Canada, ..."), as do the
     companies' own locations/franchise pages. Returns '' if nothing."""
     try:
-        res = tavily_search(company_name, 'locations offices subsidiaries franchise', paid_ok=False)
+        res = tavily_search(company_name, 'locations offices subsidiaries franchise',
+                            paid_ok=False, kind='complexity')
         hits = (res or {}).get('results') or []
         if not hits:
             return ''
@@ -1999,7 +2221,33 @@ def probe_nonprofit_990(company_name: str) -> str:
     """ProPublica Nonprofit Explorer (free, no key): find the org, pull its
     latest Form 990 financials. This is the rubric's required NPO source —
     990 revenue + filing history evidence complexity and revenue band.
-    Returns a compact evidence block ('' if no match)."""
+    Returns a compact evidence block ('' if no match).
+
+    Not a web search, so it never touches the SearchBudget — but the block
+    rides the AccountCache at kind 'nonprofit_990' (990s are annual) and a
+    confirmed no-match is negative-cached so the same org isn't looked up
+    on every event."""
+    key = _gates_account_key(company_name)
+    cache = _account_cache()
+    hit = cache.get_search(key, 'nonprofit_990') if key else None
+    if hit:
+        SEARCH_COUNTS['cache'] += 1
+        return ((hit.get('results') or [{}])[0].get('content') or '')
+    if key and cache.should_skip(key, 'nonprofit_990'):
+        SEARCH_COUNTS['negative_cache'] += 1
+        return ''
+    block = _propublica_990(company_name)
+    if key and block is not None:
+        if block:
+            cache.set_search(key, 'nonprofit_990', {'results': [{'content': block}]})
+        else:
+            cache.record_empty(key, 'nonprofit_990')
+    return block or ''
+
+
+def _propublica_990(company_name: str):
+    """The HTTP half of probe_nonprofit_990: evidence block, '' for a
+    confirmed no-match, None when the API itself failed (never cached)."""
     try:
         s = requests.get(
             'https://projects.propublica.org/nonprofits/api/v2/search.json',
@@ -2037,7 +2285,7 @@ def probe_nonprofit_990(company_name: str) -> str:
         return '\n'.join(lines)
     except Exception as e:
         log.debug(f'  990 probe failed: {e}')
-        return ''
+        return None
 
 
 def gather_extra_evidence(event: dict, companies_data: list,
@@ -2220,6 +2468,505 @@ def grade_event(event: dict, companies_data: list,
     }
 
 
+# ── Phase 2 helpers (2026-09-07): pagination, LLM canary, typed columns ────
+# Small and pure where possible so enrich_events() stays a sequence of
+# decisions rather than a wall of inline logic — each is unit-tested in
+# tests/test_enrichment_v2.py.
+
+_FIRM_FIELDS = ('url', 'industry', 'zi_subindustry', 'size', 'revenue',
+                'revenue_source', 'hq', 'linkedin')
+# What Stage B is allowed to spend a search on. industry/linkedin/
+# revenue_source are nice-to-haves that never change a fit verdict.
+_STAGE_B_NEEDS = ('zi_subindustry', 'hq', 'revenue', 'size', 'url')
+_CONFIDENCE_RANK = {'Low': 0, 'Medium': 1, 'High': 2}
+# EDGAR state-of-incorporation codes for the Canadian provinces we cover.
+_SEC_PROVINCE_CODES = {'A3': 'NB', 'A4': 'NL', 'A5': 'NS', 'A6': 'ON',
+                       'A7': 'PE', 'A8': 'QC'}
+
+
+def _strip_range_params(query) -> None:
+    """postgrest-py's range() ADDS offset/limit params instead of replacing
+    them, so a second page on the same builder would send both. Strip them
+    between pages; fake/older builders without the attribute are left alone."""
+    try:
+        params = query.request.params
+        query.request.params = params.remove('offset').remove('limit')
+    except Exception:
+        pass
+
+
+def _fetch_all(query, order: str = 'discovered_at', desc: bool = False,
+               page: int = 1000, max_rows: int = 5000) -> list:
+    """Page through a select with .range(). Supabase caps one select at
+    1,000 rows and the old single .execute() silently dropped the queue's
+    tail past that; oldest-first ordering plus paging guarantees the tail
+    is reached. Stops at the first short page or at max_rows."""
+    rows = []
+    q = query.order(order, desc=desc)
+    start = 0
+    while start < max_rows:
+        end = min(start + page, max_rows) - 1
+        _strip_range_params(q)
+        chunk = q.range(start, end).execute().data or []
+        rows.extend(chunk)
+        if len(chunk) < (end - start + 1):
+            break
+        start = end + 1
+    return rows
+
+
+def _llm_canary() -> bool:
+    """One trivial local-LLM call before any event is touched. False when
+    the server is unreachable — the caller then exits with NOTHING stamped,
+    so the whole queue is intact for the next launchd cycle."""
+    LLM_STATE['unavailable'] = False
+    LLM_STATE['consecutive'] = 0
+    llm_json('Reply with exactly this JSON object and nothing else: {"ok": true}',
+             max_tokens=20)
+    return not LLM_STATE['unavailable']
+
+
+def _prev_attempts(event: dict) -> int:
+    """events.enrich_attempts as read (0 when the column isn't there yet)."""
+    try:
+        return int(event.get('enrich_attempts') or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _account_company(enriched: list, fit: dict) -> dict:
+    """The company dict the fit gates chose as the account (else primary)."""
+    nm = (fit.get('account_name') or '').strip()
+    return (next((c for c in enriched if (c.get('name') or '').strip() == nm), None)
+            or pick_primary(enriched) or {})
+
+
+def _tombstone_typed(event: dict, present, fit: dict = None,
+                     structured: dict = None, account: dict = None) -> dict:
+    """Typed half of a tombstone: verify_state=not_fit/fit_verdict=fail plus
+    whatever else is computable from the event alone (account_key,
+    expires_at, SEC fields); retry_after is cleared. {} when the migration
+    hasn't run."""
+    if not present:
+        return {}
+    pl = typed_payload(event=event, fit=fit, structured=structured, account=account,
+                       verify_state='not_fit', present=present, retry_after=None)
+    pl.update(not_fit_payload(present))
+    return pl
+
+
+def _final_typed(event: dict, present, fit: dict, structured: dict,
+                 enriched: list, attempts_prev: int, deferred: bool = False) -> dict:
+    """Typed columns for the staged / unverified / pass write. enrich_attempts
+    and the retry ladder advance only for the two 'come back later' states
+    (staged, researched_ambiguous); a verified row gets retry_after CLEARED
+    so a stale date can't hide it from a future reverify.
+
+    `deferred` (review 2026-09-07): the event's search was throttled or the
+    backend never answered, so nothing was actually researched. Then
+    enrich_attempts is NOT bumped and retry_after is NOT passed (left as it
+    is) — otherwise a ≥12h search outage walks every staged row up to
+    MAX_ENRICH_ATTEMPTS and parks it out of --reverify without one real
+    attempt. fit.deferred_attempts (JSON side) stays the deferral counter."""
+    if not present:
+        return {}
+    state = verify_state_for(fit.get('verdict'))
+    account = _account_company(enriched, fit)
+    common = dict(event=event, fit=fit, structured=structured, account=account,
+                  verify_state=state, present=present,
+                  classification_confidence=account.get('classification_confidence'),
+                  classified_by=account.get('classified_by'))
+    if state in ('staged', 'researched_ambiguous'):
+        if deferred:
+            return typed_payload(**common)
+        attempts = attempts_prev + 1
+        return typed_payload(attempts=attempts,
+                             retry_after=retry_after_for(state, attempts), **common)
+    return typed_payload(retry_after=None, **common)
+
+
+def _llm_unavailable_payload(present, attempts_prev: int) -> dict:
+    """The ONLY thing written for an event the local LLM couldn't serve:
+    bump attempts and push it out LLM_RETRY_HOURS. No enriched_at, no
+    tombstone, no fit — nothing that would look like a decision."""
+    full = {'enrich_attempts': attempts_prev + 1, 'retry_after': llm_retry_after()}
+    return {k: v for k, v in full.items() if k in set(present or ())}
+
+
+def _llm_unavailable_event(client, eid: str, present, attempts_prev: int,
+                           dry_run: bool) -> bool:
+    """Bookkeeping for one LLM-unavailable event. Returns True when the run
+    should stop: LLM_UNAVAILABLE_STOP_AFTER consecutive such events AND a
+    fresh canary that fails too (review 2026-09-07 — three events in a row
+    can trip 'unavailable' on a server that is UP, e.g. a 5xx on an
+    oversized prompt, and stopping then stranded the whole queue for a
+    cycle over three bad rows). Those events keep their attempts+1 /
+    retry_after push; a passing canary resets the streak and the run
+    continues with the next event."""
+    LLM_STATE['consecutive'] += 1
+    log.warning(f'  ⛔ Local LLM unavailable — nothing stamped; retry in '
+                f'{LLM_RETRY_HOURS}h (consecutive: {LLM_STATE["consecutive"]})')
+    if not dry_run and present:
+        pl = _llm_unavailable_payload(present, attempts_prev)
+        try:
+            client.table('events').update(pl).eq('id', eid).execute()
+        except Exception as e:
+            log.warning(f'  write failed: {e}')
+    if LLM_STATE['consecutive'] >= LLM_UNAVAILABLE_STOP_AFTER:
+        streak = LLM_STATE['consecutive']
+        if _llm_canary():             # success resets the streak + the flag
+            log.warning('  LLM answered the canary — the events themselves are '
+                        'the problem, continuing')
+            return False
+        LLM_STATE['consecutive'] = streak
+        log.error(f'FAIL: local LLM ({LLAMACPP_URL}) unavailable for {streak} '
+                  f'consecutive events and the canary failed too — stopping the '
+                  f'run. Nothing further is stamped; the queue is retried next cycle.')
+        return True
+    return False
+
+
+# ── Phase 2: classify-then-research stages ──────────────────────────────────
+
+def _placeholder_company(name: str, role: str) -> dict:
+    """A never-researched company record (non-workable role, non-operating
+    entity) in the same shape as an enriched one so the dashboard chips it."""
+    rec = {'name': name, 'role': role}
+    rec.update({f: None for f in _FIRM_FIELDS})
+    rec['classification_confidence'] = None
+    rec['classified_by'] = None
+    return rec
+
+
+def _company_record(name: str, role: str, firm: dict) -> dict:
+    """companies_data entry from a stage firm dict (private keys dropped).
+
+    `field_sources` — {field: 'seed'|'cache'|'article'|'search'} for the
+    fields that have a value — IS written to Supabase (review 2026-09-07):
+    it is a handful of short strings per company, the dashboard reads
+    named keys only, and it is the only way to tell a dateline hq from a
+    researched one when auditing a row or the tombstone benchmark."""
+    rec = _placeholder_company(name, role)
+    for f in _FIRM_FIELDS:
+        rec[f] = firm.get(f)
+    rec['classification_confidence'] = firm.get('classification_confidence')
+    rec['classified_by'] = firm.get('classified_by')
+    srcs = {f: s for f, s in (firm.get('_sources') or {}).items() if firm.get(f)}
+    if srcs:
+        rec['field_sources'] = srcs
+    if firm.get('deferred'):
+        rec['deferred'] = True
+    return rec
+
+
+def _industry_hint_for(co: dict) -> str:
+    """NEUTRAL disambiguation hint. Never inject industry guesses: the old
+    'financial services private equity' hint for M&A/funding events biased
+    BOTH the web search AND the ZI classification — every funded startup
+    came back 'Venture Capital & Private Equity' (live test 2026-07-16).
+    The article's own descriptor is the best disambiguator ("fomo" alone
+    is unsearchable; "fomo trading platform" isn't)."""
+    descriptor = (co.get('descriptor') or '').strip()
+    if descriptor:
+        return descriptor
+    if (co.get('role') or '').lower() in ('lead investor', 'investor'):
+        return 'investment firm'
+    return 'company North America'
+
+
+def _article_context(event: dict) -> str:
+    return (f"{(event.get('title') or '')[:200]}\n"
+            f"{(event.get('description') or '')[:500]}")
+
+
+def _structured_seeds(event: dict, name: str, structured: dict) -> dict:
+    """Authoritative facts for the FILER company (the event's company_name)
+    from the SEC text itself: state of incorporation → hq, Form D declared
+    revenue range → revenue band. Applied BEFORE any LLM output and never
+    overridden by it (a filing beats an article beats a search)."""
+    seeds = {}
+    if name.strip().lower() != (event.get('company_name') or '').strip().lower():
+        return seeds
+    if 'sec.gov' in (event.get('source_url') or ''):
+        m = re.search(r'\(([A-Z]\d|[A-Z]{2})\)', event.get('description') or '')
+        if m:
+            seeds['hq'] = _SEC_PROVINCE_CODES.get(m.group(1), m.group(1))
+    seg = (structured or {}).get('revenue_segment')
+    if seg in ('LMM', 'MM', 'Corp'):
+        seeds['revenue'] = seg
+        seeds['revenue_source'] = 'SEC Form D declared revenue range'
+    return seeds
+
+
+def _fill_missing(base: dict, new: dict, fields=_FIRM_FIELDS, source: str = None) -> dict:
+    """Copy of `base` with empty firmographic fields filled from `new`.
+    `source` (review 2026-09-07) stamps each field it fills into the copy's
+    `_sources` provenance map ('seed' | 'cache' | 'article' | 'search'):
+    the pre-search gates, Stage B's needs and the AccountCache write all
+    decide by WHERE a value came from, not just whether it is there."""
+    out = dict(base)
+    srcs = dict(out.get('_sources') or {})
+    for f in fields:
+        if not out.get(f) and (new or {}).get(f):
+            out[f] = new[f]
+            if source:
+                srcs[f] = source
+    if source:
+        out['_sources'] = srcs
+    return out
+
+
+def _confidence_meets(conf, minimum) -> bool:
+    """Does an article classification confidence clear the tombstone bar?
+    minimum 'never' disables the rule outright."""
+    if str(minimum or '').lower() == 'never':
+        return False
+    return _CONFIDENCE_RANK.get(conf or '', -1) >= _CONFIDENCE_RANK.get(minimum, 99)
+
+
+def _article_other_decision(firm: dict, structured_out: bool = False,
+                            article_chars: int = 0) -> tuple:
+    """Stage A verdict on an 'OTHER' classification → (firm, no_search).
+
+    OTHER is FINAL (kept — company_fit fails the vertical, no search) when
+    it came from the account cache (already researched), the structured SEC
+    verdict for this company is 'out', or the article pass is confident
+    enough (ARTICLE_OTHER_TOMBSTONE_MIN_CONFIDENCE) AND the article was long
+    enough to be evidence — `article_chars` (the description length) above
+    ARTICLE_TOMBSTONE_MIN_DESCRIPTION_CHARS (review 2026-09-07; a caller
+    that doesn't pass the length gets the conservative 0: no article-only
+    tombstone). Otherwise it is only a hunch: reset to None (unknown) so
+    Stage B can resolve it."""
+    if (firm.get('zi_subindustry') or '').upper() != 'OTHER':
+        return firm, False
+    final = (structured_out or firm.get('classified_by') == 'cache'
+             or (_confidence_meets(firm.get('classification_confidence'),
+                                   ARTICLE_OTHER_TOMBSTONE_MIN_CONFIDENCE)
+                 and (article_chars or 0) > ARTICLE_TOMBSTONE_MIN_DESCRIPTION_CHARS))
+    if final:
+        return firm, True
+    return dict(firm, zi_subindustry=None), False
+
+
+def _stage_a_company(event: dict, co: dict, structured: dict, article_ctx: str,
+                     cache) -> dict:
+    """STAGE A — free classification for one workable company:
+    structured seeds → account firmographic cache → ONE article-only local
+    LLM call (only when zi_subindustry or hq is still missing). Returns a
+    firm dict carrying classification_confidence / classified_by /
+    no_search / _seeds; the LLM never overrides a seed."""
+    name = co['name']
+    key = _gates_account_key(name)
+    firm = {f: None for f in _FIRM_FIELDS}
+    seeds = _structured_seeds(event, name, structured)
+    firm.update(seeds)
+    # Per-field provenance (review 2026-09-07): 'seed' | 'cache' | 'article'
+    # here, 'search' added by _merge_search. Decides what the pre-search
+    # gates may judge, what Stage B still needs and what the cache keeps.
+    firm['_sources'] = {f: 'seed' for f in seeds}
+    if seeds.get('hq'):
+        log.info(f'     hq seeded from SEC filing: {seeds["hq"]}')
+    if seeds.get('revenue'):
+        log.info(f'     revenue seeded from Form D declared range: {seeds["revenue"]}')
+
+    conf = by = None
+    cached = cache.get_firmographics(key) if key else None
+    if cached:
+        firm = _fill_missing(firm, cached, source='cache')
+        if cached.get('zi_subindustry'):
+            conf, by = cached.get('classification_confidence'), 'cache'
+    if by == 'cache' and firm.get('hq'):
+        log.info(f'  → Account cache: {name} (zi + hq known — no LLM call)')
+    else:
+        log.info(f'  → Classifying from article: {name}')
+        got = enrich_one_company(name, _industry_hint_for(co),
+                                 article_context=article_ctx, no_search=True)
+        had_zi = bool(firm.get('zi_subindustry'))
+        firm = _fill_missing(firm, got, source='article')
+        if not had_zi:
+            conf, by = got.get('classification_confidence'), 'article'
+    firm['classification_confidence'] = conf
+    firm['classified_by'] = by
+    structured_out = ((structured or {}).get('verdict') == 'out'
+                      and name.strip().lower() ==
+                      (event.get('company_name') or '').strip().lower())
+    firm, no_search = _article_other_decision(
+        firm, structured_out,
+        article_chars=len((event.get('description') or '').strip()))
+    firm['no_search'] = no_search
+    firm['_seeds'] = seeds
+    return firm
+
+
+def _merge_search(firm_a: dict, got: dict, seeds: dict) -> dict:
+    """STAGE B merge. Search values fill gaps; a search-derived
+    zi_subindustry overrides the article's unless the search is Low-
+    confidence against an article High; hq: seeds > search >
+    article. classified_by flips to 'search' when the search changed or
+    filled zi/hq.
+
+    Review 2026-09-07: the search pass reads the article too, so for
+    revenue / industry its answer SUPERSEDES an article-only value instead
+    of sitting behind it (seed and cache values still win), and every
+    field the search filled, confirmed or overrode is stamped 'search' in
+    `_sources` — that stamp is what lets the AccountCache keep it."""
+    merged = _fill_missing(firm_a, got, source='search')
+    srcs = dict(merged.get('_sources') or {})
+    a_zi, a_conf = firm_a.get('zi_subindustry'), firm_a.get('classification_confidence')
+    s_zi, s_conf = got.get('zi_subindustry'), got.get('classification_confidence')
+    zi_from_search = False
+    if s_zi and s_zi != a_zi:
+        # The search pass read the article AND the results, so it holds
+        # strictly more evidence: it overrides the article's subindustry
+        # unless it is itself Low-confidence against an article High
+        # (Low usually means the results were about a different company).
+        # Live 2026-09-07: "SharonAI Holdings" — article-High 'Holding
+        # Companies' from the NAME lost to nothing while the search had
+        # identified an AI-infrastructure company (OTHER): the audit's
+        # Holding-Cos leak in miniature.
+        if (not a_zi or s_conf in ('High', 'Medium')
+                or a_conf in (None, 'Low')):
+            merged['zi_subindustry'] = s_zi
+            zi_from_search = True
+    if s_zi and merged.get('zi_subindustry') == s_zi:
+        srcs['zi_subindustry'] = 'search'       # filled, overridden or confirmed
+    hq_from_search = False
+    if not (seeds or {}).get('hq') and got.get('hq'):
+        if got['hq'] != firm_a.get('hq'):
+            merged['hq'] = got['hq']
+            hq_from_search = True
+        srcs['hq'] = 'search'
+    for f in ('revenue', 'industry'):
+        if got.get(f) and srcs.get(f) == 'article':
+            merged[f] = got[f]
+            srcs[f] = 'search'
+            if f == 'revenue':
+                merged['revenue_source'] = got.get('revenue_source')
+                srcs['revenue_source'] = 'search'
+    if zi_from_search or hq_from_search:
+        merged['classified_by'] = 'search'
+    if zi_from_search:
+        merged['classification_confidence'] = s_conf
+    merged['_sources'] = srcs
+    merged['deferred'] = bool(got.get('deferred'))
+    return merged
+
+
+def _stage_b_company(co: dict, firm_a: dict, article_ctx: str, tier: int) -> dict:
+    """STAGE B — budgeted research for one Stage-A survivor. Skips the search
+    when the tier forbids it, nothing fit-relevant is left to learn, or the
+    event's SearchBudget is spent — unless the account's firmographic search
+    is already in the AccountCache, which tavily_search serves for free
+    before it touches the budget (review 2026-09-07: the old order turned a
+    cached third company away as 'budget spent').
+
+    A NEED (review 2026-09-07) is a fit-relevant field that is missing OR
+    known only from the article: an hq read off a dateline and a revenue
+    band the model inferred don't settle territory/revenue — Phase 1 always
+    searched, and so does a survivor carrying only article guesses. An
+    article zi_subindustry counts as settled only at High confidence (the
+    same bar the AccountCache applies)."""
+    name = co['name']
+    srcs = firm_a.get('_sources') or {}
+    conf = firm_a.get('classification_confidence')
+
+    def _settled(f):
+        if not firm_a.get(f):
+            return False
+        if srcs.get(f) != 'article':
+            return True
+        return f == 'zi_subindustry' and conf == 'High'
+    needs = [f for f in _STAGE_B_NEEDS if not _settled(f)]
+    budget = _BUDGET['obj']
+    if tier == 3:
+        return dict(firm_a, deferred=False)
+    if not needs:
+        log.info(f'  → No search ({name}): nothing left to learn')
+        return dict(firm_a, deferred=False)
+    if budget.exhausted():
+        key = _gates_account_key(name)
+        if not (key and _account_cache().get_search(key, 'firmographic')):
+            log.info(f'  → No search ({name}): event search budget spent')
+            return dict(firm_a, deferred=False)
+        log.info(f'  → Budget spent, but the search is cached ({name}) — free lookup')
+    log.info(f'  → Searching: {name} (needs {", ".join(needs)})')
+    got = enrich_one_company(name, _industry_hint_for(co),
+                             article_context=article_ctx, no_search=False,
+                             require_search=True)
+    time.sleep(RATE_LIMIT_SECONDS)
+    return _merge_search(firm_a, got, firm_a.get('_seeds') or {})
+
+
+def _remember_firmographics(cache, name: str, firm: dict) -> None:
+    """Persist the RESEARCHED firmographic fields for the account (per-field
+    TTLs live in the cache module; a None never clobbers a stored value).
+
+    Provenance gate (review 2026-09-07): the cache lives up to 365 days and
+    every later event of the account starts from it, so an article-only
+    guess written here poisoned them all. Per `_sources`:
+      * hq / revenue / industry — a structured seed or a search, never the
+        article pass;
+      * zi_subindustry — search-derived, or article at High confidence (the
+        same bar that lets it tombstone), with its confidence alongside;
+      * url / linkedin / size — search only;
+      * cache-sourced values are not re-stamped (that would extend a TTL
+        without new evidence). A firm with no provenance persists nothing."""
+    key = _gates_account_key(name)
+    if not key:
+        return
+    srcs = firm.get('_sources') or {}
+    conf = firm.get('classification_confidence')
+    payload = {}
+    for f in _FIRM_FIELDS:
+        v, src = firm.get(f), srcs.get(f)
+        if not v:
+            continue
+        if f in ('url', 'linkedin', 'size'):
+            keep = src == 'search'
+        elif f == 'zi_subindustry':
+            keep = src == 'search' or (src == 'article' and conf == 'High')
+        else:                       # hq, revenue, revenue_source, industry
+            keep = src in ('seed', 'search')
+        if keep:
+            payload[f] = v
+    if 'zi_subindustry' in payload:
+        payload['classification_confidence'] = conf
+    if payload:
+        cache.set_firmographics(key, payload)
+
+
+def _pre_search_view(firm: dict) -> dict:
+    """The copy of a Stage-A firm dict that the PRE-SEARCH gates may judge
+    (review 2026-09-07). Article-only hq / revenue are blanked (unknown): a
+    dateline is where the release was issued, not necessarily the HQ, and
+    an inferred revenue band is a guess — each was failing tier-1/2 events
+    with zero searches. An article-only industry stays only at High
+    classification confidence (the blocklist bar). Seed, cache and search
+    values pass through; zi_subindustry was already settled by
+    _article_other_decision. Stage B still receives the full dict — nothing
+    is lost, it is only withheld from the early exit."""
+    srcs = firm.get('_sources') or {}
+    view = dict(firm)
+    for f in ('hq', 'revenue', 'revenue_source'):
+        if srcs.get(f) == 'article':
+            view[f] = None
+    if (srcs.get('industry') == 'article'
+            and firm.get('classification_confidence') != 'High'):
+        view['industry'] = None
+    return view
+
+
+def _acquire_run_lock(path: str = None):
+    """Single-instance guard for __main__: the RunLock, or None when another
+    enrichment process holds it (launchd fired while a slow run — or a
+    terminal run — is still going; two runs would double-spend the budget)."""
+    lock = RunLock(path or os.path.join(_STATE_DIR, 'enrichment.lock'))
+    if not lock.acquire():
+        log.info(f'another enrichment run is active (pid {lock.holder_pid()}) — exiting')
+        return None
+    return lock
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def enrich_events(
@@ -2248,11 +2995,15 @@ def enrich_events(
 
     # ── Fetch events ──────────────────────────────────────────────────────
     # Include source_url so grade_event() can cite the original article in
-    # research_notes. Without it, the TAL prompt receives empty article_url
-    # and the LLM has no primary source to reference.
-    query = client.table('events').select(
-        'id, company_name, event_type, title, description, source_url, fit'
-    )
+    # research_notes; published_date/discovered_at feed the typed expires_at.
+    typed_cols = col_ok.get('typed') or set()
+    cols = ('id, company_name, event_type, title, description, source_url, fit, '
+            'published_date, discovered_at')
+    retry_cols = [c for c in ('enrich_attempts', 'retry_after', 'verify_state')
+                  if c in typed_cols]
+    if retry_cols:
+        cols += ', ' + ', '.join(retry_cols)
+    query = client.table('events').select(cols)
     if not re_enrich and col_ok.get('enriched_at'):
         query = query.is_('enriched_at', 'null')
     if missing_fit_only and col_ok.get('fit'):
@@ -2266,7 +3017,13 @@ def enrich_events(
         # get uncapped (A becomes reachable) or tombstoned if confirmed-out;
         # still-unknown stay flagged. Run when the search backend is healthy
         # (e.g. after burst throttling subsided).
-        query = query.in_('fit->>verdict', ['unverified', 'staged'])
+        if {'verify_state', 'enrich_attempts'} <= typed_cols:
+            # Phase 2: typed state machine — rows past MAX_ENRICH_ATTEMPTS
+            # are negative-cached (a NEW event for the account is a new row).
+            query = (query.in_('verify_state', ['staged', 'researched_ambiguous'])
+                          .lt('enrich_attempts', MAX_ENRICH_ATTEMPTS))
+        else:
+            query = query.in_('fit->>verdict', ['unverified', 'staged'])
     if complexity_sweep and col_ok.get('fit'):
         # A-hunt mode: fit-CONFIRMED Grade-B events with a high-intent
         # trigger type — the only population the complexity probe
@@ -2277,6 +3034,12 @@ def enrich_events(
                       .eq('fit->>verdict', 'pass')
                       .in_('event_type',
                            ['cfo_hire', 'merger_acquisition', 'funding']))
+    if 'retry_after' in typed_cols and (reverify_unverified or not re_enrich):
+        # Phase 2 retry semantics: a row parked by the 7/30-day ladder (or
+        # the LLM-outage 4h push) is invisible until its retry_after passes.
+        # An explicit --re-enrich sweep is a human decision and ignores it.
+        now_iso = datetime.now(timezone.utc).isoformat()
+        query = query.or_(f'retry_after.is.null,retry_after.lte.{now_iso}')
     # NEVER process tombstoned events — they're already decided (industry/
     # fit-gate blocked or rep-dismissed). Re-enriching them is pure waste
     # (~15s each) and re-grades rows the dashboard will never show.
@@ -2291,8 +3054,7 @@ def enrich_events(
     # guarantees forward progress on the queue's tail. Trade-off: freshest
     # events take a bit longer to appear graded on the dashboard, but
     # they're visible (just ungraded) much sooner regardless.
-    result = query.order('discovered_at', desc=False).execute()
-    events = result.data or []
+    events = _fetch_all(query, order='discovered_at', desc=False)
 
     if reverify_unverified:
         # v2: re-verification is RANKED and CAPPED — best trigger types first,
@@ -2340,18 +3102,35 @@ def enrich_events(
     log.info(f'{tag}Processing {len(events)} event(s)')
     print()
 
-    firm_cache: dict = {}
+    # ── LLM canary (Phase 2) — the local server must answer before any row
+    # is touched; otherwise every event would fall back to "no companies →
+    # enriched_at stamped" and the queue would be silently marked done.
+    if not _llm_canary():
+        log.error(f'FAIL: local LLM at {LLAMACPP_URL} is unavailable — nothing '
+                  f'processed, nothing stamped. Check the llama.cpp server and re-run.')
+        return
+
+    firm_cache: dict = {}          # per-run: same company across events = one pass
+    acct_cache = _account_cache()  # persistent, account-keyed (src/pipeline/cache.py)
     reset_search_counts()
     ok = fail = 0
+    outcomes = {'verified': 0, 'ambiguous': 0, 'staged': 0, 'not_fit': 0,
+                'decided': 0, 'llm_unavailable': 0}
     dispositions = _load_rep_dispositions(client)
     if dispositions:
         log.info(f'Loaded {len(dispositions)} rep account verdict(s) — decided accounts skip research')
 
+    _unavail_streak = False
     for idx, event in enumerate(events, 1):
         eid   = event['id']
         title = (event.get('title') or '')[:80]
         etype = event.get('event_type', '')
         log.info(f'[{idx}/{len(events)}] {title}')
+        if not _unavail_streak:
+            LLM_STATE['consecutive'] = 0
+        _unavail_streak = False
+        attempts_prev = _prev_attempts(event)
+        _sv = _structured_verdict(event)   # free; also feeds the typed columns
 
         # ── 0. Board-only gate (free, before any LLM/search spend) ────────
         # Pure board-of-directors changes are not triggers — tombstone.
@@ -2361,12 +3140,20 @@ def enrich_events(
             if not dry_run:
                 _soft_delete(client, eid,
                              'board_change_only: director/board appointment, '
-                             'no finance-leader role')
+                             'no finance-leader role',
+                             typed=_tombstone_typed(event, typed_cols, structured=_sv))
             ok += 1
+            outcomes['not_fit'] += 1
             continue
 
         # ── 1. Extract companies + roles ──────────────────────────────────
         companies = extract_event_companies(event)
+        if LLM_STATE['unavailable']:
+            outcomes['llm_unavailable'] += 1
+            _unavail_streak = True
+            if _llm_unavailable_event(client, eid, typed_cols, attempts_prev, dry_run):
+                break
+            continue
 
         if not companies:
             fallback = (event.get('company_name') or '').strip()
@@ -2401,15 +3188,19 @@ def enrich_events(
         if not companies:
             log.info('  🚫 No real company name extracted — soft-deleting.')
             if not dry_run:
-                _soft_delete(client, eid, 'bad_company_name: no real company name extracted')
+                _soft_delete(client, eid, 'bad_company_name: no real company name extracted',
+                             typed=_tombstone_typed(event, typed_cols, structured=_sv))
             ok += 1
+            outcomes['not_fit'] += 1
             continue
         if not any((c.get('role') or '').lower() in WORKABLE_ROLES for c in companies):
             log.info('  🚫 No workable-role company (advisors/investors only) — soft-deleting.')
             if not dry_run:
                 _soft_delete(client, eid, 'no_workable_account: only advisor/investor/'
-                                          'mentioned roles extracted')
+                                          'mentioned roles extracted',
+                             typed=_tombstone_typed(event, typed_cols, structured=_sv))
             ok += 1
+            outcomes['not_fit'] += 1
             continue
         _rep = _rep_verdict_for(companies, dispositions)
         if _rep:
@@ -2419,28 +3210,37 @@ def enrich_events(
                 log.info(f'  🚫 Rep verdict "{_rstatus}" on {_rname} — soft-deleting, no research.')
                 if not dry_run:
                     _soft_delete(client, eid, f'rep:{_rstatus} ({_rname[:60]})',
-                                 extra={'companies_data': _mini})
+                                 extra={'companies_data': _mini},
+                                 typed=_tombstone_typed(
+                                     event, typed_cols, structured=_sv,
+                                     fit={'verdict': 'fail', 'account_name': _rname}))
+                outcomes['not_fit'] += 1
             else:
                 log.info(f'  ✋ Rep verdict "{_rstatus}" on {_rname} — decided, no research.')
                 if not dry_run:
-                    _pl = {'companies_data': _mini,
-                           'fit': {'verdict': 'decided', 'account_name': _rname,
-                                   'territory': 'n/a', 'revenue': 'n/a', 'vertical': 'n/a',
-                                   'reasons': [f'rep: {_rstatus}']}}
+                    _fit_d = {'verdict': 'decided', 'account_name': _rname,
+                              'territory': 'n/a', 'revenue': 'n/a', 'vertical': 'n/a',
+                              'reasons': [f'rep: {_rstatus}']}
+                    _pl = {'companies_data': _mini, 'fit': _fit_d}
                     if col_ok.get('enriched_at'):
                         _pl['enriched_at'] = datetime.utcnow().isoformat()
+                    _pl.update(typed_payload(event=event, fit=_fit_d, structured=_sv,
+                                             verify_state='decided', present=typed_cols,
+                                             retry_after=None))
                     try:
                         client.table('events').update(_pl).eq('id', eid).execute()
                     except Exception as _e:
                         log.warning(f'  write failed: {_e}')
+                outcomes['decided'] += 1
             ok += 1
             continue
-        _sv = _structured_verdict(event)
         if _sv['verdict'] in ('out', 'vehicle', 'too_small'):
             log.info(f'  🚫 Structured gate ({_sv["verdict"]}): {_sv["reason"]} — soft-deleting.')
             if not dry_run:
-                _soft_delete(client, eid, f'structured:{_sv["verdict"]}: {_sv["reason"]}')
+                _soft_delete(client, eid, f'structured:{_sv["verdict"]}: {_sv["reason"]}',
+                             typed=_tombstone_typed(event, typed_cols, structured=_sv))
             ok += 1
+            outcomes['not_fit'] += 1
             continue
         _workable_ops = [c for c in companies
                          if (c.get('role') or '').lower() in WORKABLE_ROLES
@@ -2452,11 +3252,17 @@ def enrich_events(
             log.info(f'  🚫 Every workable company is a non-operating entity '
                      f'({", ".join(sorted(k for k in _kinds if k))}) — soft-deleting.')
             if not dry_run:
-                _soft_delete(client, eid, 'entity_shape:' + ','.join(sorted(k for k in _kinds if k)))
+                _soft_delete(client, eid, 'entity_shape:' + ','.join(sorted(k for k in _kinds if k)),
+                             typed=_tombstone_typed(event, typed_cols, structured=_sv))
             ok += 1
+            outcomes['not_fit'] += 1
             continue
 
-        # ── 2. Enrich each company ────────────────────────────────────────
+        # ── 2. CLASSIFY, then RESEARCH (Phase 2, 2026-09-07) ─────────────
+        # Stage A is free (structured seeds → account cache → one article-
+        # only LLM pass per company) and can END the event on its own; only
+        # survivors with something fit-relevant left to learn reach Stage B,
+        # where the SearchBudget for the tier is spent.
         tier = _event_search_tier(event)
         _SEARCH_TIER['tier'] = tier
         _BUDGET['obj'] = SearchBudget(tier)
@@ -2465,119 +3271,112 @@ def enrich_events(
                      'article evidence only, no web searches')
         elif tier == 2:
             log.info('  Search tier 2 — scrape-only (no Tavily spend)')
-        enriched = []
-        for co in companies:
-            name      = co['name']
-            role      = co['role']
-            cache_key = name.lower().strip()
+        _article_ctx = _article_context(event)
+        _has_workable = any((c.get('role') or '').lower() in WORKABLE_ROLES
+                            for c in companies)
 
-            # ── Search-avoidance gates (IP hygiene, 2026-08-09) ──────────
-            # Every skipped search protects the shared home IP that the
-            # Hermes fleet's SearXNG also depends on.
-            # (a) Non-workable roles (advisors, sellers, ...) can never
-            #     become the account — don't spend searches on them when
-            #     the event has at least one workable company.
+        # ── STAGE A ──
+        stage = []      # (company, firm | None) — None = placeholder, never researched
+        for co in companies:
+            name, role = co['name'], co['role']
             _role_l = (role or '').lower()
-            if (_role_l and _role_l not in WORKABLE_ROLES
-                    and any((c2.get('role') or '').lower() in WORKABLE_ROLES
-                            for c2 in companies)):
-                log.info(f'  → Skipping search ({role}): {name}')
-                enriched.append({'name': name, 'role': role, 'url': None,
-                                 'industry': None, 'zi_subindustry': None,
-                                 'size': None, 'revenue': None,
-                                 'revenue_source': None, 'hq': None,
-                                 'linkedin': None})
+            # (a) Non-workable roles (advisors, sellers, ...) can never
+            #     become the account — no LLM, no search, when the event
+            #     has at least one workable company.
+            if _role_l and _role_l not in WORKABLE_ROLES and _has_workable:
+                log.info(f'  → Skipping ({role}): {name}')
+                stage.append((co, None))
                 continue
-            # (b) Auto-fail names (public school districts) fail the fit
-            #     gate on name alone — researching them is pure waste.
+            # (b) Auto-fail names (public school districts, non-operating
+            #     entities) fail the fit gate on name alone.
             _nonop_kind = is_non_operating_entity(name, co.get('descriptor') or '')[1]
             if _is_public_school_district(name) or _nonop_kind:
-                log.info(f'  → Skipping search ({_nonop_kind or "public school district"}): {name}')
-                enriched.append({'name': name, 'role': role, 'url': None,
-                                 'industry': None, 'zi_subindustry': None,
-                                 'size': None, 'revenue': None,
-                                 'revenue_source': None, 'hq': None,
-                                 'linkedin': None})
+                log.info(f'  → Skipping ({_nonop_kind or "public school district"}): {name}')
+                stage.append((co, None))
                 continue
-
-            # Build a NEUTRAL disambiguation hint. Never inject industry
-            # guesses: the old 'financial services private equity' hint for
-            # M&A/funding events biased BOTH the web search AND the ZI
-            # classification — every funded startup came back classified
-            # 'Venture Capital & Private Equity' (live test 2026-07-16).
-            # Role-based context only:
-            role_l = (role or '').lower()
-            descriptor = (co.get('descriptor') or '').strip()
-            if descriptor:
-                # The article's own words about what this company does — the
-                # best disambiguator, esp. for generic names ("fomo" alone is
-                # unsearchable; "fomo trading platform" isn't).
-                industry_hint = descriptor
-            elif role_l in ('lead investor', 'investor'):
-                industry_hint = 'investment firm'
+            run_key = name.lower().strip()
+            if run_key in firm_cache:
+                # Same company, earlier event this run: reuse its Stage A/B
+                # result and force no_search — but KEEP its `deferred` flag
+                # (review 2026-09-07: dropping it turned a throttled first
+                # lookup into a stamped 'staged' row for the second event).
+                log.info(f'  → Cached (this run): {name}')
+                firm = dict(firm_cache[run_key], no_search=True)
             else:
-                industry_hint = 'company North America'
+                firm = _stage_a_company(event, co, _sv, _article_ctx, acct_cache)
+            stage.append((co, firm))
+        if LLM_STATE['unavailable']:
+            outcomes['llm_unavailable'] += 1
+            _unavail_streak = True
+            if _llm_unavailable_event(client, eid, typed_cols, attempts_prev, dry_run):
+                break
+            continue
 
-            if cache_key not in firm_cache:
-                log.info(f'  → Searching: {name}')
-                if not dry_run:
-                    _article_ctx = (
-                        f"{(event.get('title') or '')[:200]}\n"
-                        f"{(event.get('description') or '')[:500]}"
-                    )
-                    firm_cache[cache_key] = enrich_one_company(
-                        name, industry_hint, article_context=_article_ctx,
-                        no_search=(tier == 3))
-                    time.sleep(RATE_LIMIT_SECONDS)
-                else:
-                    firm_cache[cache_key] = {
-                        'url': None, 'industry': None, 'zi_subindustry': None,
-                        'size': None, 'revenue': None, 'revenue_source': None,
-                        'hq': None, 'linkedin': None
-                    }
+        # Event-level early exit on FREE evidence: industry blocklist + fit
+        # gates over the article-classified companies. Nothing has been
+        # searched yet, so a fail here costs zero quota — which is exactly
+        # why it may only act on RESEARCHED facts (review 2026-09-07): the
+        # gates see _pre_search_view() copies with article-only hq/revenue
+        # blanked and an article-only industry kept only at High confidence.
+        # What can fail here: the name/entity gates above, the structured
+        # SEC verdict, zi OTHER at High confidence (or structured agreement)
+        # and a High-confidence blocklisted industry. Everything else goes
+        # on to Stage B; the full gates run on the merged data afterwards.
+        _probe = [_company_record(c['name'], c['role'], _pre_search_view(f)) if f else
+                  _placeholder_company(c['name'], c['role']) for c, f in stage]
+        _probe = copy.deepcopy(_probe)      # apply_fit_gates attaches c['fit'] in place
+        _pri = pick_primary(_probe)
+        _blk, _kw = industry_is_blocked(_pri.get('industry') or '')
+        _early = apply_fit_gates(_probe)
+        if _blk or _early['verdict'] == 'fail':
+            if _blk:
+                _reason = f'industry: {_pri.get("industry")} (matched "{_kw}")'
+                log.info(f'  🚫 Industry "{_pri.get("industry")}" matched "{_kw}" '
+                         f'(decided from article + structured facts — no search). '
+                         f'Soft-deleting.')
             else:
-                log.info(f'  → Cached:   {name}')
+                _reason = f'fit_gate: {"; ".join(_early["reasons"])}'
+                log.info(f'  🚫 Fit gate FAIL — {"; ".join(_early["reasons"])} '
+                         f'(decided from article + structured facts — no search). '
+                         f'Soft-deleting.')
+            if not dry_run:
+                _soft_delete(client, eid, _reason,
+                             extra={'companies_data': _probe, 'fit': _early},
+                             typed=_tombstone_typed(event, typed_cols, fit=_early,
+                                                    structured=_sv,
+                                                    account=_account_company(_probe, _early)))
+            ok += 1
+            outcomes['not_fit'] += 1
+            continue
 
-            firm = firm_cache[cache_key]
-
-            # SEC filings state the filer's STATE authoritatively — seed it
-            # instead of leaving territory to web research (fill-if-missing;
-            # saves searches and kills false "territory unverified" flags).
-            if (not firm.get('hq')
-                    and 'sec.gov' in (event.get('source_url') or '')
-                    and name.strip().lower() ==
-                        (event.get('company_name') or '').strip().lower()):
-                import re as _re2
-                m = _re2.search(r'\(([A-Z]\d|[A-Z]{2})\)',
-                                event.get('description') or '')
-                if m:
-                    code = {'A3': 'NB', 'A4': 'NL', 'A5': 'NS', 'A6': 'ON',
-                            'A7': 'PE', 'A8': 'QC'}.get(m.group(1), m.group(1))
-                    firm = dict(firm, hq=code)
-                    log.info(f'     hq seeded from SEC filing: {code}')
-            if (not firm.get('revenue') and _sv.get('revenue_segment') in ('LMM', 'MM', 'Corp')
-                    and name.strip().lower() ==
-                        (event.get('company_name') or '').strip().lower()):
-                firm = dict(firm, revenue=_sv['revenue_segment'],
-                            revenue_source='SEC Form D declared revenue range')
-                log.info(f'     revenue seeded from Form D declared range: {_sv["revenue_segment"]}')
-
-            found = [f'{k}: {v}' for k, v in firm.items() if v]
+        # ── STAGE B (survivors only; dry-run never searches) ──
+        enriched = []
+        for co, firm in stage:
+            name, role = co['name'], co['role']
+            if firm is None:
+                enriched.append(_placeholder_company(name, role))
+                continue
+            if not firm.get('no_search') and not dry_run:
+                firm = _stage_b_company(co, firm, _article_ctx, tier)
+            elif firm.get('no_search') and firm.get('zi_subindustry') == 'OTHER':
+                log.info(f'  → No search ({name}): article says OTHER '
+                         f'({firm.get("classification_confidence") or "structured"} confidence)')
+            run_key = name.lower().strip()
+            firm_cache[run_key] = firm
+            if not dry_run:
+                _remember_firmographics(acct_cache, name, firm)
+            _srcs = firm.get('_sources') or {}      # [seed|cache|article|search]
+            found = [f'{k}: {firm[k]}' + (f' [{_srcs[k]}]' if _srcs.get(k) else '')
+                     for k in _FIRM_FIELDS + ('classified_by',) if firm.get(k)]
             if found:
                 log.info(f'     {" | ".join(found)}')
-
-            enriched.append({
-                'name':           name,
-                'role':           role,
-                'url':            firm.get('url'),
-                'industry':       firm.get('industry'),
-                'zi_subindustry': firm.get('zi_subindustry'),
-                'size':           firm.get('size'),
-                'revenue':        firm.get('revenue'),
-                'revenue_source': firm.get('revenue_source'),
-                'hq':             firm.get('hq'),
-                'linkedin':       firm.get('linkedin'),
-            })
+            enriched.append(_company_record(name, role, firm))
+        if LLM_STATE['unavailable']:
+            outcomes['llm_unavailable'] += 1
+            _unavail_streak = True
+            if _llm_unavailable_event(client, eid, typed_cols, attempts_prev, dry_run):
+                break
+            continue
 
         # ── 3. Post-enrichment industry filter ────────────────────────────
         # Now that we know the discovered industry, re-apply exclusions.
@@ -2594,8 +3393,10 @@ def enrich_events(
             if not dry_run:
                 _soft_delete(client, eid,
                              f'industry: {primary.get("industry")} (matched "{kw}")',
-                             extra={'companies_data': enriched})
+                             extra={'companies_data': enriched},
+                             typed=_tombstone_typed(event, typed_cols, structured=_sv))
             ok += 1  # count as processed (not failed)
+            outcomes['not_fit'] += 1
             continue
 
         # ── 4. FIT GATES (deterministic, post-research) ───────────────────
@@ -2611,8 +3412,12 @@ def enrich_events(
                      f'Soft-deleting.')
             if not dry_run:
                 _soft_delete(client, eid, f'fit_gate: {"; ".join(fit["reasons"])}',
-                             extra={'companies_data': enriched, 'fit': fit})
+                             extra={'companies_data': enriched, 'fit': fit},
+                             typed=_tombstone_typed(event, typed_cols, fit=fit,
+                                                    structured=_sv,
+                                                    account=_account_company(enriched, fit)))
             ok += 1
+            outcomes['not_fit'] += 1
             continue
         if fit['verdict'] == 'staged':
             # Vertical unknown → hidden from reps, no grading spend. If the
@@ -2634,11 +3439,14 @@ def enrich_events(
                     _pl['fit'] = fit
                 if col_ok.get('enriched_at') and not (_event_deferred and attempts < 3):
                     _pl['enriched_at'] = datetime.utcnow().isoformat()
+                _pl.update(_final_typed(event, typed_cols, fit, _sv, enriched,
+                                        attempts_prev, deferred=_event_deferred))
                 try:
                     client.table('events').update(_pl).eq('id', eid).execute()
                 except Exception as _e:
                     log.warning(f'  write failed: {_e}')
             ok += 1
+            outcomes['staged'] += 1
             continue
         if fit['verdict'] == 'unverified':
             log.info(f'  ⚠️  Fit unverified — {"; ".join(fit["reasons"])} '
@@ -2649,7 +3457,12 @@ def enrich_events(
         log.info(f'  Grading via TAL rubric…')
         grading = grade_event(event, enriched, extra_evidence,
                               account_name=fit.get('account_name') or '')
-
+        if LLM_STATE['unavailable']:
+            outcomes['llm_unavailable'] += 1
+            _unavail_streak = True
+            if _llm_unavailable_event(client, eid, typed_cols, attempts_prev, dry_run):
+                break
+            continue
         # Unverified-fit cap: an A grade needs confirmed fit. (Agreed with
         # A.J. 2026-07-16: flag, don't hide.)
         if fit['verdict'] == 'unverified' and grading.get('grade') == 'A':
@@ -2739,9 +3552,16 @@ def enrich_events(
             )
 
         # ── 6. Write to Supabase ──────────────────────────────────────────
+        if LLM_STATE['unavailable']:      # died during the secondary grades
+            outcomes['llm_unavailable'] += 1
+            _unavail_streak = True
+            if _llm_unavailable_event(client, eid, typed_cols, attempts_prev, dry_run):
+                break
+            continue
+        outcomes['verified' if fit['verdict'] == 'pass' else 'ambiguous'] += 1
         if dry_run:
             log.info(f'  Would write {len(enriched)} company record(s) + grade '
-                     f'(fit={fit["verdict"]})')
+                     f'(fit={fit["verdict"]}, verify_state={verify_state_for(fit["verdict"])})')
             ok += 1
             continue
 
@@ -2765,6 +3585,11 @@ def enrich_events(
             payload['enriched_at'] = datetime.utcnow().isoformat()
         if col_ok.get('fit'):
             payload['fit'] = fit
+        # Phase 2 typed columns (verified: retry_after cleared; researched_
+        # ambiguous: attempts+1 and the 7/30-day ladder — unless the search
+        # was deferred, which is not an attempt; review 2026-09-07).
+        payload.update(_final_typed(event, typed_cols, fit, _sv, enriched,
+                                    attempts_prev, deferred=_event_deferred))
 
         # Upgrade event_type to cfo_hire ONLY for true CFO-equivalent hires.
         # Controller/VP-Accounting hires stay executive_hire — relabeling them
@@ -2800,13 +3625,22 @@ def enrich_events(
 
     print()
     sc = SEARCH_COUNTS
+    o = outcomes
+    # 'Searches' = lookups that entered the ladder, counted once each; the
+    # rung figures are a breakdown, not addends (a Firecrawl→Tavily fallback
+    # is ONE lookup — the old sum reported it as two; review 2026-09-07).
     log.info(
         f'Done — enriched: {ok}, failed: {fail}  ·  '
-        f'Searches: {sum(sc.values())} '
-        f'(cache:{sc["cache"]} firecrawl:{sc["firecrawl"]} '
-        f'tavily:{sc["tavily"]} '
-        f'throttled:{sc.get("throttled", 0)} '
-        f'budget_skipped:{sc.get("budget_skipped", 0)})  ·  '
+        f'verified:{o["verified"]} ambiguous:{o["ambiguous"]} staged:{o["staged"]} '
+        f'not_fit:{o["not_fit"]} decided:{o["decided"]} '
+        f'llm_unavailable:{o["llm_unavailable"]}  ·  '
+        f'Searches: {sc["lookups"]} lookups '
+        f'(firecrawl:{sc["firecrawl"]} firecrawl_attempts:{sc["firecrawl_attempts"]} '
+        f'tavily:{sc["tavily"]} throttled:{sc.get("throttled", 0)} '
+        f'transport_failed:{sc.get("transport_failed", 0)})  ·  '
+        f'Served without a search: cache:{sc["cache"]} '
+        f'negative_cache:{sc["negative_cache"]} '
+        f'budget_skipped:{sc.get("budget_skipped", 0)}  ·  '
         f'Tavily month {_tavily_month_count()}/{TAVILY_MONTHLY_BUDGET}, '
         f'today {_tavily_day_count()}/{TAVILY_DAILY_RATION}'
     )
@@ -2814,18 +3648,21 @@ def enrich_events(
 
 # ── Regrade-only mode (free — no Tavily, no firmographic re-fetch) ─────────
 
-def regrade_only_events(limit: int = None, dry_run: bool = False):
+def regrade_only_events(limit: int = None, dry_run: bool = False,
+                        event_type: str = None):
     """Re-apply ONLY the TAL grading + post-enrichment industry filter +
     event_type reclassification to existing events. Uses each event's existing
     companies_data — does NOT call Tavily and does NOT re-extract firmographics.
 
     Use this when you only want to apply NEW grading/classification rules to
-    historical events without burning Tavily API credits. Ollama (local, free)
-    is still used for the grading LLM call.
+    historical events without burning Tavily API credits. The local LLM
+    (free) is still used for the grading call. `event_type` narrows the
+    sweep (Phase 2: regrade finance_seat_open rows after the Adzuna relabel).
     """
     check_required_keys()  # not strictly needed (no Tavily) — but harmless
     client = get_supabase()
     col_ok = check_columns(client)
+    typed_cols = col_ok.get('typed') or set()
 
     # Fetch events that already have firmographic data.
     # Oldest-first (same rationale as enrich_events): if a regrade run is
@@ -2833,16 +3670,17 @@ def regrade_only_events(limit: int = None, dry_run: bool = False):
     # run picks up where we left off.
     query = client.table('events').select(
         'id, company_name, event_type, title, description, '
-        'source_url, companies_data'
+        'source_url, companies_data, published_date, discovered_at'
     ).not_.is_('companies_data', 'null')
+    if event_type:
+        query = query.eq('event_type', event_type)
     # Skip tombstoned events (already blocked/dismissed — regrading them is
     # wasted work on rows the dashboard never shows)
     try:
         query = query.is_('blocked_at', 'null')
     except Exception:
         pass
-    result = query.order('discovered_at', desc=False).execute()
-    events = result.data or []
+    events = _fetch_all(query, order='discovered_at', desc=False)
     if limit:
         events = events[:limit]
 
@@ -2871,7 +3709,8 @@ def regrade_only_events(limit: int = None, dry_run: bool = False):
             if not dry_run:
                 _soft_delete(client, eid,
                              'board_change_only: director/board appointment, '
-                             'no finance-leader role')
+                             'no finance-leader role',
+                             typed=_tombstone_typed(event, typed_cols))
             deleted += 1
             continue
 
@@ -2896,7 +3735,8 @@ def regrade_only_events(limit: int = None, dry_run: bool = False):
             )
             if not dry_run:
                 _soft_delete(client, eid,
-                             f'industry: {primary.get("industry")} (matched "{kw}")')
+                             f'industry: {primary.get("industry")} (matched "{kw}")',
+                             typed=_tombstone_typed(event, typed_cols))
             deleted += 1
             continue
 
@@ -2910,7 +3750,10 @@ def regrade_only_events(limit: int = None, dry_run: bool = False):
             log.info(f'  🚫 Fit gate FAIL — {"; ".join(fit["reasons"])} '
                      f'→ soft-delete')
             if not dry_run:
-                _soft_delete(client, eid, f'fit_gate: {"; ".join(fit["reasons"])}')
+                _soft_delete(client, eid, f'fit_gate: {"; ".join(fit["reasons"])}',
+                             extra={'companies_data': cd, 'fit': fit},
+                             typed=_tombstone_typed(event, typed_cols, fit=fit,
+                                                    account=_account_company(cd, fit)))
             deleted += 1
             continue
 
@@ -3017,6 +3860,16 @@ def regrade_only_events(limit: int = None, dry_run: bool = False):
             }
         if col_ok.get('fit'):
             payload['fit'] = fit
+        # Phase 2 typed mirror of the fit verdict. attempts/retry_after are
+        # left alone: a regrade is not a research attempt.
+        if typed_cols:
+            _acct = _account_company(cd, fit)
+            payload.update(typed_payload(
+                event=event, fit=fit, structured=_structured_verdict(event),
+                account=_acct, verify_state=verify_state_for(fit.get('verdict')),
+                present=typed_cols,
+                classification_confidence=_acct.get('classification_confidence'),
+                classified_by=_acct.get('classified_by')))
 
         # event_type reclassification — CFO-equivalents only (Controllers
         # stay executive_hire; see _finance_role for why)
@@ -3082,22 +3935,35 @@ if __name__ == '__main__':
     p.add_argument('--confirm-credits', type=int, default=None,
                    help='Required for bulk --re-enrich runs over 50 events: the '
                         'number of Tavily credits you accept spending')
+    p.add_argument('--event-type',    default=None,
+                   help='With --regrade-only: only events of this event_type '
+                        '(e.g. finance_seat_open after the Adzuna relabel)')
     p.add_argument('--dry-run',       action='store_true',
                    help='Preview without writing to Supabase')
     args = p.parse_args()
 
-    if args.regrade_only:
-        if args.re_enrich:
-            sys.exit('Choose one: --regrade-only OR --re-enrich (not both)')
-        regrade_only_events(limit=args.limit, dry_run=args.dry_run)
-    else:
-        enrich_events(
-            limit=args.limit,
-            re_enrich=args.re_enrich,
-            dry_run=args.dry_run,
-            missing_fit_only=args.missing_fit_only,
-            reverify_unverified=args.reverify_unverified,
-            complexity_sweep=args.complexity_sweep,
-            estimate_only=args.estimate,
-            confirm_credits=args.confirm_credits,
-        )
+    # Single-instance guard (Phase 2): launchd fires every 4h; a slow run
+    # overlapping the next one would double-spend the search budget and race
+    # on the same rows. The lock is a kernel flock — released on crash too.
+    _lock = _acquire_run_lock()
+    if _lock is None:
+        sys.exit(0)
+    try:
+        if args.regrade_only:
+            if args.re_enrich:
+                sys.exit('Choose one: --regrade-only OR --re-enrich (not both)')
+            regrade_only_events(limit=args.limit, dry_run=args.dry_run,
+                                event_type=args.event_type)
+        else:
+            enrich_events(
+                limit=args.limit,
+                re_enrich=args.re_enrich,
+                dry_run=args.dry_run,
+                missing_fit_only=args.missing_fit_only,
+                reverify_unverified=args.reverify_unverified,
+                complexity_sweep=args.complexity_sweep,
+                estimate_only=args.estimate,
+                confirm_credits=args.confirm_credits,
+            )
+    finally:
+        _lock.release()

@@ -16,6 +16,14 @@ echo "Enrichment run: $(date)" >> "$LOG"
 echo "========================================" >> "$LOG"
 
 cd "$PROJECT" || exit 1
+
+# Pause switch (2026-09-07): 'touch state/PAUSE' skips runs without touching
+# launchd — used while enrichment_scout.py is being edited/verified. Remove
+# the file to resume. Logged so a forgotten pause is visible in the log.
+if [ -f "$PROJECT/state/PAUSE" ]; then
+    echo "PAUSED — state/PAUSE present since $(stat -f %Sm "$PROJECT/state/PAUSE"); skipping run" >> "$LOG"
+    exit 0
+fi
 source "$PROJECT/venv/bin/activate"
 python enrichment_scout.py >> "$LOG" 2>&1
 

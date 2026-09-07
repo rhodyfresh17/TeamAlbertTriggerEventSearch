@@ -379,9 +379,14 @@ def hq_state_code(hq) -> Optional[str]:
 
 
 def event_state_code(row) -> Optional[str]:
-    """HQ state/province code for an event. Account company's `hq` first;
-    then the scraper's matched_regions (SEC/Adzuna store a code, news feeds
-    store lower-case state names and city names — cities yield None)."""
+    """HQ state/province code for an event. The typed `hq_state` column
+    wins when the row carries one (the enricher already parsed it — v2
+    Phase 2); then the account company's `hq`; then the scraper's
+    matched_regions (SEC/Adzuna store a code, news feeds store lower-case
+    state names and city names — cities yield None)."""
+    typed = row.get('hq_state') if hasattr(row, 'get') else None
+    if isinstance(typed, str) and typed.strip():
+        return typed.strip().upper()
     co = _account_company(row)
     if co:
         code = hq_state_code(co.get('hq'))
@@ -734,24 +739,170 @@ def load_source_statuses() -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def load_events(days: int = 30, search: str = None) -> pd.DataFrame:
-    """Load all events from Supabase."""
+# ── Typed columns (v2 Phase 2, 2026-09-07) ──────────────────────────────────
+# The v2 migration adds typed columns (verify_state, fit_verdict, hq_state,
+# source, expires_at, ...) so the verification filter can run server-side
+# instead of parsing every row's `fit` JSONB after a 10k-row download. A.J.
+# runs that migration by hand, later — so every reader PROBES for the
+# columns and behaves exactly as before when they're absent.
+TYPED_PROBE_COLUMNS = ('verify_state', 'fit_verdict', 'hq_state', 'source',
+                       'expires_at')
+
+# verify_state values split_by_verdict shows with the toggle ON. pass →
+# verified, unverified → researched_ambiguous, staged → staged; 'fail' /
+# 'decided' (not_fit / decided) are dropped either way. Rows the enricher
+# hasn't reached yet have verify_state NULL — the client-side pass treats
+# those (fit=None) as 'staged', so the server-side filter must keep NULLs
+# too or fresh events would vanish the moment the migration lands.
+VERIFIED_STATES = ('verified',)
+UNVERIFIED_STATES = ('researched_ambiguous', 'staged')
+
+
+def _probe_typed_columns(client, columns=TYPED_PROBE_COLUMNS) -> set:
+    """Which of `columns` exist on `events`. One cheap select per column;
+    a column that errors is absent, a client that errors yields the empty
+    set (= legacy behaviour everywhere)."""
+    present = set()
+    if client is None:
+        return present
+    for col in columns:
+        try:
+            client.table('events').select(col).limit(1).execute()
+            present.add(col)
+        except Exception:
+            continue
+    return present
+
+
+# cache_data, NOT cache_resource: the resource cache survives secret
+# rotations and kept serving a stale client on 2026-09-04. An hour is
+# plenty — the migration is a one-off, and a stale "absent" only costs the
+# legacy (still correct) code path until the TTL expires.
+@st.cache_data(ttl=3600)
+def typed_columns_present() -> set:
+    try:
+        return _probe_typed_columns(get_supabase_client())
+    except Exception:
+        return set()
+
+
+def _states_or_filter(states) -> str:
+    """PostgREST `or=` expression: verify_state in `states` OR NULL (the
+    not-yet-enriched rows split_by_verdict treats as 'staged')."""
+    return "verify_state.in.({}),verify_state.is.null".format(','.join(states))
+
+
+# The three server-side verification expressions (review 2026-09-07).
+# verify_state is written by enrichment, and an enrichment process that was
+# already running when the migration landed (its column probe cached
+# "absent") keeps writing fit.verdict='pass' with verify_state NULL. A bare
+# verify_state.eq.verified would hide such a row from the default view until
+# its next enrichment, so NULL-state rows are judged by the JSON verdict:
+#   verified  = state verified, OR state NULL with fit.verdict = pass
+#   hidden    = state researched_ambiguous / staged, OR state NULL with
+#               anything but a pass verdict. fit->>verdict.is.null covers
+#               both a NULL fit and a fit without a verdict key (the JSON
+#               path of a NULL fit is NULL too); a plain fit.is.null would
+#               miss the second, and SQL's NULL <> 'pass' is not true.
+#   toggle ON = verified ∪ hidden = state in (verified, researched_ambiguous,
+#               staged) OR state NULL — the union collapses to the plain
+#               state list, so that expression is unchanged.
+# Validated read-only against the live project on 2026-09-07 with existing
+# columns standing in (grade / blocked_at / fit): nested and()/or() inside
+# or=, in.(...) and the fit->>verdict path all parse, and count(verified) +
+# count(hidden) == count(toggle ON) over a 30-day window (1 + 288 == 289).
+VERIFIED_FILTER = ("verify_state.eq.{},and(verify_state.is.null,fit->>verdict.eq.pass)"
+                   .format(VERIFIED_STATES[0]))
+HIDDEN_FILTER = ("verify_state.in.({}),and(verify_state.is.null,"
+                 "or(fit->>verdict.is.null,fit->>verdict.neq.pass))"
+                 .format(','.join(UNVERIFIED_STATES)))
+TOGGLE_ON_FILTER = _states_or_filter(VERIFIED_STATES + UNVERIFIED_STATES)
+
+
+def build_events_query(client, days: int, verified_only, present, now=None):
+    """Pure query builder for load_events / count_hidden_unverified.
+
+    verified_only=None → no server-side verification filter (legacy path,
+    also the only option until 'verify_state' exists). True → VERIFIED_FILTER
+    (verified rows, plus NULL-state rows whose fit verdict is pass); False →
+    TOGGLE_ON_FILTER, everything split_by_verdict shows with the toggle ON
+    (verified + unverified + not-yet-enriched). `present` is the set from
+    typed_columns_present(); `now` is injectable for tests."""
+    now = now or datetime.now()
+    query = client.table('events').select('*')
+    cutoff_date = (now - timedelta(days=days)).isoformat()
+    query = query.gte('discovered_at', cutoff_date)
+    # Hide soft-deleted (industry-blocked) events. They stay in the table
+    # so supabase_sync doesn't recreate them via upsert, but the user
+    # never sees them. The is_('blocked_at', 'null') filter is omitted
+    # if the column doesn't exist yet (pre-migration).
+    try:
+        query = query.is_('blocked_at', 'null')
+    except Exception:
+        pass  # column not yet present; will start filtering after migration
+    if verified_only is not None and 'verify_state' in present:
+        query = query.or_(VERIFIED_FILTER if verified_only else TOGGLE_ON_FILTER)
+    # 'expires_at' is deliberately NOT filtered here even when present:
+    # Phase 4 decides how expired triggers are displayed (hidden, dimmed,
+    # or a separate tab). Filtering now would silently drop rows.
+    return query
+
+
+def count_hidden_unverified(days: int, present, client=None, now=None) -> int:
+    """How many rows in the window the verified-only default hides — the
+    "N unverified hidden" caption needs it once load_events stops
+    downloading those rows. HIDDEN_FILTER is the exact complement of
+    VERIFIED_FILTER within the toggle-ON set, so shown + hidden = toggle ON.
+    The count is WINDOW-WIDE (whole time range, every territory / grade);
+    unverified_caption says so. 0 when the typed column is absent (the
+    client-side split_by_verdict pass counts them from the frame then) or
+    when anything fails — the caption is informational, never fatal."""
+    if 'verify_state' not in present:
+        return 0
+    client = client or get_supabase_client()
+    if not client:
+        return 0
+    now = now or datetime.now()
+    try:
+        cutoff_date = (now - timedelta(days=days)).isoformat()
+        q = client.table('events').select('id', count='exact')
+        q = q.gte('discovered_at', cutoff_date).is_('blocked_at', 'null')
+        q = q.or_(HIDDEN_FILTER)
+        resp = q.execute()
+        return int(getattr(resp, 'count', None) or 0)
+    except Exception:
+        return 0
+
+
+def unverified_caption(n: int, show_unverified: bool, days: int, window_wide: bool) -> str:
+    """Text under the verification toggle. ON: `n` unverified rows are in
+    the frame on screen (view-relative — territory / revenue / grade filters
+    already applied). OFF: `n` were hidden — view-relative when counted from
+    the downloaded frame (legacy path), but WINDOW-WIDE when it came from
+    count_hidden_unverified: those rows were never downloaded, so the count
+    spans the whole time range and every territory / grade. Review
+    2026-09-07: say which, or the OFF and ON numbers look like they should
+    agree and don't."""
+    if show_unverified:
+        return f"{n:,} unverified shown"
+    if window_wide:
+        return f"{n:,} unverified hidden (whole {days}-day window)"
+    return f"{n:,} unverified hidden"
+
+
+def load_events(days: int = 30, search: str = None,
+                verified_only=None) -> pd.DataFrame:
+    """Load all events from Supabase. verified_only=None keeps the legacy
+    "download everything, filter client-side" path; True/False push the
+    verification filter into the query once `verify_state` exists (Phase 2,
+    2026-09-07)."""
     client = get_supabase_client()
     if not client:
         return pd.DataFrame()
 
     try:
-        query = client.table('events').select('*')
-        cutoff_date = (datetime.now() - timedelta(days=days)).isoformat()
-        query = query.gte('discovered_at', cutoff_date)
-        # Hide soft-deleted (industry-blocked) events. They stay in the table
-        # so supabase_sync doesn't recreate them via upsert, but the user
-        # never sees them. The is_('blocked_at', 'null') filter is omitted
-        # if the column doesn't exist yet (pre-migration).
-        try:
-            query = query.is_('blocked_at', 'null')
-        except Exception:
-            pass  # column not yet present; will start filtering after migration
+        present = typed_columns_present() if verified_only is not None else set()
+        query = build_events_query(client, days, verified_only, present)
 
         # Paginate — Supabase caps single responses at 1000 rows, which the
         # DB has now outgrown. A flat .limit(1000) silently dropped the
@@ -1611,24 +1762,49 @@ def load_scorecard_events():
     if not client:
         return []
     since = (datetime.utcnow() - timedelta(days=14)).isoformat()
-    try:
-        rows, off = [], 0
-        while True:
-            q = client.table('events').select(
-                'discovered_at,blocked_at,blocked_reason,grade,source_url'
-            ).gte('discovered_at', since).range(off, off + 999).execute()
-            rows += q.data or []
-            if len(q.data or []) < 1000:
-                break
-            off += 1000
-        return rows
-    except Exception:
-        return []
+    cols = 'discovered_at,blocked_at,blocked_reason,grade,source_url'
+    # Typed `source` + `event_type` once the migration lands (Phase 2); the
+    # probe can be an hour stale, so a failed typed select falls back to
+    # the legacy column list instead of an empty scorecard.
+    selects = [cols]
+    if 'source' in typed_columns_present():
+        selects.insert(0, cols + ',source,event_type')
+    for sel in selects:
+        try:
+            rows, off = [], 0
+            while True:
+                q = client.table('events').select(sel).gte(
+                    'discovered_at', since).range(off, off + 999).execute()
+                rows += q.data or []
+                if len(q.data or []) < 1000:
+                    break
+                off += 1000
+            return rows
+        except Exception:
+            continue
+    return []
 
 
-def _scorecard_src(url):
-    """Bucket a source_url into a readable source label."""
+# SQLite events.source enum → scorecard label. 'other' falls through to the
+# URL host so a typed-but-unbucketed source still reads as something.
+_SOURCE_LABELS = {
+    'sec_edgar': 'SEC EDGAR', 'adzuna': 'Adzuna', 'google_news': 'Google News',
+    'pr_newswire': 'PR Newswire', 'globe_newswire': 'GlobeNewswire',
+    'business_wire': 'Business Wire', 'linkedin': 'LinkedIn',
+}
+
+
+def _scorecard_src(row_or_url):
+    """Bucket an event into a readable source label. Accepts a row dict
+    (typed `source` preferred, `source_url` fallback) or, as before, a
+    bare source_url string."""
     from urllib.parse import urlparse
+    url = row_or_url
+    if isinstance(row_or_url, dict):
+        src = str(row_or_url.get('source') or '').strip().lower()
+        if src in _SOURCE_LABELS:
+            return _SOURCE_LABELS[src]
+        url = row_or_url.get('source_url')
     h = urlparse(url or '').netloc.replace('www.', '')
     if 'sec.gov' in h:
         return 'SEC EDGAR'
@@ -1684,7 +1860,7 @@ def render_weekly_scorecard(df, acct_dispos):
             st.caption("New events by source (7d)")
             src_c = {}
             for r in this_wk:
-                s = _scorecard_src(r.get('source_url'))
+                s = _scorecard_src(r)
                 src_c[s] = src_c.get(s, 0) + 1
             for s, n in sorted(src_c.items(), key=lambda kv: -kv[1])[:8]:
                 st.markdown(f"- **{s}** — {n}")
@@ -2004,8 +2180,14 @@ def main():
     if _receipt:
         (st.success if _receipt.startswith('✅') else st.error)(_receipt)
 
-    # Load all events
-    df = load_events(days=days, search=search if search else None)
+    # Load all events. The verification toggle widget renders later in the
+    # sidebar, but its state is already in session_state on every rerun
+    # (False on the very first run = the verified-only default), so the
+    # server-side filter can use it now. Phase 2, 2026-09-07.
+    show_unverified = bool(st.session_state.get('flt_show_unverified', False))
+    typed_present = typed_columns_present()
+    df = load_events(days=days, search=search if search else None,
+                     verified_only=not show_unverified)
 
     if df.empty:
         # Distinguish "your search matched nothing" from "the database read
@@ -2159,10 +2341,20 @@ def main():
     # or reveals under the other filters. Everything below — metric cards,
     # Work Queue, category tabs, Classified Leads, Scorecard's view line,
     # the export — renders from this one frame.
+    # Second, idempotent pass: with the typed column present the query
+    # already applied this filter, so it changes nothing — but it keeps
+    # the page correct when the probe is stale or a row's fit and
+    # verify_state disagree.
     df, n_unverified = split_by_verdict(df, show_unverified)
-    unverified_slot.caption(
-        f"{n_unverified:,} unverified shown" if show_unverified
-        else f"{n_unverified:,} unverified hidden")
+    window_wide = False
+    if not show_unverified and 'verify_state' in typed_present:
+        # The hidden rows were never downloaded — count them server-side.
+        # This count is window-wide (not narrowed by the territory /
+        # revenue / grade filters above), unlike the legacy frame count,
+        # and the caption says so (review 2026-09-07).
+        n_unverified = count_hidden_unverified(days, typed_present)
+        window_wide = True
+    unverified_slot.caption(unverified_caption(n_unverified, show_unverified, days, window_wide))
 
     # Stats
     stats = get_stats(df)

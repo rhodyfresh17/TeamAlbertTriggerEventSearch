@@ -30,11 +30,9 @@ from supabase import create_client
 import enrichment_scout as es
 from src.pipeline.gates import (is_non_operating_entity, is_bad_company_name,
                                 sic_to_verdict, formd_to_verdict, account_key)
+from src.pipeline.typed import EXPIRY_DAYS   # one shelf-life table (Phase 2)
 
 UA = {'User-Agent': 'TeamAlbert Sales Intelligence (sales-leads@teamalbert.local)'}
-EXPIRY_DAYS = {'cfo_hire': 60, 'finance_seat_open': 60, 'executive_hire': 60,
-               'funding': 60, 'merger_acquisition': 120, 'expansion': 90,
-               'stable_target': 365, 'other': 60}
 MERGER_PHRASES = ['Agreement and Plan of Merger', 'Stock Purchase Agreement',
                   'Asset Purchase Agreement', 'Membership Interest Purchase Agreement']
 

@@ -9,8 +9,9 @@ resulting logs/health_alerts.log and summarises it Mondays.
 Usage:
     python monitor_health.py            # default = --quick (~10s)
     python monitor_health.py --quick    # essential checks only
-    python monitor_health.py --daily    # adds source health + flow analysis
-    python monitor_health.py --weekly   # adds trend analysis + cleanup dry-run
+    python monitor_health.py --daily    # adds source health + yield checks
+    python monitor_health.py --weekly   # daily set + finance-leader source mix (Monday run;
+                                        #   the all-clear heartbeat is in the wrapper)
     python monitor_health.py --json     # machine-readable output
 
 Exit codes:
@@ -21,11 +22,23 @@ Cost rule (2026-09-06): this script never spends a paid credit. Tavily is
 judged from the local `tavily_usage` counter, never by calling the API.
 Firecrawl is judged by a single free local search (the "usefulness canary").
 
+Yield rule (2026-09-07): the daily checks measure YIELD (did anything survive
+the gates, per source) — not just liveness (did the cron run). Liveness said
+"All clear" for 40 days while 24 of 39 feeds returned nothing and the best
+trigger (new finance leader) was 60% single-sourced to a feed that had been
+dead for 9 days. Every WARN here is posted to Mattermost by
+run_health_check.sh, so a check must not WARN for a condition that is
+expected every day — that is noise the owner learns to ignore.
+
 State files (state/, gitignored — created on first run):
     state/search_mode              'ok' | 'defer' — enrichment_scout.py reads this;
                                    'defer' after 2 consecutive empty Firecrawl canaries
     state/firecrawl_empty_streak   consecutive empty canaries (int)
     state/lead_status_nonnew.txt   previous run's count of rep-set lead_status rows
+    state/quiet_sources.json       {label: {"since": "YYYY-MM-DD", "prior": n}} — feeds that
+                                   went quiet; kept until they recover (check_source_yield)
+    state/finance_leader_mix.json  {top_source, share_pct, checked_at} from the last weekly
+                                   run (check_trigger_source_concentration)
 """
 
 import os
@@ -34,10 +47,17 @@ import json
 import argparse
 import calendar
 import sqlite3
+import re
 import requests
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from collections import Counter
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from src.pipeline.sources import (  # noqa: E402
+    source_label, feed_label, feed_matches_label, finance_leader_family,
+    is_canonical_label,
+)
 
 # Load .env
 try:
@@ -87,6 +107,24 @@ def _state_int(name: str, default: int = 0) -> int:
         return int(raw) if raw is not None else default
     except ValueError:
         return default
+
+
+def _state_json(name: str):
+    """Parsed JSON from state/<name>, or None when the file is absent or does
+    not parse. A hand-edited file that no longer parses counts as "no memory"
+    rather than crashing the check (the owner is told to edit these files)."""
+    raw = _state_read(name)
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return None
+
+
+def _state_write_json(name: str, obj) -> None:
+    """Pretty, key-sorted so a human can read and edit the file by hand."""
+    _state_write(name, json.dumps(obj, indent=2, sort_keys=True))
 
 
 # ── Individual checks (each returns (status, message)) ───────────────────────
@@ -445,37 +483,61 @@ def check_rep_state_intact():
     return PASS, f'{now_n} events carry a rep-set lead_status (previous run: {prev})'
 
 
-def check_local_sqlite():
-    """Verify the local SQLite DB exists and has the expected schema.
+# The LIVE enrichment cache is AccountCache (src/pipeline/cache.py, 2026-09-07):
+# search_cache / account_firmographics / negative_cache, plus the Tavily month
+# counter. The legacy `firmographic_cache` table is no longer created or read
+# (enrichment_scout keeps _cache_get/_cache_set for rollback only), so
+# requiring it here meant a recreated trigger_events.db would WARN forever
+# (review 2026-09-07). It is mentioned only if it happens to still exist.
+ENRICHMENT_TABLES = ('search_cache', 'account_firmographics', 'negative_cache', 'tavily_usage')
+LEGACY_CACHE_TABLE = 'firmographic_cache'
 
-    WARNs (never PASSes) when the events table is empty: the scraper runs in
-    GitHub Actions and its SQLite — the authoritative dedup history + the
-    rows supabase_sync.py pushes — lives in the Actions cache
-    (trigger-events-db-v2-*), not on this Mac. The local file is only the
-    enrichment cache + Tavily counter. An empty local table is expected here,
-    but it means nothing on this machine can verify what the scraper stored;
-    a 0-row table used to PASS and hid that blind spot."""
-    if not DB_PATH.exists():
-        return WARN, 'trigger_events.db not present locally (normal if scraper only runs in CI)'
+
+def check_local_sqlite(db_path=None):
+    """The local trigger_events.db is the ENRICHMENT cache + Tavily counters,
+    nothing more. The scrape DB (dedup history, the rows supabase_sync pushes)
+    lives in the GitHub Actions cache (trigger-events-db-v2-*) by design, so
+    the local events table is empty on this Mac every single day.
+
+    Until 2026-09-07 this check WARNed on that empty table, which posted a
+    junk alert to Mattermost daily. Now: PASS when the file and the enrichment
+    tables are present; WARN only when the file or those tables are missing
+    (then check_tavily_budget is blind and the cache is gone). Never WARN
+    for 0 events."""
+    path = Path(db_path) if db_path else DB_PATH
+    if not path.exists():
+        return WARN, (
+            f'{path.name} not present — enrichment cache + Tavily counter missing '
+            f'(enrichment_scout.py recreates it on its next run; the Tavily budget '
+            f'check is blind until then)'
+        )
     try:
-        with sqlite3.connect(str(DB_PATH)) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM events")
-            n_events = cursor.fetchone()[0]
-            cursor.execute("SELECT COUNT(*) FROM seen_urls")
-            n_urls = cursor.fetchone()[0]
-        if n_events == 0:
-            return WARN, (
-                f'Local SQLite has 0 events ({n_urls} seen URLs) — the authoritative '
-                f'scrape DB lives in the GitHub Actions cache (trigger-events-db-v2-*), '
-                f'so nothing local can verify scraped rows; expected on this Mac, but '
-                f'a problem if the scraper is supposed to run here'
-            )
-        return PASS, f'Local SQLite OK ({n_events} events, {n_urls} seen URLs)'
+        with sqlite3.connect(str(path)) as conn:
+            present = {r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            missing = [t for t in ENRICHMENT_TABLES if t not in present]
+            if missing:
+                return WARN, (
+                    f'{path.name} is missing enrichment table(s): {", ".join(missing)} '
+                    f'— has enrichment_scout.py run on this machine since the '
+                    f'AccountCache change (2026-09-07)?'
+                )
+            n = {t: conn.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0]
+                 for t in ENRICHMENT_TABLES}
+            n_legacy = (conn.execute(f'SELECT COUNT(*) FROM {LEGACY_CACHE_TABLE}').fetchone()[0]
+                        if LEGACY_CACHE_TABLE in present else None)
     except sqlite3.OperationalError as e:
         return WARN, f'SQLite schema issue: {e}'
     except Exception as e:
         return WARN, f'SQLite check failed: {e}'
+    legacy = (f'; legacy {LEGACY_CACHE_TABLE} still present with {n_legacy} rows, no longer read'
+              if n_legacy is not None else '')
+    return PASS, (
+        f'Enrichment cache OK ({n["search_cache"]} cached searches · '
+        f'{n["account_firmographics"]} account profiles · {n["negative_cache"]} negative-cached · '
+        f'{n["tavily_usage"]} Tavily counter rows{legacy}) '
+        f'— scrape DB lives in the GitHub Actions cache by design'
+    )
 
 
 def check_launchd_job():
@@ -549,56 +611,452 @@ def check_event_volume_trend():
         return WARN, f'Could not compute trend: {e}'
 
 
-# ── --weekly checks ─────────────────────────────────────────────────────────
+# ── Yield checks (daily + weekly, 2026-09-07) ───────────────────────────────
+#
+# "Survivor" = an events row with blocked_at NULL: it got past every scrape-
+# time and enrichment gate and is (or was) something a rep could see. Counting
+# survivors PER SOURCE over a recent window vs a prior window is what tells a
+# dead feed from a quiet weekend — liveness (source_status.last_check) cannot.
 
-def check_cleanup_dryrun():
-    """Run cleanup_legacy_events.py in dry-run mode to surface fresh noise."""
-    import subprocess
-    script = Path(__file__).parent / 'cleanup_legacy_events.py'
-    if not script.exists():
-        return WARN, 'cleanup_legacy_events.py not present'
+YIELD_WINDOW_DAYS = 28        # total look-back for every yield check
+YIELD_RECENT_DAYS = 7         # "now" window; the remaining 21d is the "before" baseline
+# "Went quiet" bar (review 2026-09-07). Survivors arrive roughly Poisson, so a
+# feed averaging P survivors/21d expects P/3 in a 7-day window and reads empty
+# with probability e^-(P/3). The old bar of 3 (λ = 1/7d → P(0) = e^-1 ≈ 37%;
+# a 4/21d feed ≈ 26%) flapped on every thin feed. At 12/21d the feed expects
+# 4/7d and P(0) = e^-4 ≈ 1.8% — an empty week is evidence, not luck.
+QUIET_MIN_PRIOR = 12
+# Below the WARN bar a quiet bucket is LISTED as "small feeds quiet" (context
+# in the PASS/WARN text, never an alert of its own) once its prior count
+# reaches this: bare-host buckets (a URL host that never got a canonical
+# label) at any size, and canonical feeds under QUIET_MIN_PRIOR.
+SMALL_FEED_MIN_PRIOR = 3
+QUIET_STATE_FILE = 'quiet_sources.json'   # {label: {"since": "YYYY-MM-DD", "prior": n}}
+CRON_RAN_MAX_HOURS = 10       # same threshold check_scrape_freshness FAILs at
+FEED_ACTIVE_HOURS = 48        # source_status rows older than this are retired feeds, not "the latest run"
+CONCENTRATION_WARN_PCT = 40   # one source carrying more than this share of the best trigger = single point of failure
+CONCENTRATION_MIN_ROWS = 5    # below this a share is arithmetic noise, not a signal
+# Change-driven (review 2026-09-07): until Phase 3 adds independent finance-
+# leader sources the top share is above CONCENTRATION_WARN_PCT in every
+# reachable state (Adzuna 68% live; Google News 70% once Adzuna ages out), so
+# a WARN every run was noise. WARN only when the top source flips, its share
+# moves more than this many points since the previous weekly run, it newly
+# crosses the bar, or on the first run ever; otherwise PASS with the mix.
+CONCENTRATION_SHIFT_PTS = 15
+MIX_STATE_FILE = 'finance_leader_mix.json'   # {top_source, share_pct, checked_at}
+MIX_SHOW_MAX = 6              # sources listed in the "mix unchanged" line before "+n more"
+MAX_ENRICH_ATTEMPTS = 3       # after this a researched_ambiguous row is negative-cached (contract, 2026-09-07)
+RETRY_STATE = 'researched_ambiguous'
+TYPED_COLUMNS_NOTE = '(items_fetched not yet migrated — run supabase/migrations/002_v2_typed_columns.sql)'
+EVENT_COLUMNS = 'discovered_at,blocked_at,blocked_reason,source_url,title,event_type,hashtags'
+
+
+def _parse_ts(ts):
+    """Aware UTC datetime from a Supabase timestamp string, or None. Postgres
+    emits either naive ISO or +00:00; fractional seconds can exceed the six
+    digits fromisoformat accepts on 3.9."""
+    if not ts:
+        return None
     try:
-        r = subprocess.run(
-            [sys.executable, str(script)],
-            capture_output=True, text=True, timeout=60,
-            cwd=str(script.parent)
-        )
-        # cleanup_legacy_events.py uses Python logging which goes to stderr —
-        # check both streams for the result line
-        combined = (r.stdout or '') + '\n' + (r.stderr or '')
-        for line in combined.split('\n'):
-            if 'would be dropped' in line:
-                # Format: "Result: N of M events would be dropped"
-                parts = line.replace(':', '').split()
-                try:
-                    n = int(parts[1])
-                except (IndexError, ValueError):
-                    continue
-                # A small residual of genuine syndication dupes / stray
-                # off-target events is normal steady-state — news gets
-                # syndicated, and a few items land just outside the scrape-time
-                # dedup window. That's routine tidiness, not a health problem,
-                # so don't nag weekly about it. Only WARN when noise ACCUMULATES
-                # past the threshold, which signals the scrape-time dedup or
-                # industry filters have actually regressed.
-                CLEANUP_WARN_THRESHOLD = 25
-                if n == 0:
-                    return PASS, 'No noise in DB (cleanup dry-run clean)'
-                if n > CLEANUP_WARN_THRESHOLD:
-                    return WARN, (
-                        f'{n} noise events accumulating (> {CLEANUP_WARN_THRESHOLD}) '
-                        f'— scrape dedup/filters may have regressed. Review, then '
-                        f'`python cleanup_legacy_events.py --apply`'
-                    )
-                return PASS, (
-                    f'{n} minor noise events (below {CLEANUP_WARN_THRESHOLD} '
-                    f'threshold — routine, optional `cleanup_legacy_events.py --apply`)'
-                )
-        return WARN, 'Cleanup dry-run produced unexpected output'
-    except subprocess.TimeoutExpired:
-        return WARN, 'Cleanup dry-run timed out'
+        s = str(ts).replace('Z', '+00:00')
+        s = re.sub(r'(\.\d{6})\d+', r'\1', s)
+        dt = datetime.fromisoformat(s)
+    except (ValueError, TypeError):
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _fetch_recent_events(days=YIELD_WINDOW_DAYS, client=None):
+    """Every events row discovered in the last `days`, paginated (PostgREST
+    caps a page at 1,000 — the unpaginated read is the class of bug that reset
+    rep statuses in supabase_sync until 2026-09-06). Asks for the typed
+    `source` column first and falls back to the URL-only select when the
+    migration hasn't run. Module-level so tests can monkeypatch it."""
+    client = client or get_supabase()
+    if not client:
+        return []
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+    def _page_all(columns):
+        rows, off = [], 0
+        while True:
+            # ORDER BY (discovered_at, id) — a total order (review 2026-09-07).
+            # Without it Postgres returns pages in physical order, which the
+            # enrichment UPDATEs running concurrently can reshuffle between
+            # requests, so pages overlapped or skipped rows.
+            q = (client.table('events').select(columns).gte('discovered_at', since)
+                 .order('discovered_at').order('id').range(off, off + 999).execute())
+            page = q.data or []
+            rows += page
+            if len(page) < 1000:
+                return rows
+            off += 1000
+
+    try:
+        return _page_all(EVENT_COLUMNS + ',source')
+    except Exception:
+        return _page_all(EVENT_COLUMNS)   # pre-migration: no `source` column
+
+
+def _fetch_source_status(client=None):
+    """All source_status rows (one per feed). Module-level for tests."""
+    client = client or get_supabase()
+    if not client:
+        return None
+    return client.table('source_status').select('*').execute().data or []
+
+
+def _cron_age_hours(status_rows, now):
+    """Hours since the scraper cron last touched ANY feed, or None."""
+    ages = [(now - dt).total_seconds() / 3600
+            for dt in (_parse_ts(r.get('last_check')) for r in (status_rows or []))
+            if dt is not None]
+    return min(ages) if ages else None
+
+
+def _survivors(rows):
+    return [r for r in rows if not r.get('blocked_at')]
+
+
+def _yield_by_source(rows, now):
+    """{label: {'recent': n, 'prior': n, 'last': datetime|None}} over survivors
+    in the yield window; 'last' is the newest survivor (a feed's "quiet since")."""
+    recent_cut = now - timedelta(days=YIELD_RECENT_DAYS)
+    out = {}
+    for r in _survivors(rows):
+        dt = _parse_ts(r.get('discovered_at'))
+        if dt is None:
+            continue
+        bucket = out.setdefault(source_label(r), {'recent': 0, 'prior': 0, 'last': None})
+        bucket['recent' if dt >= recent_cut else 'prior'] += 1
+        if bucket['last'] is None or dt > bucket['last']:
+            bucket['last'] = dt
+    return out
+
+
+def _quiet_entry(entry):
+    """(since, prior) from a state/quiet_sources.json entry — tolerant of hand
+    edits: anything unreadable shows as '?' rather than crashing the check."""
+    if not isinstance(entry, dict):
+        return '?', '?'
+    since, prior = entry.get('since'), entry.get('prior')
+    return (str(since) if since else '?'), (prior if prior is not None else '?')
+
+
+def _fmt_top(counter_like, n=3, suffix=''):
+    top = sorted(counter_like, key=lambda kv: (-kv[1], kv[0]))[:n]
+    return ', '.join(f'{k} {v}{suffix}' for k, v in top)
+
+
+def check_source_yield(now=None):
+    """Per source: survivors in the last 7d vs the prior 21d.
+
+    WARN  a canonical source with ≥ QUIET_MIN_PRIOR survivors in the baseline
+          and 0 in the last 7d ("went quiet" — a disabled or silently dead
+          feed), plus every label already on record in
+          state/quiet_sources.json that still shows 0 recent survivors
+          ("still quiet since <date>"). The record is what keeps a dead feed
+          visible: after 28 days its baseline drops to 0 and without memory
+          the check would PASS while the feed stayed dead — Adzuna, dead
+          since 2026-08-26, would have vanished from every check around
+          2026-09-23 (review 2026-09-07). An entry clears itself the day its
+          label shows ≥ 1 survivor in the recent window ("recovered").
+          Bare-host buckets (no canonical label) never raise this WARN on
+          their own; they — and canonical feeds under QUIET_MIN_PRIOR — are
+          listed as "small feeds quiet" for context once they have
+          ≥ SMALL_FEED_MIN_PRIOR prior survivors and 0 recent.
+    FAIL  0 survivors in the last 7d across ALL sources while the cron ran —
+          the whole pipeline is producing nothing a rep can see.
+    PASS  survivors/7d, source count, top three, and the survival rate of
+          everything discovered in the window.
+
+    Manual clear: delete a label from state/quiet_sources.json (or the whole
+    file) to drop it — e.g. a feed retired on purpose. It is re-added only
+    while the feed still shows ≥ QUIET_MIN_PRIOR prior survivors and 0
+    recent, so a deliberately retired feed re-arms until its rows age out of
+    the 28-day window; clear it after that, or accept the repeat until then.
+    """
+    now = now or datetime.now(timezone.utc)
+    if not get_supabase():
+        return WARN, 'Supabase unavailable — cannot measure yield'
+    try:
+        rows = _fetch_recent_events(YIELD_WINDOW_DAYS)
     except Exception as e:
-        return WARN, f'Cleanup dry-run failed: {e}'
+        return WARN, f'Could not read recent events: {e}'
+    if not rows:
+        return WARN, f'No events discovered in the last {YIELD_WINDOW_DAYS} days at all'
+
+    by_src = _yield_by_source(rows, now)
+    recent_total = sum(b['recent'] for b in by_src.values())
+    prior_days = YIELD_WINDOW_DAYS - YIELD_RECENT_DAYS
+    if recent_total == 0:
+        try:
+            cron_age = _cron_age_hours(_fetch_source_status(), now)
+        except Exception:
+            cron_age = None
+        if cron_age is not None and cron_age <= CRON_RAN_MAX_HOURS:
+            return FAIL, (
+                f'0 events survived the gates in the last {YIELD_RECENT_DAYS} days even '
+                f'though the scraper ran {cron_age:.1f}h ago — the feeds are running but '
+                f'nothing gets through (prior {prior_days}d: '
+                f'{sum(b["prior"] for b in by_src.values())} survivors)'
+            )
+        return WARN, (
+            f'0 events survived the gates in the last {YIELD_RECENT_DAYS} days and the '
+            f'scraper cron is not running — see "Scrape freshness"'
+        )
+
+    # Quiet-feed memory (review 2026-09-07): labels on record stay WARN until
+    # they show a recent survivor; canonical labels that just went quiet are
+    # added with the date of their last survivor. The file is rewritten only
+    # when something changed, so its mtime means something.
+    loaded = _state_json(QUIET_STATE_FILE)
+    on_record = dict(loaded) if isinstance(loaded, dict) else {}
+    recovered = sorted(k for k in on_record if by_src.get(k, {}).get('recent', 0) >= 1)
+    still_quiet = sorted(k for k in on_record if k not in recovered)
+    newly_quiet, small_quiet = [], []
+    for label, b in sorted(by_src.items()):
+        if b['recent'] or label in on_record:
+            continue
+        if is_canonical_label(label) and b['prior'] >= QUIET_MIN_PRIOR:
+            newly_quiet.append(label)
+        elif b['prior'] >= SMALL_FEED_MIN_PRIOR:
+            small_quiet.append(label)
+    if recovered or newly_quiet:
+        record = {k: v for k, v in on_record.items() if k not in recovered}
+        for label in newly_quiet:
+            record[label] = {'since': (by_src[label]['last'] or now).date().isoformat(),
+                             'prior': by_src[label]['prior']}
+        _state_write_json(QUIET_STATE_FILE, record)
+
+    extras = ''
+    if recovered:
+        extras += ' · recovered: ' + ', '.join(
+            f'{k} (quiet since {_quiet_entry(on_record[k])[0]})' for k in recovered)
+    if small_quiet:
+        extras += ' · small feeds quiet: ' + ', '.join(
+            f'{k} ({by_src[k]["prior"]}/{prior_days}d)' for k in small_quiet)
+
+    if newly_quiet or still_quiet:
+        detail = [f'{k} ({by_src[k]["prior"]} in the prior {prior_days}d)' for k in newly_quiet]
+        for k in still_quiet:
+            since, prior = _quiet_entry(on_record[k])
+            detail.append(f'{k} (still quiet since {since}, was {prior}/{prior_days}d)')
+        return WARN, (
+            f'{len(detail)} source(s) went quiet — used to produce, 0 survivors in the '
+            f'last {YIELD_RECENT_DAYS} days: {"; ".join(detail)}. Check the feed before '
+            f'the best trigger goes dark{extras}'
+        )
+
+    active = {k: b['recent'] for k, b in by_src.items() if b['recent'] > 0}
+    rate = len(_survivors(rows)) / len(rows) * 100
+    return PASS, (
+        f'{recent_total} survivors/{YIELD_RECENT_DAYS}d across {len(active)} sources '
+        f'(top: {_fmt_top(active.items())}) · survival rate {rate:.0f}% of {len(rows)} rows'
+        f'{extras}'
+    )
+
+
+def check_fetched_vs_filtered(now=None):
+    """Was a feed EMPTY, or did the gates drop everything it fetched?
+
+    Needs source_status.items_fetched (typed-column migration). Until then
+    this PASSes with a pointer to the migration instead of nagging daily.
+    Only feeds the cron touched in the last FEED_ACTIVE_HOURS count as "the
+    latest run" — source_status keeps rows for feeds retired months ago.
+
+    Judged per LABEL, not per feed (review 2026-09-07): every Google Alert
+    RSS feed folds onto 'Google News', and one alert legitimately fetching 0
+    overnight is not a dead source while its siblings fetched. A label is
+    dead only when EVERY fresh feed under it fetched 0.
+
+    WARN  a label whose fresh feeds ALL fetched 0 this run but that had
+          survivors in the 28d yield window (a formerly-producing source
+          returning nothing = dead feed; distinct from "fetched plenty, all
+          filtered", which is a gate-tuning question).
+    PASS  producing / all-filtered / fetched-0 counts; a feed that fetched 0
+          while a sibling under its label fetched is listed as information."""
+    now = now or datetime.now(timezone.utc)
+    try:
+        status_rows = _fetch_source_status()
+    except Exception as e:
+        return WARN, f'Could not read source_status: {e}'
+    if status_rows is None:
+        return WARN, 'Supabase unavailable — cannot check'
+    if not status_rows:
+        return WARN, 'No source_status rows — has the scraper ever run?'
+    if not any('items_fetched' in r for r in status_rows):
+        return PASS, f'Fetched-vs-filtered not measurable yet {TYPED_COLUMNS_NOTE}'
+
+    active_cut = now - timedelta(hours=FEED_ACTIVE_HOURS)
+    latest = [r for r in status_rows
+              if (_parse_ts(r.get('last_check')) or datetime.min.replace(tzinfo=timezone.utc)) >= active_cut]
+    stale = len(status_rows) - len(latest)
+
+    fetched0, filtered, producing, unknown = [], [], [], 0
+    groups = {}               # feed_label → fresh feeds with a measured items_fetched
+    for r in latest:
+        fetched = r.get('items_fetched')
+        if fetched is None:
+            unknown += 1          # row written before the column existed
+            continue
+        kept = r.get('events_found') or 0
+        groups.setdefault(feed_label(r.get('source_name'), r.get('source_type')), []).append(r)
+        if fetched == 0:
+            fetched0.append(r)
+        elif kept == 0:
+            filtered.append(r)
+        else:
+            producing.append(r)
+
+    try:
+        yielded = {k for k, b in _yield_by_source(_fetch_recent_events(YIELD_WINDOW_DAYS), now).items()
+                   if b['recent'] + b['prior'] > 0}
+    except Exception:
+        yielded = set()
+
+    dead, empty_with_siblings = [], []
+    for label, feeds in sorted(groups.items()):
+        names = sorted(r.get('source_name') or '?' for r in feeds)
+        empties = sorted(r.get('source_name') or '?' for r in feeds if r.get('items_fetched') == 0)
+        if not empties:
+            continue
+        if len(empties) < len(feeds):
+            empty_with_siblings += empties     # a sibling fetched: the source is alive
+            continue
+        if any(feed_matches_label(r.get('source_name'), lab, r.get('source_type'))
+               for r in feeds for lab in yielded):
+            dead.append(label if names == [label] else f'{label} [{", ".join(names)}]')
+
+    counts = (f'{len(producing)} producing · {len(filtered)} all filtered · '
+              f'{len(fetched0)} fetched 0 (of {len(latest)} feeds in the latest run'
+              + (f'; {unknown} not yet measured' if unknown else '')
+              + (f'; {stale} retired/stale feeds ignored' if stale else '') + ')')
+    info = (f' · fetched 0 while a sibling feed under the same label fetched: '
+            f'{", ".join(empty_with_siblings)}' if empty_with_siblings else '')
+    if dead:
+        return WARN, (
+            f'{len(dead)} source(s) returned NOTHING this run but produced survivors in the '
+            f'last {YIELD_WINDOW_DAYS} days — likely dead, not filtered: {", ".join(dead)}. '
+            f'{counts}{info}'
+        )
+    return PASS, counts + info
+
+
+def check_trigger_source_concentration(now=None):
+    """How much of the best trigger (a company getting or hiring a finance
+    leader) rides on ONE source? Adzuna was 60% of it and silently dead for
+    9 days before anyone noticed (audit 2026-09-06).
+
+    Weekly only and change-driven (review 2026-09-07): until Phase 3 adds
+    independent finance-leader sources the top share sits above
+    CONCENTRATION_WARN_PCT in every reachable state, so a daily WARN was
+    noise the owner would learn to ignore. The previous weekly mix is kept
+    in state/finance_leader_mix.json ({top_source, share_pct, checked_at})
+    and rewritten on every measurable run, so a change alerts ONCE.
+
+    WARN  first measurement ever, the top source flipped, its share moved
+          more than CONCENTRATION_SHIFT_PTS points since the last weekly
+          run, or it newly crossed the bar.
+    PASS  mix unchanged (breakdown shown), no source above the bar, or too
+          few finance-leader events to judge (state left untouched)."""
+    now = now or datetime.now(timezone.utc)
+    if not get_supabase():
+        return WARN, 'Supabase unavailable — cannot check'
+    try:
+        rows = _fetch_recent_events(YIELD_WINDOW_DAYS)
+    except Exception as e:
+        return WARN, f'Could not read recent events: {e}'
+    fam = [r for r in _survivors(rows) if finance_leader_family(r)]
+    n = len(fam)
+    if n < CONCENTRATION_MIN_ROWS:
+        return PASS, f'too few finance-leader events to judge ({n})'
+    shares = Counter(source_label(r) for r in fam)
+    top_src, top_n = shares.most_common(1)[0]
+    top_pct = top_n / n * 100
+    pct_items = [(k, round(v / n * 100)) for k, v in shares.items()]
+
+    prev = _state_json(MIX_STATE_FILE)
+    prev = prev if isinstance(prev, dict) else None
+    _state_write_json(MIX_STATE_FILE, {
+        'top_source': top_src, 'share_pct': round(top_pct, 1), 'checked_at': now.isoformat(),
+    })
+
+    if top_pct <= CONCENTRATION_WARN_PCT:
+        return PASS, (
+            f'Finance-leader triggers spread across {len(shares)} sources '
+            f'(top: {_fmt_top(pct_items, suffix="%")}) — {n} events/{YIELD_WINDOW_DAYS}d, '
+            f'none above {CONCENTRATION_WARN_PCT}%'
+        )
+
+    if prev is None:
+        why = 'first weekly measurement'
+    else:
+        prev_src = prev.get('top_source')
+        try:
+            prev_pct = float(prev.get('share_pct'))
+        except (TypeError, ValueError):
+            prev_pct = None
+        prev_when = str(prev.get('checked_at') or '')[:10] or 'the last weekly run'
+        prev_pct_s = f'{prev_pct:.0f}%' if prev_pct is not None else '?%'
+        if prev_src != top_src:
+            why = f'top source flipped from {prev_src or "?"} ({prev_pct_s}) since {prev_when}'
+        elif prev_pct is None or abs(top_pct - prev_pct) > CONCENTRATION_SHIFT_PTS:
+            why = f'share moved {prev_pct_s} → {top_pct:.0f}% since {prev_when}'
+        elif prev_pct <= CONCENTRATION_WARN_PCT:
+            why = (f'crossed the {CONCENTRATION_WARN_PCT}% bar '
+                   f'({prev_pct_s} → {top_pct:.0f}%) since {prev_when}')
+        else:
+            why = None
+    if why is None:
+        ranked = sorted(pct_items, key=lambda kv: (-kv[1], kv[0]))
+        mix = ' · '.join(f'{k} {v}%' for k, v in ranked[:MIX_SHOW_MAX])
+        if len(ranked) > MIX_SHOW_MAX:
+            mix += f' · +{len(ranked) - MIX_SHOW_MAX} more'
+        return PASS, (
+            f'Finance-leader mix unchanged: {mix} — {n} events/{YIELD_WINDOW_DAYS}d; '
+            f'{top_src} still above {CONCENTRATION_WARN_PCT}% (Phase 3 adds independent sources)'
+        )
+    return WARN, (
+        f'Finance-leader triggers: {top_pct:.0f}% come from one source ({top_src}) — '
+        f'if it stalls, the best trigger goes dark (Phase 3 adds independent sources). '
+        f'{n} events/{YIELD_WINDOW_DAYS}d across {len(shares)} sources; {why}'
+    )
+
+
+def _count(query):
+    r = query.limit(1).execute()
+    return r.count or 0
+
+
+def check_retry_backlog(now=None):
+    """Informational: how many researched-ambiguous rows are due for a retry,
+    how many are waiting on their backoff, how many are negative-cached
+    (enrich_attempts ≥ MAX_ENRICH_ATTEMPTS). Reads the typed columns only;
+    before the migration it PASSes quietly."""
+    now = now or datetime.now(timezone.utc)
+    client = get_supabase()
+    if not client:
+        return WARN, 'Supabase unavailable — cannot check'
+    try:
+        client.table('events').select('verify_state').limit(1).execute()
+    except Exception:
+        return PASS, 'Retry backlog not measurable yet (typed columns not migrated)'
+    try:
+        iso = now.isoformat()
+        base = lambda: client.table('events').select('id', count='exact').is_('blocked_at', 'null')  # noqa: E731
+        due = _count(base().eq('verify_state', RETRY_STATE)
+                     .or_(f'retry_after.is.null,retry_after.lte.{iso}')
+                     .lt('enrich_attempts', MAX_ENRICH_ATTEMPTS))
+        waiting = _count(base().gt('retry_after', iso))
+        cached = _count(base().gte('enrich_attempts', MAX_ENRICH_ATTEMPTS))
+    except Exception as e:
+        return WARN, f'Could not count the retry backlog: {e}'
+    return PASS, (
+        f'Retry backlog: {due} due now · {waiting} waiting on backoff · '
+        f'{cached} negative-cached after {MAX_ENRICH_ATTEMPTS} attempts (retried only when a '
+        f'new event for the account arrives)'
+    )
 
 
 # ── Reporting ───────────────────────────────────────────────────────────────
@@ -621,10 +1079,18 @@ def run_checks(mode: str):
         checks += [
             ('Source health',           check_source_health),
             ('Event volume trend',      check_event_volume_trend),
+            # Yield, not liveness (2026-09-07). The weekly-only "Cleanup dry-run"
+            # check was replaced by these: cleanup_legacy_events.py is a v1
+            # leftover deleted in Phase 4, and its WARN fired on every run.
+            ('Source yield (7d vs prior 21d)',  check_source_yield),
+            ('Fetched vs filtered',             check_fetched_vs_filtered),
+            ('Retry backlog',                   check_retry_backlog),
         ]
     if mode == 'weekly':
+        # Monday only (review 2026-09-07): the mix cannot pass the bar until
+        # Phase 3, and it is change-driven, so once a week is the right cadence.
         checks += [
-            ('Cleanup dry-run',         check_cleanup_dryrun),
+            ('Finance-leader source mix',       check_trigger_source_concentration),
         ]
     results = []
     for name, fn in checks:
@@ -667,8 +1133,8 @@ def print_report(results, mode: str, json_mode: bool):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--quick',  action='store_true', help='Essential checks only (default)')
-    p.add_argument('--daily',  action='store_true', help='Adds source health + volume trend')
-    p.add_argument('--weekly', action='store_true', help='Adds cleanup dry-run')
+    p.add_argument('--daily',  action='store_true', help='Adds source health, volume trend + yield checks')
+    p.add_argument('--weekly', action='store_true', help='--daily checks + finance-leader source mix (Monday run)')
     p.add_argument('--json',   action='store_true', help='Machine-readable output')
     args = p.parse_args()
 

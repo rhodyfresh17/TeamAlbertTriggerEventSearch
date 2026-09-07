@@ -80,6 +80,18 @@ class DatabaseManager:
                 )
             ''')
 
+            # Scrape-side counters (v2 Phase 2, 2026-09-07): items_fetched =
+            # raw candidates the source returned BEFORE any territory /
+            # content gate; filtered_out = fetched - kept. Lets the dashboard
+            # tell "feed returned 0" apart from "everything was filtered".
+            # Additive + idempotent ALTERs because the SQLite file is restored
+            # from the GitHub Actions cache with whatever schema it last had.
+            for column in ('items_fetched INTEGER', 'filtered_out INTEGER'):
+                try:
+                    cursor.execute(f'ALTER TABLE source_status ADD COLUMN {column}')
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
+
             # Small key/value store for scraper state that must survive
             # across runs (e.g. the Adzuna once-per-day latch). Lives in the
             # same SQLite file so the GitHub Actions cache carries it.
@@ -352,22 +364,31 @@ class DatabaseManager:
         source_type: str,
         status: str,
         error_message: str = None,
-        events_found: int = 0
+        events_found: int = 0,
+        items_fetched: Optional[int] = None,
+        filtered_out: Optional[int] = None,
     ):
-        """Save the status of a scraper source."""
+        """Save the status of a scraper source.
+
+        items_fetched / filtered_out are None for scrapers that do not
+        report counters yet — NULL in SQLite, so readers can tell "unknown"
+        from a real 0."""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('''
                 INSERT OR REPLACE INTO source_status
-                (source_name, source_type, last_check, status, error_message, events_found)
-                VALUES (?, ?, ?, ?, ?, ?)
+                (source_name, source_type, last_check, status, error_message,
+                 events_found, items_fetched, filtered_out)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 source_name,
                 source_type,
                 datetime.now().isoformat(),
                 status,
                 error_message,
-                events_found
+                events_found,
+                items_fetched,
+                filtered_out,
             ))
             conn.commit()
 
@@ -376,7 +397,8 @@ class DatabaseManager:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT source_name, source_type, last_check, status, error_message, events_found
+                SELECT source_name, source_type, last_check, status, error_message,
+                       events_found, items_fetched, filtered_out
                 FROM source_status
                 ORDER BY source_type, source_name
             ''')
@@ -388,7 +410,9 @@ class DatabaseManager:
                     'last_check': row[2],
                     'status': row[3],
                     'error_message': row[4],
-                    'events_found': row[5]
+                    'events_found': row[5],
+                    'items_fetched': row[6],
+                    'filtered_out': row[7],
                 }
                 for row in rows
             ]

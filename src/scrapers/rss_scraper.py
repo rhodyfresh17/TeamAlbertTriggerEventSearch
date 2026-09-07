@@ -123,15 +123,20 @@ class RSSScraper(BaseScraper):
             if not feed_url:
                 continue
 
-            feed_events, error_msg = self._scrape_feed(feed_url, feed_name)
+            feed_events, error_msg, items_fetched = self._scrape_feed(feed_url, feed_name)
             events.extend(feed_events)
 
+            # items_fetched = entries parsed from the feed XML, before any
+            # territory/content gate (v2 Phase 2, 2026-09-07) — so the
+            # dashboard can tell "feed returned 0" from "all filtered".
             self.source_statuses.append({
                 'source_name': feed_name,
                 'source_type': 'rss_feed',
                 'status': 'error' if error_msg else 'success',
                 'error_message': error_msg,
-                'events_found': len(feed_events)
+                'events_found': len(feed_events),
+                'items_fetched': items_fetched,
+                'filtered_out': max(items_fetched - len(feed_events), 0),
             })
 
             self.delay_request()
@@ -141,11 +146,14 @@ class RSSScraper(BaseScraper):
     def _scrape_feed(self, url: str, feed_name: str, retry_count: int = 0) -> tuple:
         """Scrape a single RSS feed with retry on timeout.
 
-        Returns: (events, error_message) - error_message is None on success
+        Returns: (events, error_message, items_fetched) - error_message is
+        None on success; items_fetched is the number of feed entries parsed
+        (0 on any error path).
         """
         events = []
         max_retries = 1  # Retry once on timeout
         error_msg = None
+        items_fetched = 0
 
         try:
             response = self.session.get(url, timeout=self.timeout)
@@ -171,6 +179,7 @@ class RSSScraper(BaseScraper):
                 if not items:
                     items = root.findall('.//{http://www.w3.org/2005/Atom}entry')
 
+            items_fetched = len(items)
             for item in items:
                 event = self._process_entry(item, feed_name)
                 if event:
@@ -189,7 +198,9 @@ class RSSScraper(BaseScraper):
             error_msg = str(e)[:200]
             print(f"Error parsing feed {feed_name}: {e}")
 
-        return events, error_msg
+        if error_msg:
+            items_fetched = 0
+        return events, error_msg, items_fetched
 
     def _process_entry(self, item: ET.Element, feed_name: str) -> Optional[TriggerEvent]:
         """Process a single feed entry."""

@@ -33,6 +33,10 @@ class GoogleNewsScraper(BaseScraper):
         events = []
         errors = 0
         total_queries = 0
+        # Raw result items parsed across all queries, before the article
+        # classifier / territory gate (v2 Phase 2, 2026-09-07). Bumped by
+        # _scrape_query so the per-query error path leaves it untouched.
+        self._items_fetched = 0
 
         # Build search queries for different event types
         queries = self._build_search_queries()
@@ -58,12 +62,15 @@ class GoogleNewsScraper(BaseScraper):
             status = 'error'
             error_msg = "All queries failed"
 
+        items_fetched = 0 if status == 'error' else self._items_fetched
         self.source_statuses.append({
             'source_name': 'Google News',
             'source_type': 'google_news',
             'status': status,
             'error_message': error_msg,
-            'events_found': len(events)
+            'events_found': len(events),
+            'items_fetched': items_fetched,
+            'filtered_out': max(items_fetched - len(events), 0),
         })
 
         return events
@@ -160,6 +167,7 @@ class GoogleNewsScraper(BaseScraper):
 
             root = ET.fromstring(response.content)
             items = root.findall('.//item')[:10]  # Limit entries per query
+            self._items_fetched = getattr(self, '_items_fetched', 0) + len(items)
 
             for item in items:
                 event = self._process_entry(item, event_type_hint)

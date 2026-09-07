@@ -112,6 +112,51 @@ def hq_territory_status(hq: Optional[str]) -> str:
     return 'unknown'
 
 
+# ── HQ → state/province code ────────────────────────────────────────────────
+# Bare 2-letter tails that are also English words ("Portland ME"): only
+# trusted when a comma separates them from the city (same list the
+# 'Boston MA' path in hq_territory_status refuses).
+_AMBIGUOUS_TAILS = {'IN', 'OR', 'ME', 'DE', 'OH', 'HI'}
+# Longest names first so "West Virginia" wins over "Virginia" in free text.
+_STATE_NAMES_LONGEST_FIRST = sorted(STATE_NAMES.items(), key=lambda kv: -len(kv[0]))
+
+
+def hq_state_code(hq) -> Optional[str]:
+    """'Boston, MA' / 'Boston, Massachusetts' / 'Toronto, ON, Canada' /
+    'massachusetts' → 'MA' / 'MA' / 'ON' / 'MA'. None when no state or
+    province can be read (city-only, foreign, blank, NaN). Same parsing
+    strategy as hq_territory_status(), but returns the CODE — the typed
+    `hq_state` column (Phase 2, 2026-09-07). Ported from dashboard.py,
+    which keeps its own copy until Phase 4 consolidates."""
+    if hq is None or (isinstance(hq, float) and hq != hq):
+        return None
+    h = str(hq).strip()
+    if not h:
+        return None
+    h = re.sub(r'\bd\.c\.?(?=\W|$)', 'dc', h, flags=re.IGNORECASE)
+    segs = [s.strip() for s in re.split(r'[,/|]', h) if s.strip()]
+    segs = [s for s in segs if s.lower().strip('. ') not in _COUNTRY_TOKENS]
+    # Right-to-left: the state usually follows the city.
+    for seg in reversed(segs):
+        s = seg.strip('. ')
+        up = s.upper()
+        if len(up) == 2 and up.isalpha() and up in ALL_STATE_CODES:
+            return up
+        lo = s.lower()
+        if lo in STATE_NAMES:
+            return STATE_NAMES[lo]
+        m = re.search(r'\b([A-Za-z]{2})$', s)   # "Boston MA" without a comma
+        if m and len(s.split()) >= 2:
+            code = m.group(1).upper()
+            if code in ALL_STATE_CODES and code not in _AMBIGUOUS_TAILS:
+                return code
+    lo_all = h.lower()
+    for name, code in _STATE_NAMES_LONGEST_FIRST:
+        if re.search(r'\b' + re.escape(name) + r'\b', lo_all):
+            return code
+    return None
+
+
 # ── Entity shape (A.J. 2026-09-04/06 exclusions) ────────────────────────────
 _GREEK = ('alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta', 'eta',
           'theta', 'iota', 'kappa', 'lambda', 'mu', 'nu', 'xi', 'omicron',

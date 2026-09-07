@@ -166,6 +166,8 @@ class AdzunaScraper(BaseScraper):
                 'status':        'error',
                 'error_message': 'Missing API credentials',
                 'events_found':  0,
+                'items_fetched': 0,
+                'filtered_out':  0,
             })
             return []
 
@@ -203,6 +205,10 @@ class AdzunaScraper(BaseScraper):
             queries = (self.title_queries if country == 'us'
                        else [self.title_queries[day_idx % len(self.title_queries)]])
             label = f'Adzuna ({country.upper()})'
+            # Raw API results for this country (sum over queries), before
+            # the title / territory checks — bumped by _scrape_country
+            # (v2 Phase 2, 2026-09-07).
+            self._items_fetched = 0
             try:
                 events = []
                 for q in queries:
@@ -214,9 +220,11 @@ class AdzunaScraper(BaseScraper):
                     'status':        'success' if events else 'partial',
                     'error_message': None if events else 'No jobs matched territory',
                     'events_found':  len(events),
+                    'items_fetched': self._items_fetched,
+                    'filtered_out':  max(self._items_fetched - len(events), 0),
                 })
                 print(f'  - {label}: {len(events)} in-territory '
-                      f'finance-leadership jobs')
+                      f'finance-leadership jobs ({self._items_fetched} fetched)')
             except Exception as e:
                 self.source_statuses.append({
                     'source_name':   label,
@@ -224,6 +232,8 @@ class AdzunaScraper(BaseScraper):
                     'status':        'error',
                     'error_message': str(e)[:200],
                     'events_found':  0,
+                    'items_fetched': 0,
+                    'filtered_out':  0,
                 })
                 print(f'  - {label}: ERROR {e}')
 
@@ -261,7 +271,9 @@ class AdzunaScraper(BaseScraper):
 
         target = self.us_states if country == 'us' else self.ca_provinces
         events: List[TriggerEvent] = []
-        for job in data.get('results', []):
+        results = data.get('results', []) or []
+        self._items_fetched = getattr(self, '_items_fetched', 0) + len(results)
+        for job in results:
             try:
                 ev = self._job_to_event(job, country, target)
                 if ev:

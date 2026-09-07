@@ -275,3 +275,288 @@ def test_event_config_for_known_types():
 ])
 def test_parse_json_field(val, expected):
     assert d._parse_json_field(val, 'dflt') == expected
+
+
+# ── v2 Phase 2: typed columns read server-side (2026-09-07) ─────────────────
+class _FakeQuery:
+    """Chainable stand-in for a PostgREST query builder: every method
+    records (name, args, kwargs) and returns self, so a test can assert
+    exactly which filters were applied. `execute()` returns a canned
+    response or raises when the fake is told the column is missing."""
+
+    def __init__(self, calls, missing=(), count=None):
+        self.calls, self._missing, self._count = calls, set(missing), count
+        self._selected = None
+
+    def __getattr__(self, name):
+        def _rec(*args, **kwargs):
+            self.calls.append((name, args, kwargs))
+            if name == 'select':
+                self._selected = args[0] if args else None
+            return self
+        return _rec
+
+    def execute(self):
+        self.calls.append(('execute', (), {}))
+        if self._selected in self._missing:
+            raise RuntimeError('column "%s" does not exist' % self._selected)
+        return type('Resp', (), {'data': [], 'count': self._count})()
+
+
+class _FakeClient:
+    def __init__(self, missing=(), count=None):
+        self.calls, self._missing, self._count = [], missing, count
+
+    def table(self, name):
+        self.calls.append(('table', (name,), {}))
+        return _FakeQuery(self.calls, self._missing, self._count)
+
+
+def _names(calls):
+    return [c[0] for c in calls]
+
+
+def _call(calls, name):
+    return next(c for c in calls if c[0] == name)
+
+
+NOW = pd.Timestamp('2026-09-07T12:00:00').to_pydatetime()
+
+
+def test_probe_typed_columns_reports_only_existing_columns():
+    client = _FakeClient(missing={'hq_state', 'expires_at'})
+    present = d._probe_typed_columns(client)
+    assert present == {'verify_state', 'fit_verdict', 'source'}
+    # one select(col).limit(1).execute() per probed column, nothing else
+    assert _names(client.calls).count('select') == len(d.TYPED_PROBE_COLUMNS)
+    assert all(c[1] == (1,) for c in client.calls if c[0] == 'limit')
+
+
+def test_probe_typed_columns_no_client_is_empty():
+    assert d._probe_typed_columns(None) == set()
+    assert d._probe_typed_columns(_FakeClient(missing=set(d.TYPED_PROBE_COLUMNS))) == set()
+
+
+def test_build_events_query_legacy_when_no_typed_columns():
+    client = _FakeClient()
+    d.build_events_query(client, days=30, verified_only=True, present=set(), now=NOW)
+    names = _names(client.calls)
+    assert names[:3] == ['table', 'select', 'gte']
+    assert _call(client.calls, 'table')[1] == ('events',)
+    assert _call(client.calls, 'select')[1] == ('*',)
+    assert _call(client.calls, 'gte')[1] == ('discovered_at', '2026-08-08T12:00:00')
+    assert _call(client.calls, 'is_')[1] == ('blocked_at', 'null')
+    assert 'eq' not in names and 'in_' not in names and 'or_' not in names
+
+
+def test_build_events_query_none_means_no_verify_filter_even_when_present():
+    client = _FakeClient()
+    d.build_events_query(client, 30, None, {'verify_state'}, now=NOW)
+    names = _names(client.calls)
+    assert 'eq' not in names and 'or_' not in names
+
+
+def test_build_events_query_verified_only_admits_null_state_with_pass_verdict():
+    """verified_only=True must also admit rows an in-flight enricher wrote
+    with fit.verdict='pass' but verify_state NULL (review 2026-09-07) — a
+    bare eq('verify_state','verified') hid them from the default view."""
+    client = _FakeClient()
+    d.build_events_query(client, 7, True, {'verify_state', 'expires_at'}, now=NOW)
+    (expr,) = _call(client.calls, 'or_')[1]
+    assert expr == d.VERIFIED_FILTER == (
+        "verify_state.eq.verified,and(verify_state.is.null,fit->>verdict.eq.pass)")
+    assert 'eq' not in _names(client.calls)
+    # expires_at is present but deliberately NOT filtered (Phase 4 decides)
+    assert not any('expires_at' in str(c[1]) for c in client.calls)
+
+
+def test_build_events_query_toggle_on_mirrors_split_by_verdict():
+    """Toggle ON shows pass + unverified + staged (+ never-enriched rows,
+    which fit_verdict maps to 'staged' and verify_state leaves NULL)."""
+    client = _FakeClient()
+    d.build_events_query(client, 7, False, {'verify_state'}, now=NOW)
+    (expr,) = _call(client.calls, 'or_')[1]
+    assert expr == d.TOGGLE_ON_FILTER == (
+        "verify_state.in.(verified,researched_ambiguous,staged),verify_state.is.null")
+    assert 'eq' not in _names(client.calls)
+    # the state list is the typed twin of the client-side verdict sets
+    assert set(d.VERIFIED_STATES + d.UNVERIFIED_STATES) == {
+        'verified', 'researched_ambiguous', 'staged'}
+    assert d.UNVERIFIED_VERDICTS == {'unverified', 'staged'}   # unchanged
+
+
+def test_count_hidden_unverified_is_the_complement():
+    client = _FakeClient(count=42)
+    n = d.count_hidden_unverified(30, {'verify_state'}, client=client, now=NOW)
+    assert n == 42
+    assert _call(client.calls, 'select')[1:] == (('id',), {'count': 'exact'})
+    assert _call(client.calls, 'gte')[1] == ('discovered_at', '2026-08-08T12:00:00')
+    assert _call(client.calls, 'is_')[1] == ('blocked_at', 'null')
+    (expr,) = _call(client.calls, 'or_')[1]
+    assert expr == d.HIDDEN_FILTER == (
+        "verify_state.in.(researched_ambiguous,staged),"
+        "and(verify_state.is.null,or(fit->>verdict.is.null,fit->>verdict.neq.pass))")
+    assert 'verify_state.eq.verified' not in expr and '(verified' not in expr   # never the shown rows
+
+
+# A minimal evaluator for the PostgREST logic subset the three filters use
+# (top-level comma = OR, and(...) / or(...) nesting, eq / neq / in / is on a
+# column or the fit->>verdict JSON path, with SQL NULL semantics: a NULL
+# cell satisfies only `is.null`). It lets the partition property be checked
+# against the STRINGS, not against a Python restatement of them.
+def _pg_eval(expr: str, row: dict) -> bool:
+    def split_top(s):
+        parts, depth, cur = [], 0, ''
+        for ch in s:
+            depth += (ch == '(') - (ch == ')')
+            if ch == ',' and depth == 0:
+                parts.append(cur); cur = ''
+            else:
+                cur += ch
+        return parts + [cur]
+
+    def ev(term):
+        term = term.strip()
+        if term.startswith('and(') or term.startswith('or('):
+            fn = all if term.startswith('and(') else any
+            return fn(ev(t) for t in split_top(term[term.index('(') + 1:-1]))
+        col, op, val = term.split('.', 2)
+        if col == 'fit->>verdict':
+            fit = row['fit']
+            cell = fit.get('verdict') if isinstance(fit, dict) else None
+        else:
+            cell = row[col]
+        if op == 'is':
+            return cell is None and val == 'null'
+        if cell is None:
+            return False                       # NULL = / <> / IN anything → not true
+        return {'eq': cell == val, 'neq': cell != val,
+                'in': cell in val[1:-1].split(',')}[op]
+    return any(ev(t) for t in split_top(expr))
+
+
+def test_verification_filters_partition_the_toggle_on_set():
+    """VERIFIED ∪ HIDDEN == TOGGLE ON and VERIFIED ∩ HIDDEN == ∅ over every
+    (verify_state, fit) shape that occurs — the identity the live check
+    confirmed on 2026-09-07 (1 + 288 == 289 over a 30-day window)."""
+    states = ('verified', 'researched_ambiguous', 'staged', 'decided', 'not_fit', None)
+    fits = (None, {}, {'verdict': 'pass'}, {'verdict': 'unverified'}, {'verdict': 'staged'},
+            {'verdict': 'fail'}, {'verdict': 'decided'})
+    for s in states:
+        for f in fits:
+            row = {'verify_state': s, 'fit': f}
+            v, h, t = (_pg_eval(e, row) for e in (d.VERIFIED_FILTER, d.HIDDEN_FILTER, d.TOGGLE_ON_FILTER))
+            assert not (v and h), row
+            assert (v or h) == t, row
+    # the in-flight shapes the review named
+    assert _pg_eval(d.VERIFIED_FILTER, {'verify_state': None, 'fit': {'verdict': 'pass'}})
+    assert _pg_eval(d.HIDDEN_FILTER, {'verify_state': None, 'fit': None})
+    assert _pg_eval(d.HIDDEN_FILTER, {'verify_state': None, 'fit': {}})        # no verdict key
+    assert _pg_eval(d.HIDDEN_FILTER, {'verify_state': None, 'fit': {'verdict': 'fail'}})
+    assert not _pg_eval(d.VERIFIED_FILTER, {'verify_state': 'decided', 'fit': {'verdict': 'pass'}})
+    assert not _pg_eval(d.TOGGLE_ON_FILTER, {'verify_state': 'not_fit', 'fit': None})
+
+
+def test_unverified_caption_says_what_it_counts():
+    """Review 2026-09-07: the server-side hidden count spans the whole
+    window, the toggle-ON count is the frame on screen — the caption must
+    say which."""
+    assert d.unverified_caption(3, True, 30, False) == '3 unverified shown'
+    assert d.unverified_caption(3, True, 30, True) == '3 unverified shown'     # ON is never window-wide
+    assert d.unverified_caption(1234, False, 30, False) == '1,234 unverified hidden'
+    assert d.unverified_caption(1234, False, 7, True) == '1,234 unverified hidden (whole 7-day window)'
+
+
+# ── load_events wiring (review 2026-09-07) ───────────────────────────────────
+# Every test above calls build_events_query directly, so they would all pass
+# if load_events stopped calling it. These two go through load_events.
+
+def _load_events_fn():
+    # load_events is a plain function today; should it ever gain
+    # @st.cache_data, bypass the cache so the fake client is what runs.
+    return getattr(d.load_events, '__wrapped__', d.load_events)
+
+
+def test_load_events_wires_verify_filter_when_column_present(monkeypatch):
+    client = _FakeClient()
+    monkeypatch.setattr(d, 'get_supabase_client', lambda: client)
+    monkeypatch.setattr(d, 'typed_columns_present', lambda: {'verify_state'})
+    df = _load_events_fn()(days=30, verified_only=True)
+    assert df.empty                                        # the fake returns no rows
+    names = _names(client.calls)
+    assert _call(client.calls, 'table')[1] == ('events',)
+    assert _call(client.calls, 'or_')[1] == (d.VERIFIED_FILTER,)
+    assert names.index('or_') < names.index('order') < names.index('range') < names.index('execute')
+    # toggle ON takes the union expression through the same path
+    client = _FakeClient()
+    monkeypatch.setattr(d, 'get_supabase_client', lambda: client)
+    _load_events_fn()(days=30, verified_only=False)
+    assert _call(client.calls, 'or_')[1] == (d.TOGGLE_ON_FILTER,)
+
+
+def test_load_events_applies_no_verify_filter_when_column_absent(monkeypatch):
+    client = _FakeClient()
+    monkeypatch.setattr(d, 'get_supabase_client', lambda: client)
+    monkeypatch.setattr(d, 'typed_columns_present', lambda: set())
+    df = _load_events_fn()(days=30, verified_only=True)
+    assert df.empty
+    names = _names(client.calls)
+    assert 'or_' not in names and 'eq' not in names and 'in_' not in names
+    assert 'gte' in names and 'execute' in names            # the query itself still ran
+    assert not any('verify_state' in str(c[1]) for c in client.calls)
+
+
+def test_count_hidden_unverified_degrades_to_zero():
+    client = _FakeClient(count=42)
+    assert d.count_hidden_unverified(30, set(), client=client, now=NOW) == 0
+    assert client.calls == []            # no query without the typed column
+    assert d.count_hidden_unverified(30, {'verify_state'},
+                                     client=_FakeClient(missing={'id'}), now=NOW) == 0
+    assert d.count_hidden_unverified(30, {'verify_state'},
+                                     client=_FakeClient(count=None), now=NOW) == 0
+
+
+def test_split_by_verdict_is_idempotent_on_prefiltered_frames():
+    """Belt-and-braces: the client-side pass over rows the server already
+    filtered must return the same frame."""
+    verified = pd.DataFrame([
+        {'id': 'p1', 'fit': {'verdict': 'pass'}, 'verify_state': 'verified'},
+        {'id': 'p2', 'fit': '{"verdict": "pass"}', 'verify_state': 'verified'},
+    ])
+    kept, n = d.split_by_verdict(verified, show_unverified=False)
+    assert list(kept['id']) == ['p1', 'p2'] and n == 0
+    shown = pd.DataFrame([
+        {'id': 'p1', 'fit': {'verdict': 'pass'}, 'verify_state': 'verified'},
+        {'id': 'u1', 'fit': {'verdict': 'unverified'}, 'verify_state': 'researched_ambiguous'},
+        {'id': 'n1', 'fit': None, 'verify_state': None},
+    ])
+    kept, n = d.split_by_verdict(shown, show_unverified=True)
+    assert list(kept['id']) == ['p1', 'u1', 'n1'] and n == 2
+
+
+@pytest.mark.parametrize('row,expected', [
+    ({'hq_state': 'MA', 'fit': {'account_name': 'X', 'companies': [{'name': 'X', 'hq': 'Austin, TX'}]}}, 'MA'),
+    ({'hq_state': ' on ', 'matched_regions': ['TX']}, 'ON'),
+    ({'hq_state': '', 'matched_regions': ['TX']}, 'TX'),      # empty → parse
+    ({'hq_state': None, 'matched_regions': ['TX']}, 'TX'),
+    ({'hq_state': NAN, 'matched_regions': ['TX']}, 'TX'),     # pandas NULL
+    ({'matched_regions': ['TX']}, 'TX'),                      # pre-migration row
+])
+def test_event_state_code_prefers_typed_hq_state(row, expected):
+    assert d.event_state_code(row) == expected
+    assert d.event_state_code(pd.Series(row)) == expected
+
+
+@pytest.mark.parametrize('arg,expected', [
+    ('https://www.sec.gov/Archives/edgar/x', 'SEC EDGAR'),                 # legacy str
+    ('https://www.adzuna.com/jobs/1', 'Adzuna'),
+    (None, 'other'),
+    ({'source': 'sec_edgar', 'source_url': 'https://example.com/a'}, 'SEC EDGAR'),
+    ({'source': 'globe_newswire', 'source_url': None}, 'GlobeNewswire'),
+    ({'source': 'other', 'source_url': 'https://news.example.com/a'}, 'news.example.com'),
+    ({'source': None, 'source_url': 'https://www.adzuna.com/jobs/1'}, 'Adzuna'),
+    ({'source_url': 'https://www.sec.gov/x'}, 'SEC EDGAR'),                 # pre-migration row
+    ({}, 'other'),
+])
+def test_scorecard_src_accepts_url_or_row(arg, expected):
+    assert d._scorecard_src(arg) == expected

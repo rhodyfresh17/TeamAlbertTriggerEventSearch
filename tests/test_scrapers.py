@@ -489,3 +489,233 @@ class TestJobPostingDedup(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# v2 Phase 2 (2026-09-07): per-source counters — items_fetched (raw candidates
+# BEFORE any territory/content gate) and filtered_out = fetched - kept — so
+# the dashboard can tell "feed returned 0" apart from "everything filtered".
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _assert_counters(test, status, expected_fetched=None):
+    test.assertIn('items_fetched', status)
+    test.assertIn('filtered_out', status)
+    test.assertGreaterEqual(status['items_fetched'], status['events_found'])
+    test.assertEqual(status['filtered_out'],
+                     max(status['items_fetched'] - status['events_found'], 0))
+    if expected_fetched is not None:
+        test.assertEqual(status['items_fetched'], expected_fetched)
+
+
+def _xml_response(body: str):
+    resp = MagicMock()
+    resp.content = body.encode('utf-8')
+    resp.raise_for_status = MagicMock()
+    return resp
+
+
+_RSS_TWO_ITEMS = (
+    '<rss><channel>'
+    '<item><title>Acme Mining opens pit</title><link>https://e.com/1</link>'
+    '<description>Nothing relevant here.</description></item>'
+    '<item><title>NYC firm names CFO</title><link>https://e.com/2</link>'
+    '<description>A New York company appointed a CFO.</description></item>'
+    '</channel></rss>'
+)
+
+
+class TestRSSScraperCounters(unittest.TestCase):
+    def setUp(self):
+        self.config = {
+            'territory': {'regions': ['New York'], 'cities': ['NYC'], 'industries': [],
+                          'excluded_industries': ['Mining'],
+                          'company_filters': {'exclude_public_companies': False}},
+            'keywords': {'executive_hires': ['CFO'], 'mergers_acquisitions': [],
+                         'funding_events': []},
+            'sources': {'rss_feeds': [{'name': 'Test Feed', 'url': 'https://e.com/feed'}]},
+            'scraper': {'timeout': 5, 'request_delay': 0},
+        }
+
+    def test_items_fetched_counts_entries_before_gates(self):
+        scraper = RSSScraper(self.config)
+        with patch.object(scraper.session, 'get', return_value=_xml_response(_RSS_TWO_ITEMS)):
+            scraper.scrape()
+        self.assertEqual(len(scraper.source_statuses), 1)
+        status = scraper.source_statuses[0]
+        _assert_counters(self, status, expected_fetched=2)
+        self.assertLess(status['events_found'], 2, 'the mining item must be gated out')
+
+    def test_error_path_reports_zero_fetched(self):
+        scraper = RSSScraper(self.config)
+        with patch.object(scraper.session, 'get', side_effect=Exception('boom')):
+            scraper.scrape()
+        status = scraper.source_statuses[0]
+        self.assertEqual(status['status'], 'error')
+        _assert_counters(self, status, expected_fetched=0)
+
+
+class TestGoogleNewsScraperCounters(unittest.TestCase):
+    def setUp(self):
+        self.config = {
+            'territory': {'regions': ['New York'], 'cities': [], 'industries': [],
+                          'excluded_industries': [],
+                          'company_filters': {'exclude_public_companies': False}},
+            'keywords': {'executive_hires': ['CFO'], 'mergers_acquisitions': [],
+                         'funding_events': []},
+            'sources': {'google_news': {'enabled': True}},
+            'scraper': {'timeout': 5, 'request_delay': 0},
+        }
+
+    def test_items_fetched_sums_result_items_across_queries(self):
+        scraper = GoogleNewsScraper(self.config)
+        n_queries = len(scraper._build_search_queries())
+        body = ('<rss><channel>'
+                '<item><title>Town opens park - Local</title><link>https://e.com/a</link>'
+                '<description>No trigger.</description></item>'
+                '</channel></rss>')
+        with patch.object(scraper.session, 'get', return_value=_xml_response(body)):
+            scraper.scrape()
+        status = scraper.source_statuses[0]
+        _assert_counters(self, status, expected_fetched=n_queries)
+        self.assertEqual(status['events_found'], 0)
+
+    def test_all_queries_failing_reports_zero_fetched(self):
+        scraper = GoogleNewsScraper(self.config)
+        with patch.object(scraper, '_scrape_query', side_effect=RuntimeError('503')):
+            scraper.scrape()
+        status = scraper.source_statuses[0]
+        self.assertEqual(status['status'], 'error')
+        _assert_counters(self, status, expected_fetched=0)
+
+
+class TestAdzunaScraperCounters(unittest.TestCase):
+    def test_items_fetched_counts_api_results_over_queries(self):
+        scraper = AdzunaScraper(ADZUNA_TEST_CONFIG)
+        results = [
+            _adzuna_job('Acme, Inc.', 'Corporate Controller', 'New York', 'https://a.example/1'),
+            _adzuna_job('Beta LLC', 'Air Traffic Controller', 'Ohio', 'https://a.example/2'),
+            _adzuna_job('Gamma Co', 'Controller', 'California', 'https://a.example/3'),
+        ]
+        resp = MagicMock(); resp.json.return_value = {'results': results}
+        with patch.object(scraper.session, 'get', return_value=resp):
+            scraper.scrape()
+        status = scraper.source_statuses[0]
+        self.assertEqual(status['source_name'], 'Adzuna (US)')
+        _assert_counters(self, status, expected_fetched=3 * len(scraper.title_queries))
+        self.assertLess(status['events_found'], status['items_fetched'])
+
+    def test_error_path_reports_zero_fetched(self):
+        scraper = AdzunaScraper(ADZUNA_TEST_CONFIG)
+        with patch.object(AdzunaScraper, '_scrape_country', side_effect=RuntimeError('429')):
+            scraper.scrape()
+        _assert_counters(self, scraper.source_statuses[0], expected_fetched=0)
+
+
+SEC_TEST_CONFIG = {
+    'territory': {'regions': [], 'cities': [], 'industries': [], 'excluded_industries': [],
+                  'company_filters': {'exclude_public_companies': False}},
+    'keywords': {'executive_hires': ['CFO'], 'mergers_acquisitions': [], 'funding_events': []},
+    'scraper': {'timeout': 5, 'request_delay': 0},
+    'sec_filings': {'enabled': True},
+    'form_d': {'enabled': True, 'max_results': 100, 'request_sleep': 0},
+}
+
+
+class TestSECScraperCounters(unittest.TestCase):
+    def test_8k_items_fetched_is_raw_efts_hit_count(self):
+        from src.scrapers.sec_scraper import SECScraper, ITEM_DEFINITIONS
+        scraper = SECScraper(SEC_TEST_CONFIG)
+        hits = [{'_source': {'adsh': f'000-{i}'}} for i in range(5)]
+        with patch.object(scraper, '_fetch_phrase_adsh_set', return_value=set()), \
+             patch.object(scraper, '_search_efts', return_value=hits), \
+             patch.object(scraper, '_hit_to_event', return_value=None):
+            scraper.scrape()
+        self.assertEqual(len(scraper.source_statuses), len(ITEM_DEFINITIONS))
+        for status in scraper.source_statuses:
+            _assert_counters(self, status, expected_fetched=5)
+            self.assertEqual(status['events_found'], 0)
+            self.assertEqual(status['filtered_out'], 5)
+
+    def test_8k_error_path_reports_zero_fetched(self):
+        from src.scrapers.sec_scraper import SECScraper
+        scraper = SECScraper(SEC_TEST_CONFIG)
+        with patch.object(scraper, '_fetch_phrase_adsh_set', return_value=set()), \
+             patch.object(scraper, '_search_efts', side_effect=RuntimeError('EFTS down')):
+            scraper.scrape()
+        for status in scraper.source_statuses:
+            self.assertEqual(status['status'], 'error')
+            _assert_counters(self, status, expected_fetched=0)
+
+    def test_form_d_items_fetched_counts_feed_hits(self):
+        from src.scrapers.sec_scraper import FormDScraper
+        scraper = FormDScraper(SEC_TEST_CONFIG)
+        # 3 hits, none of which survive the free filter (no ciks/names/adsh)
+        hits = [{'_source': {'file_type': 'D'}} for _ in range(3)]
+        resp = MagicMock(); resp.json.return_value = {'hits': {'hits': hits}}
+        resp.raise_for_status = MagicMock()
+        with patch.object(scraper.session, 'get', return_value=resp):
+            scraper.scrape()
+        status = scraper.source_statuses[0]
+        self.assertEqual(status['source_type'], 'sec_edgar')
+        _assert_counters(self, status, expected_fetched=3)
+        self.assertEqual(status['events_found'], 0)
+
+    def test_form_d_error_path_reports_zero_fetched(self):
+        from src.scrapers.sec_scraper import FormDScraper
+        scraper = FormDScraper(SEC_TEST_CONFIG)
+        with patch.object(scraper.session, 'get', side_effect=RuntimeError('EFTS down')):
+            scraper.scrape()
+        status = scraper.source_statuses[0]
+        self.assertEqual(status['status'], 'error')
+        _assert_counters(self, status, expected_fetched=0)
+
+
+class TestMainPassesCountersThrough(unittest.TestCase):
+    """run_once must persist items_fetched / filtered_out and print the
+    per-source 'fetched N · kept K · filtered F' line for the Actions log."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = {
+            'scraper': {'database': os.path.join(self.tmp.name, 'scratch.db'),
+                        'max_age_hours': 72, 'timeout': 5, 'request_delay': 0},
+            'territory': {'regions': [], 'cities': [], 'industries': [],
+                          'excluded_industries': [],
+                          'company_filters': {'exclude_public_companies': False}},
+            'keywords': {'executive_hires': [], 'mergers_acquisitions': [],
+                         'funding_events': []},
+            'alerts': {'file': {'enabled': False}, 'desktop': {'enabled': False},
+                       'email': {'enabled': False}, 'slack': {'enabled': False}},
+            'sources': {'rss_feeds': [], 'google_news': {'enabled': False}},
+            'adzuna': {'enabled': False},
+        }
+        self.config_path = os.path.join(self.tmp.name, 'config.yaml')
+        with open(self.config_path, 'w') as f:
+            yaml.safe_dump(cfg, f)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_counters_saved_and_summarised(self):
+        import io
+        from contextlib import redirect_stdout
+        from src.main import TriggerEventMonitor, _format_source_counters
+        monitor = TriggerEventMonitor(self.config_path)
+        fake = MagicMock(); fake.scrape.return_value = []
+        fake.source_statuses = [
+            {'source_name': 'Counted', 'source_type': 'rss_feed', 'status': 'success',
+             'error_message': None, 'events_found': 2, 'items_fetched': 30, 'filtered_out': 28},
+            {'source_name': 'Legacy', 'source_type': 'job_board', 'status': 'success',
+             'error_message': None, 'events_found': 1},
+        ]
+        monitor.scrapers = [fake]
+        out = io.StringIO()
+        with redirect_stdout(out):
+            monitor.run_once()
+        rows = {r['source_name']: r for r in monitor.db.get_source_statuses()}
+        self.assertEqual((rows['Counted']['items_fetched'], rows['Counted']['filtered_out']), (30, 28))
+        self.assertIsNone(rows['Legacy']['items_fetched'])
+        text = out.getvalue()
+        self.assertIn('Counted: fetched 30 · kept 2 · filtered 28', text)
+        self.assertIn('Legacy: fetched ? · kept 1 · filtered ?', text)
+        self.assertEqual(_format_source_counters(None, 0, None), 'fetched ? · kept 0 · filtered ?')

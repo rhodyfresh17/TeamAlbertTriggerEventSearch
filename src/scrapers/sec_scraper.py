@@ -12,7 +12,7 @@ import html
 import re
 import time
 from datetime import datetime, timedelta, timezone, date
-from typing import List, Dict, Any, Optional, Set
+from typing import List, Dict, Any, Optional, Set, Tuple
 
 from .base import BaseScraper
 from ..models import TriggerEvent, EventType, EventSource
@@ -182,16 +182,23 @@ class SECScraper(BaseScraper):
         for item_code, item_def in ITEM_DEFINITIONS.items():
             source_label = f'SEC 8-K Item {item_code}'
             try:
-                events = self._scrape_one_item(item_code, item_def)
+                events, items_fetched = self._scrape_one_item(item_code, item_def)
                 all_events.extend(events)
+                # items_fetched = filings EFTS returned for this item (after
+                # locationCodes, before the finance/M&A content gates) so
+                # "fetched 0" and "all filtered" are distinguishable
+                # (v2 Phase 2, 2026-09-07).
                 self.source_statuses.append({
                     'source_name':   source_label,
                     'source_type':   'sec_edgar',
                     'status':        'success' if events else 'partial',
                     'error_message': None if events else 'No matching filings in territory',
                     'events_found':  len(events),
+                    'items_fetched': items_fetched,
+                    'filtered_out':  max(items_fetched - len(events), 0),
                 })
-                print(f'  - {source_label}: {len(events)} in territory')
+                print(f'  - {source_label}: {len(events)} in territory '
+                      f'({items_fetched} fetched)')
             except Exception as e:
                 self.source_statuses.append({
                     'source_name':   source_label,
@@ -199,6 +206,8 @@ class SECScraper(BaseScraper):
                     'status':        'error',
                     'error_message': str(e)[:200],
                     'events_found':  0,
+                    'items_fetched': 0,
+                    'filtered_out':  0,
                 })
                 print(f'  - {source_label}: ERROR {e}')
 
@@ -286,7 +295,9 @@ class SECScraper(BaseScraper):
 
     def _scrape_one_item(
         self, item_code: str, item_def: Dict[str, Any]
-    ) -> List[TriggerEvent]:
+    ) -> Tuple[List[TriggerEvent], int]:
+        """Returns (events, items_fetched) — items_fetched is the raw EFTS
+        hit count for the item, before any content gate."""
         hits = self._search_efts(item_code)
         events: List[TriggerEvent] = []
 
@@ -300,7 +311,7 @@ class SECScraper(BaseScraper):
                 print(f'    skipping malformed hit: {e}')
                 continue
 
-        return events
+        return events, len(hits)
 
     def _fetch_phrase_adsh_set(self, phrase: str, item_code: str = '5.02') -> set:
         """Pre-fetch the accession numbers of 8-K filings tagged with
@@ -683,6 +694,7 @@ class FormDScraper(SECScraper):
         label = 'SEC Form D (private raises)'
         events: List[TriggerEvent] = []
         skipped_funds = 0
+        items_fetched = 0  # Form D filings fetched from EFTS, pre-filter
         self._reset_gate_counters()
         try:
             startdt = (date.today() - timedelta(days=self.lookback_days)).isoformat()
@@ -703,6 +715,7 @@ class FormDScraper(SECScraper):
                 hits = resp.json().get('hits', {}).get('hits', []) or []
                 if not hits:
                     break
+                items_fetched += len(hits)
                 for hit in hits:
                     cand, is_fund = self._formd_cheap_filter(hit)
                     if is_fund:
@@ -728,9 +741,12 @@ class FormDScraper(SECScraper):
                 'status':        'success' if events else 'partial',
                 'error_message': None if events else 'No operating-company Form Ds in territory',
                 'events_found':  len(events),
+                'items_fetched': items_fetched,
+                'filtered_out':  max(items_fetched - len(events), 0),
             })
             print(f'  - {label}: {len(events)} operating-company raises in '
-                  f'territory ({skipped_funds} fund vehicles skipped)')
+                  f'territory ({items_fetched} fetched, {skipped_funds} '
+                  f'fund vehicles skipped)')
             self._print_gate_summary(label)
         except Exception as e:
             self.source_statuses.append({
@@ -739,6 +755,8 @@ class FormDScraper(SECScraper):
                 'status':        'error',
                 'error_message': str(e)[:200],
                 'events_found':  0,
+                'items_fetched': 0,
+                'filtered_out':  0,
             })
             print(f'  - {label}: ERROR {e}')
         return events

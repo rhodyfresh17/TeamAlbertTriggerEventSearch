@@ -58,6 +58,14 @@ def _job_posting_dedup_key(event: TriggerEvent) -> str:
     return f'job|{company}|{norm_title}'
 
 
+def _format_source_counters(fetched, kept, filtered) -> str:
+    """'fetched N · kept K · filtered F' — '?' where a scraper reports no
+    counter, so an unknown never reads as a real zero."""
+    def _n(v):
+        return '?' if v is None else str(v)
+    return f"fetched {_n(fetched)} · kept {_n(kept)} · filtered {_n(filtered)}"
+
+
 class TriggerEventMonitor:
     """Main orchestrator for trigger event monitoring."""
 
@@ -105,6 +113,7 @@ class TriggerEventMonitor:
 
         all_events = []
         new_events = []
+        source_counters = []  # (source_name, items_fetched, events_found, filtered_out)
 
         # Get max age setting
         max_age_hours = self.config.get('scraper', {}).get('max_age_hours', 72)
@@ -120,7 +129,9 @@ class TriggerEventMonitor:
                 print(f"  Found {len(events)} potential events")
                 all_events.extend(events)
 
-                # Save source statuses
+                # Save source statuses. items_fetched / filtered_out are
+                # None for scrapers that don't count yet (v2 Phase 2,
+                # 2026-09-07) — NULL in SQLite, never a fake 0.
                 if hasattr(scraper, 'source_statuses'):
                     for status in scraper.source_statuses:
                         self.db.save_source_status(
@@ -128,10 +139,26 @@ class TriggerEventMonitor:
                             source_type=status['source_type'],
                             status=status['status'],
                             error_message=status.get('error_message'),
-                            events_found=status.get('events_found', 0)
+                            events_found=status.get('events_found', 0),
+                            items_fetched=status.get('items_fetched'),
+                            filtered_out=status.get('filtered_out'),
                         )
+                        source_counters.append((
+                            status['source_name'],
+                            status.get('items_fetched'),
+                            status.get('events_found', 0),
+                            status.get('filtered_out'),
+                        ))
             except Exception as e:
                 print(f"  Error: {e}")
+
+        # One line per source so the Actions log shows "fetched 0" (feed
+        # dead / API empty) apart from "all filtered" (gates working).
+        if source_counters:
+            print(f"\n{'-'*40}")
+            print("Per-source counters:")
+            for name, fetched, kept, filtered in source_counters:
+                print(f"  {name}: {_format_source_counters(fetched, kept, filtered)}")
 
         # Filter for new events (not seen before) and recent events only.
         # Three dedup channels, all persistent across runs via SQLite:
