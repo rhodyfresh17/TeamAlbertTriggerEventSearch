@@ -10,19 +10,36 @@ Set credentials via environment variables (recommended) or config.yaml:
     ADZUNA_APP_ID=xxxxxxxx
     ADZUNA_APP_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
-Strategy: ONE broad search per country (us, ca) per scrape cycle.
-Territory + title filtering done in-code to minimise API calls.
-At 6 cycles/day × 2 countries = 360 calls/month. Most reps fit in free tier;
-heavy users can either upgrade Adzuna plan, drop cycle frequency, or restrict
-to one country.
+Strategy: one `title_only` query per role family per country (us, ca),
+territory + title filtering done in-code to minimise API calls.
+
+Call budget — the once-per-day latch (2026-09-06):
+    The scraper is invoked every 4 h by GitHub Actions, but Adzuna's free
+    tier is ~100-250 calls/month. The old throttle only fired when the
+    exact UTC hour matched `run_hours` — GHA cron drifts, so it silently
+    never matched and Adzuna was dead for 9 days. Now the scraper keeps a
+    persisted latch in the SQLite `kv` table (`adzuna_last_run_date`): the
+    first cycle of each UTC day runs, every later cycle that day is skipped.
+    Defaults = 3 calls/day ≈ 90/month, inside the free tier.
+
+    `run_hours` is IGNORED unless `latch_mode: hour` is set explicitly AND
+    `run_hours` is a non-empty list — then it is an *additional* restriction
+    on top of the daily latch (legacy behaviour, not recommended).
+
+Event type: every Adzuna posting is `finance_seat_open` — a company that is
+HIRING a CFO/Controller has an open seat; it is not a seated hire
+(A.J. 2026-09-06). Title format stays 'Company hiring: <job title>'.
 """
 
 import os
 from datetime import datetime, timezone
-from typing import List, Dict, Any, Set, Optional, Iterable
+from typing import List, Dict, Any, Set, Optional, TYPE_CHECKING
 
 from .base import BaseScraper
 from ..models import TriggerEvent, EventType, EventSource
+
+if TYPE_CHECKING:  # typing only — avoids a runtime import cycle
+    from ..database import DatabaseManager
 
 
 # Territory states / provinces — from FY27 xlsx. Used to filter Adzuna's
@@ -82,11 +99,22 @@ class AdzunaScraper(BaseScraper):
 
     BASE_URL = "https://api.adzuna.com/v1/api/jobs/{country}/search/1"
 
-    def __init__(self, config: Dict[str, Any]):
+    # Adzuna category slug — restricts results to accounting/finance
+    # postings server-side (fewer stemmed "controls engineer" hits).
+    CATEGORY = 'accounting-finance-jobs'
+
+    # kv key holding the UTC date (YYYY-MM-DD) of the last successful run.
+    LATCH_KEY = 'adzuna_last_run_date'
+
+    def __init__(self, config: Dict[str, Any], db: 'Optional[DatabaseManager]' = None):
+        """`db` is the shared DatabaseManager (passed by TriggerEventMonitor).
+        With `db=None` there is no persisted latch and the scraper runs on
+        every call — only appropriate for tests / one-off manual runs."""
         super().__init__(config)
 
         adz_cfg = config.get('adzuna', {}) or {}
         self.enabled = adz_cfg.get('enabled', False)
+        self.db = db
 
         # Credentials: prefer env vars (safer for CI), fall back to config
         self.app_id  = adz_cfg.get('app_id')  or os.environ.get('ADZUNA_APP_ID', '')
@@ -98,12 +126,17 @@ class AdzunaScraper(BaseScraper):
         self.results_per_page = int(adz_cfg.get('results_per_page', 50))
         self.max_days_old     = int(adz_cfg.get('max_days_old', 14))
 
-        # API-call budget control. The scraper runs every 4 hours, but Adzuna's
-        # free tier only allows ~100-250 calls/month. `run_hours` lists which
-        # UTC hours Adzuna should actually fire (e.g. [12] = once/day at noon UTC
-        # = 60 calls/month for US+CA = fits 100 free tier).
-        # Set to null/empty to run every cycle.
-        self.run_hours: Optional[Iterable[int]] = adz_cfg.get('run_hours', [12])
+        # API-call budget control — see module docstring. The persisted
+        # once-per-day latch (kv['adzuna_last_run_date']) is the primary
+        # throttle. `run_hours` only applies when `latch_mode: hour` is set
+        # explicitly and the list is non-empty; otherwise it is ignored.
+        self.latch_mode: str = str(adz_cfg.get('latch_mode', 'daily') or 'daily').lower()
+        run_hours = adz_cfg.get('run_hours') or []
+        self.run_hours: List[int] = (
+            [int(h) for h in run_hours]
+            if self.latch_mode == 'hour' and isinstance(run_hours, (list, tuple, set))
+            else []
+        )
 
         # title_only query terms — one API call each (see scrape() for the
         # call-budget math). 'controller' also stems to Corporate Controller;
@@ -136,13 +169,23 @@ class AdzunaScraper(BaseScraper):
             })
             return []
 
-        # API-budget throttle: only fire at configured UTC hours
+        # API-budget throttle 1: persisted once-per-day latch. The first
+        # cycle of each UTC day runs; later cycles that day are skipped.
+        today = datetime.now(timezone.utc).date().isoformat()
+        if self.db is not None:
+            last_run = self.db.get_kv(self.LATCH_KEY)
+            if last_run == today:
+                print(f'  Adzuna: skipped — already ran today ({today} UTC)')
+                return []
+
+        # API-budget throttle 2 (legacy, opt-in via latch_mode: hour): only
+        # fire at the configured UTC hours in addition to the daily latch.
         if self.run_hours:
             current_utc_hour = datetime.now(timezone.utc).hour
             if current_utc_hour not in self.run_hours:
                 print(f'  Adzuna: skipped — current UTC hour '
                       f'{current_utc_hour:02d} not in run_hours '
-                      f'{sorted(self.run_hours)}')
+                      f'{sorted(self.run_hours)} (latch_mode: hour)')
                 return []
 
         # Query strategy (changed 2026-08-09): what_or matched ANY loose
@@ -184,6 +227,14 @@ class AdzunaScraper(BaseScraper):
                 })
                 print(f'  - {label}: ERROR {e}')
 
+        # Set the daily latch only if at least one country call got a
+        # response. On a total failure (network / 4xx / 5xx) leave it unset
+        # so the next 4-hour cycle retries instead of losing the whole day.
+        if self.db is not None and any(
+            st['status'] in ('success', 'partial') for st in self.source_statuses
+        ):
+            self.db.set_kv(self.LATCH_KEY, today)
+
         return all_events
 
     # ── Per-country scrape (1 API call per country) ───────────────────────
@@ -194,6 +245,7 @@ class AdzunaScraper(BaseScraper):
             'app_key':          self.app_key,
             'results_per_page': self.results_per_page,
             'title_only':       title_q,
+            'category':         self.CATEGORY,
             'max_days_old':     self.max_days_old,
             # Newest first — the default (relevance) resurfaces the same
             # "best-matching" postings every day and NEW postings never
@@ -274,10 +326,10 @@ class AdzunaScraper(BaseScraper):
         except Exception:
             published = datetime.now(timezone.utc)
 
-        # 6. Classify event type — CFO_HIRE if title mentions CFO/CFO-equivalent
-        is_cfo = ('cfo' in title_lower
-                  or 'chief financial' in title_lower)
-        event_type = EventType.CFO_HIRE if is_cfo else EventType.EXECUTIVE_HIRE
+        # 6. Event type — a job posting is an OPEN finance seat, not a
+        #    seated hire (A.J. 2026-09-06). Same label for CFO and
+        #    Controller-family titles; the grade (+3) lives downstream.
+        event_type = EventType.FINANCE_SEAT_OPEN
 
         location_str = ((job.get('location') or {}).get('display_name') or '').strip()
 

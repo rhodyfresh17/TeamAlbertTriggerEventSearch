@@ -13,6 +13,9 @@ alerts/
 # Runtime logs (enrichment, launchd)
 logs/
 
+# Runtime state written by monitor_health.py (search_mode canary, rep-state baseline)
+state/
+
 # Python
 __pycache__/
 *.py[cod]

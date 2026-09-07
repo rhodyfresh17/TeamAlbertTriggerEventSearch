@@ -80,6 +80,27 @@ class DatabaseManager:
                 )
             ''')
 
+            # Small key/value store for scraper state that must survive
+            # across runs (e.g. the Adzuna once-per-day latch). Lives in the
+            # same SQLite file so the GitHub Actions cache carries it.
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS kv (
+                    key TEXT PRIMARY KEY,
+                    value TEXT,
+                    updated_at TEXT NOT NULL
+                )
+            ''')
+
+            # Composite dedup keys (e.g. Adzuna "account_key|job title") —
+            # a second dedup channel beside URL + title for events whose
+            # stored title is NOT the identity we dedup on.
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS dedup_keys (
+                    key TEXT PRIMARY KEY,
+                    first_seen TEXT NOT NULL
+                )
+            ''')
+
             # Create indexes
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_events_date
@@ -150,6 +171,54 @@ class DatabaseManager:
             except sqlite3.OperationalError:
                 # Table may not exist yet on first run
                 return False
+
+    def has_recent_dedup_key(self, key: str, hours: int = 72) -> bool:
+        """True if `key` was recorded via mark_dedup_key() within the last
+        N hours. Used for composite dedup keys (Adzuna: account_key + job
+        title) where the stored event title is not the identity to match.
+        """
+        if not key:
+            return False
+        cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                'SELECT 1 FROM dedup_keys WHERE key = ? AND first_seen >= ? LIMIT 1',
+                (key, cutoff)
+            )
+            return cursor.fetchone() is not None
+
+    def mark_dedup_key(self, key: str):
+        """Record a composite dedup key. Re-marking an existing key refreshes
+        its timestamp so a still-open posting keeps suppressing repeats."""
+        if not key:
+            return
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT OR REPLACE INTO dedup_keys (key, first_seen)
+                VALUES (?, ?)
+            ''', (key, datetime.now().isoformat()))
+            conn.commit()
+
+    def get_kv(self, key: str, default: Optional[str] = None) -> Optional[str]:
+        """Read a persisted scraper-state value (string) or `default`."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT value FROM kv WHERE key = ?', (key,))
+            row = cursor.fetchone()
+            return row[0] if row else default
+
+    def set_kv(self, key: str, value: str):
+        """Write a persisted scraper-state value (stored as text)."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT OR REPLACE INTO kv (key, value, updated_at)
+                VALUES (?, ?, ?)
+            ''', (key, None if value is None else str(value),
+                  datetime.now().isoformat()))
+            conn.commit()
 
     def save_event(self, event: TriggerEvent):
         """Save a trigger event to the database."""
@@ -269,6 +338,10 @@ class DatabaseManager:
             )
             cursor.execute(
                 'DELETE FROM seen_urls WHERE first_seen < ?',
+                (cutoff.isoformat(),)
+            )
+            cursor.execute(
+                'DELETE FROM dedup_keys WHERE first_seen < ?',
                 (cutoff.isoformat(),)
             )
             conn.commit()

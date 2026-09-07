@@ -37,10 +37,10 @@ class GoogleNewsScraper(BaseScraper):
         # Build search queries for different event types
         queries = self._build_search_queries()
 
-        for query, event_type_hint, skip_territory_filter in queries:
+        for query, event_type_hint in queries:
             total_queries += 1
             try:
-                feed_events = self._scrape_query(query, event_type_hint, skip_territory_filter)
+                feed_events = self._scrape_query(query, event_type_hint)
                 events.extend(feed_events)
                 self.delay_request()
             except Exception as e:
@@ -68,10 +68,18 @@ class GoogleNewsScraper(BaseScraper):
 
         return events
 
-    def _build_search_queries(self) -> List[tuple[str, Optional[EventType], bool]]:
+    def _build_search_queries(self) -> List[tuple[str, Optional[EventType]]]:
         """Build search queries combining keywords with territory.
 
-        Returns list of (query, event_type_hint, skip_territory_filter) tuples.
+        Returns list of (query, event_type_hint) tuples. Every query goes
+        through the territory filter — the old `skip_territory_filter`
+        bypass (LinkedIn / PE queries) is gone (v2, 2026-09-06): reps see
+        in-territory accounts only, and out-of-territory hits only cost
+        research downstream.
+
+        The hint is informational: `_process_entry` requires
+        `detect_event_type()` to positively classify the article and never
+        falls back to the hint.
         """
         queries = []
 
@@ -81,13 +89,13 @@ class GoogleNewsScraper(BaseScraper):
         # CFO hire queries
         cfo_terms = ['CFO appointed', 'new CFO', 'names CFO', 'CFO hire']
         for term in cfo_terms:
-            queries.append((term, EventType.CFO_HIRE, False))
+            queries.append((term, EventType.CFO_HIRE))
 
         # M&A queries with region
         ma_terms = ['acquisition announced', 'company acquired', 'merger agreement']
         for term in ma_terms:
             for region in key_regions[:3]:  # Limit regions
-                queries.append((f'{term} {region}', EventType.MERGER_ACQUISITION, False))
+                queries.append((f'{term} {region}', EventType.MERGER_ACQUISITION))
 
         # Industry-specific queries — TARGET verticals only (Financial Services,
         # Nonprofits, Consumer Services). Previously queried healthcare/hospital/
@@ -97,108 +105,40 @@ class GoogleNewsScraper(BaseScraper):
                       'private equity', 'nonprofit', 'foundation',
                       'auto dealership', 'real estate brokerage']
         for industry in industries:
-            queries.append((f'{industry} CFO', EventType.CFO_HIRE, False))
-            queries.append((f'{industry} acquisition', EventType.MERGER_ACQUISITION, False))
+            queries.append((f'{industry} CFO', EventType.CFO_HIRE))
+            queries.append((f'{industry} acquisition', EventType.MERGER_ACQUISITION))
         # New-Controller trigger — a stated top trigger with no query until now
-        queries.append(('new controller appointed', EventType.CFO_HIRE, False))
-        queries.append(('"VP of Finance" appointed', EventType.CFO_HIRE, False))
-
-        # LinkedIn-sourced news (executive moves often announced there first)
-        # Skip territory filter for LinkedIn - executives don't always mention location
-        linkedin_queries = [
-            # CFO / finance hire announcements
-            ('site:linkedin.com CFO appointed', EventType.CFO_HIRE, True),
-            ('site:linkedin.com "excited to announce" CFO', EventType.CFO_HIRE, True),
-            ('site:linkedin.com "new role" CFO finance', EventType.CFO_HIRE, True),
-            ('site:linkedin.com "thrilled to join" CFO', EventType.CFO_HIRE, True),
-            ('site:linkedin.com "joined as" CFO', EventType.CFO_HIRE, True),
-            ('site:linkedin.com "Chief Financial Officer"', EventType.CFO_HIRE, True),
-            # Expanded LinkedIn phrases for CFO/finance hires
-            ('site:linkedin.com "started a new position" CFO', EventType.CFO_HIRE, True),
-            ('site:linkedin.com "started a new position" "Chief Financial Officer"', EventType.CFO_HIRE, True),
-            ('site:linkedin.com "happy to share" CFO', EventType.CFO_HIRE, True),
-            ('site:linkedin.com "proud to announce" CFO', EventType.CFO_HIRE, True),
-            ('site:linkedin.com "delighted to announce" CFO', EventType.CFO_HIRE, True),
-            ('site:linkedin.com "pleased to share" CFO finance', EventType.CFO_HIRE, True),
-            ('site:linkedin.com "new chapter" CFO', EventType.CFO_HIRE, True),
-            ('site:linkedin.com "I\'m happy to announce" finance', EventType.CFO_HIRE, True),
-            ('site:linkedin.com "VP of Finance" "joined"', EventType.CFO_HIRE, True),
-            ('site:linkedin.com "Head of Finance" "excited"', EventType.CFO_HIRE, True),
-            ('site:linkedin.com "Controller" "new role"', EventType.CFO_HIRE, True),
-            ('site:linkedin.com "Finance Director" "joined"', EventType.CFO_HIRE, True),
-            # LinkedIn posts and articles (pulse) for CFO hires
-            ('site:linkedin.com/posts "CFO" "appointed"', EventType.CFO_HIRE, True),
-            ('site:linkedin.com/posts "Chief Financial Officer"', EventType.CFO_HIRE, True),
-            ('site:linkedin.com/posts "excited to announce" CFO', EventType.CFO_HIRE, True),
-            ('site:linkedin.com/posts "VP Finance" "new role"', EventType.CFO_HIRE, True),
-            ('site:linkedin.com/pulse CFO appointed', EventType.CFO_HIRE, True),
-            ('site:linkedin.com/pulse "Chief Financial Officer"', EventType.CFO_HIRE, True),
-            # M&A on LinkedIn
-            ('site:linkedin.com acquisition announced', EventType.MERGER_ACQUISITION, True),
-            ('site:linkedin.com "pleased to announce" acquisition', EventType.MERGER_ACQUISITION, True),
-            ('site:linkedin.com/posts "acquisition" "pleased to announce"', EventType.MERGER_ACQUISITION, True),
-            ('site:linkedin.com/posts "acquired" "excited"', EventType.MERGER_ACQUISITION, True),
-            # Funding on LinkedIn
-            ('site:linkedin.com funding round raised', EventType.FUNDING, True),
-            ('site:linkedin.com/posts "raised" "funding"', EventType.FUNDING, True),
-        ]
-        queries.extend(linkedin_queries)
+        queries.append(('new controller appointed', EventType.CFO_HIRE))
+        queries.append(('"VP of Finance" appointed', EventType.CFO_HIRE))
 
         # Crunchbase-sourced news (funding rounds, acquisitions)
         crunchbase_queries = [
-            ('site:crunchbase.com series funding', EventType.FUNDING, False),
-            ('site:crunchbase.com acquisition', EventType.MERGER_ACQUISITION, False),
-            ('site:news.crunchbase.com raises', EventType.FUNDING, False),
-            ('site:news.crunchbase.com acquired', EventType.MERGER_ACQUISITION, False),
+            ('site:crunchbase.com series funding', EventType.FUNDING),
+            ('site:crunchbase.com acquisition', EventType.MERGER_ACQUISITION),
+            ('site:news.crunchbase.com raises', EventType.FUNDING),
+            ('site:news.crunchbase.com acquired', EventType.MERGER_ACQUISITION),
         ]
         queries.extend(crunchbase_queries)
 
         # Private equity portfolio company moves
         pe_queries = [
-            ('"private equity" "portfolio company" CFO', EventType.CFO_HIRE, True),
-            ('"PE-backed" CFO appointed', EventType.CFO_HIRE, True),
-            ('"platform company" CFO', EventType.CFO_HIRE, True),
-            ('"add-on acquisition"', EventType.MERGER_ACQUISITION, True),
-            ('"bolt-on acquisition"', EventType.MERGER_ACQUISITION, True),
+            ('"private equity" "portfolio company" CFO', EventType.CFO_HIRE),
+            ('"PE-backed" CFO appointed', EventType.CFO_HIRE),
+            ('"platform company" CFO', EventType.CFO_HIRE),
+            ('"add-on acquisition"', EventType.MERGER_ACQUISITION),
+            ('"bolt-on acquisition"', EventType.MERGER_ACQUISITION),
         ]
         queries.extend(pe_queries)
 
         # Companies in transition (interim/fractional = opportunity)
         transition_queries = [
-            ('"interim CFO"', EventType.CFO_HIRE, False),
-            ('"fractional CFO"', EventType.CFO_HIRE, False),
-            ('"acting CFO"', EventType.CFO_HIRE, False),
-            ('"CFO transition"', EventType.CFO_HIRE, False),
-            ('"CFO search"', EventType.CFO_HIRE, False),
+            ('"interim CFO"', EventType.CFO_HIRE),
+            ('"fractional CFO"', EventType.CFO_HIRE),
+            ('"acting CFO"', EventType.CFO_HIRE),
+            ('"CFO transition"', EventType.CFO_HIRE),
+            ('"CFO search"', EventType.CFO_HIRE),
         ]
         queries.extend(transition_queries)
-
-        # Expansion signals (companies growing = need services)
-        expansion_queries = [
-            ('"new headquarters" OR "relocating headquarters"', EventType.OTHER, False),
-            ('"office expansion" OR "expanding operations"', EventType.OTHER, False),
-            ('"opened new office"', EventType.OTHER, False),
-        ]
-        queries.extend(expansion_queries)
-
-        # Product/service/market launches (companies investing in growth)
-        launch_queries = [
-            ('"launches new product" OR "new product launch"', EventType.OTHER, False),
-            ('"launches new service" OR "new service offering"', EventType.OTHER, False),
-            ('"enters new market" OR "market expansion"', EventType.OTHER, False),
-            ('"new business line" OR "new division"', EventType.OTHER, False),
-            ('"pleased to announce the launch"', EventType.OTHER, False),
-            ('"expands into" OR "expanding into"', EventType.OTHER, False),
-        ]
-        queries.extend(launch_queries)
-
-        # TechCrunch funding coverage
-        techcrunch_queries = [
-            ('site:techcrunch.com "series A"', EventType.FUNDING, True),
-            ('site:techcrunch.com "series B"', EventType.FUNDING, True),
-            ('site:techcrunch.com "raises" million', EventType.FUNDING, True),
-        ]
-        queries.extend(techcrunch_queries)
 
         return queries
 
@@ -206,7 +146,6 @@ class GoogleNewsScraper(BaseScraper):
         self,
         query: str,
         event_type_hint: Optional[EventType],
-        skip_territory_filter: bool = False
     ) -> List[TriggerEvent]:
         """Scrape Google News for a specific query."""
         events = []
@@ -223,7 +162,7 @@ class GoogleNewsScraper(BaseScraper):
             items = root.findall('.//item')[:10]  # Limit entries per query
 
             for item in items:
-                event = self._process_entry(item, event_type_hint, skip_territory_filter)
+                event = self._process_entry(item, event_type_hint)
                 if event:
                     events.append(event)
 
@@ -236,7 +175,6 @@ class GoogleNewsScraper(BaseScraper):
         self,
         item: ET.Element,
         event_type_hint: Optional[EventType],
-        skip_territory_filter: bool = False
     ) -> Optional[TriggerEvent]:
         """Process a single news entry."""
         title_elem = item.find('title')
@@ -258,10 +196,12 @@ class GoogleNewsScraper(BaseScraper):
 
         full_text = f"{title} {summary}"
 
-        # Detect event type (use hint if detection fails)
+        # Detect event type from the article itself. The query hint is NOT a
+        # fallback (v2, 2026-09-06): an article that does not read as a hire /
+        # M&A / funding event is not a trigger, whatever query found it.
+        # (detect_event_type returns a single type, so there is no tie for
+        # the hint to break; it stays in the signature for that purpose.)
         event_type = self.detect_event_type(full_text)
-        if not event_type:
-            event_type = event_type_hint
         if not event_type:
             return None
 
@@ -285,18 +225,16 @@ class GoogleNewsScraper(BaseScraper):
         if self.is_excluded_location(full_text):
             return None
 
-        # TERRITORY FILTERING
-        # Skip territory filter for LinkedIn searches (executives don't always mention location)
-        if not skip_territory_filter:
-            # STRICT FILTERING: Require territory match OR target company
-            # Industry alone is NOT sufficient (avoids international companies)
-            if self.require_territory_match:
-                if not (in_territory or matches_company):
-                    return None
-            else:
-                # Fallback to looser filtering if disabled
-                if not (in_territory or matches_target_industry or matches_company):
-                    return None
+        # TERRITORY FILTERING (applies to every query — no bypass)
+        # STRICT FILTERING: Require territory match OR target company
+        # Industry alone is NOT sufficient (avoids international companies)
+        if self.require_territory_match:
+            if not (in_territory or matches_company):
+                return None
+        else:
+            # Fallback to looser filtering if disabled
+            if not (in_territory or matches_target_industry or matches_company):
+                return None
 
         # Calculate relevance
         relevance = self.calculate_relevance_score(

@@ -2,6 +2,7 @@
 
 import hashlib
 import re
+import unicodedata
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime
@@ -10,8 +11,12 @@ from typing import List, Optional, Dict, Any
 import requests
 
 from ..models import TriggerEvent, EventType, EventSource
+from ..pipeline.gates import STATE_NAMES as _GATES_STATE_NAMES
 
-# State abbreviation mapping for dateline parsing
+# State abbreviation mapping for dateline parsing (postal codes + AP-style
+# wire abbreviations: "Va.", "N.C.", "Mass.", "Fla.", "Calif.", "W.Va.").
+# Keys are lower-case with dots/spaces stripped; values are the lower-case
+# full name, which is what territory.regions is compared against.
 STATE_ABBREVS = {
     'al': 'alabama', 'ak': 'alaska', 'az': 'arizona', 'ar': 'arkansas',
     'ca': 'california', 'co': 'colorado', 'ct': 'connecticut', 'de': 'delaware',
@@ -32,7 +37,79 @@ STATE_ABBREVS = {
     'bc': 'british columbia', 'ab': 'alberta', 'mb': 'manitoba',
     'sk': 'saskatchewan', 'ns': 'nova scotia', 'nb': 'new brunswick',
     'nl': 'newfoundland', 'pe': 'prince edward island',
+    # AP / PR-wire style state abbreviations (only ever consulted in the
+    # "CITY, State, Month DD" slot, so short keys like 'ind'/'del' are safe)
+    'ala': 'alabama', 'ariz': 'arizona', 'ark': 'arkansas', 'calif': 'california',
+    'colo': 'colorado', 'conn': 'connecticut', 'del': 'delaware', 'fla': 'florida',
+    'ill': 'illinois', 'ind': 'indiana', 'kan': 'kansas', 'kans': 'kansas',
+    'mich': 'michigan', 'minn': 'minnesota', 'miss': 'mississippi',
+    'mont': 'montana', 'neb': 'nebraska', 'nebr': 'nebraska', 'nev': 'nevada',
+    'okla': 'oklahoma', 'ore': 'oregon', 'oreg': 'oregon', 'penn': 'pennsylvania',
+    'tenn': 'tennessee', 'tex': 'texas', 'wash': 'washington',
+    'wva': 'west virginia', 'wis': 'wisconsin', 'wisc': 'wisconsin',
+    'wyo': 'wyoming', 'alta': 'alberta', 'sask': 'saskatchewan',
+    'nfld': 'newfoundland',
 }
+
+# Canonical lower-case full name per state/province code, derived from
+# gates.STATE_NAMES (first name listed for a code wins: 'quebec' over
+# 'québec', 'district of columbia' over 'washington dc').
+_CODE_TO_NAME: Dict[str, str] = {}
+for _name, _code in _GATES_STATE_NAMES.items():
+    _CODE_TO_NAME.setdefault(_code, _name)
+
+# Dateline parsing pieces. A wire dateline is "<LOCATION(S)>, <Month> <DD>,
+# <YYYY> /PRNewswire/ --": the date is the anchor, the location(s) sit in
+# the ~120 chars before it. Month must be word-boundary-preceded and
+# followed by a day number, so "Decrypt", "Augusta", "Marketing" and bare
+# "March 2026" are not anchors.
+_MONTH_ANCHOR = re.compile(
+    r'\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?'
+    r'\s+\d{1,2}(?:st|nd|rd|th)?\b'
+)
+_LOC_SPLIT = re.compile(r'\s+and\s+|\s+AND\s+|\s*&\s*|\s*/\s*')
+# ALL-CAPS city run at the end of a segment: "NEW YORK", "ST. LOUIS",
+# "WINSTON-SALEM", "MONTRÉAL". Tokens need ≥2 chars so a stray "A" is not a city.
+_CAPS_TOKEN = r"[A-ZÀ-ÖØ-Þ][A-ZÀ-ÖØ-Þ\.'’\-]+"
+_CAPS_RUN_END = re.compile(rf"({_CAPS_TOKEN}(?:\s+{_CAPS_TOKEN}){{0,4}})\s*$")
+# Capitalized run (Title Case OR caps) — only trusted when a validated state
+# follows it ("Arlington, Virginia, Feb. 10" — GlobeNewswire style).
+_TITLE_TOKEN = r"[A-ZÀ-ÖØ-Þ][\w\.'’\-]*"
+_TITLE_RUN_END = re.compile(rf"({_TITLE_TOKEN}(?:\s+{_TITLE_TOKEN}){{0,4}})\s*$")
+
+
+def resolve_state_token(token: Optional[str]) -> Optional[str]:
+    """Map a dateline state token to its lower-case full name, or None when
+    it is not a state/province.
+
+        'Va.' → 'virginia' · 'N.C.' → 'north carolina' · 'Mass.' →
+        'massachusetts' · 'Maine' → 'maine' · 'Ontario' → 'ontario' ·
+        'D.C.' → 'washington dc' · 'Québec' → 'quebec'
+    """
+    t = re.sub(r'\s+', ' ', (token or '').strip().lower())
+    if not t:
+        return None
+    key = t.replace('.', '').replace(' ', '')       # 'n.c.' → 'nc', 'w. va.' → 'wva'
+    if key in STATE_ABBREVS:
+        return STATE_ABBREVS[key]
+    name = t.replace('.', '').strip()
+    code = _GATES_STATE_NAMES.get(name)
+    if code:
+        return _CODE_TO_NAME.get(code, name)
+    return None
+
+
+def _compile_whole_word(terms: List[str]) -> List[tuple]:
+    """[(term, compiled_regex)] — whole-word, case-insensitive. Lookarounds
+    instead of \b so terms ending in punctuation ("St. Louis") still work."""
+    out = []
+    for term in terms:
+        term = (term or '').strip()
+        if not term:
+            continue
+        out.append((term, re.compile(r'(?<!\w)' + re.escape(term) + r'(?!\w)',
+                                     re.IGNORECASE)))
+    return out
 
 
 class BaseScraper(ABC):
@@ -54,6 +131,10 @@ class BaseScraper(ABC):
         self.territory = config.get('territory', {})
         self.regions = [r.lower() for r in (self.territory.get('regions') or [])]
         self.cities = [c.lower() for c in (self.territory.get('cities') or [])]
+        # Whole-word matchers for the body-text scan ("Reston" must not hit
+        # "Preston", "Dover" must not hit "Andover").
+        self._region_res = _compile_whole_word(self.regions)
+        self._city_res = _compile_whole_word(self.cities)
         self.target_companies = [c.lower() for c in (self.territory.get('target_companies') or []) if c]
         self.industries = [i.lower() for i in (self.territory.get('industries') or [])]
         self.excluded_industries = [i.lower() for i in (self.territory.get('excluded_industries') or [])]
@@ -81,6 +162,11 @@ class BaseScraper(ABC):
         self.excluded_locations = [
             loc.lower() for loc in (self.territory.get('excluded_locations') or [])
         ]
+        # Whole-word only — "India" must not match "Indianapolis", "UK" must
+        # not match "Duke"/"Milwaukee". Entries of ≤3 chars ("UK", "US",
+        # "UAE") get NO substring path at all; they match solely as whole
+        # words (config.example.yaml drops them anyway — too ambiguous).
+        self._excluded_location_res = _compile_whole_word(self.excluded_locations)
 
         # Load content exclusions (irrelevant content types)
         self.excluded_content = [
@@ -144,12 +230,19 @@ class BaseScraper(ABC):
         return None
 
     def is_excluded_location(self, text: str) -> bool:
-        """Check if text mentions an excluded international location."""
-        text_lower = text.lower()
-        for location in self.excluded_locations:
-            if location in text_lower:
-                return True
-        return False
+        """True when the text mentions an excluded (out-of-territory) location
+        as a WHOLE WORD. Substring matching was the bug that darkened Indiana
+        ("india" ⊂ Indianapolis) and Duke/Milwaukee ("uk").
+
+        Ordering contract: an in-territory signal always wins. Callers
+        (matches_territory / territory_status / the scrapers) consult this
+        ONLY when there is no dateline, city or state hit — a false reject
+        at scrape time is lost forever, a false admit is caught by the
+        enrichment HQ gate.
+        """
+        if not text:
+            return False
+        return any(rx.search(text) for _term, rx in self._excluded_location_res)
 
     def extract_dateline_location(self, text: str) -> tuple[Optional[str], Optional[str]]:
         """
@@ -164,90 +257,136 @@ class BaseScraper(ABC):
 
     def extract_dateline_locations(self, text: str) -> List[tuple[Optional[str], Optional[str]]]:
         """
-        Extract ALL cities and states from PR newswire-style dateline.
+        Extract ALL cities and states from a PR-wire-style dateline.
         Handles multiple locations like "NEW YORK and ARLINGTON, Va."
 
-        Examples:
-            "ARLINGTON, Va., Feb. 10" -> [("arlington", "virginia")]
-            "NEW YORK and BOSTON, Feb. 10" -> [("new york", None), ("boston", None)]
-            "NEW YORK and ARLINGTON, Va., Feb. 10" -> [("new york", None), ("arlington", "virginia")]
-            "CHICAGO, IL and RICHMOND, Va., Feb. 10" -> [("chicago", "illinois"), ("richmond", "virginia")]
-        """
-        locations = []
-        text_stripped = text.strip()
+        The date ("Feb. 10, 2026") is the anchor; the location(s) are the
+        segments immediately before it, so the dateline is found whether it
+        starts the text or follows a headline ("Acme Names CFO ARLINGTON,
+        Va., Feb. 10, 2026 /PRNewswire/"). States resolve from postal codes,
+        AP abbreviations AND full names (gates.STATE_NAMES); cities are
+        returned lower-case, trimmed to a known territory city when headline
+        words are glued to the front ("CFO ARLINGTON" → "arlington").
 
-        # First, extract the dateline portion (before the date)
-        # Match everything before a month abbreviation
-        dateline_match = re.match(r'^(.+?)(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)', text_stripped)
-        if not dateline_match:
+        Examples:
+            "ARLINGTON, Va., Feb. 10, 2026"          -> [("arlington", "virginia")]
+            "PORTLAND, Maine, Feb. 10, 2026"          -> [("portland", "maine")]
+            "INDIANAPOLIS, Feb. 10, 2026"             -> [("indianapolis", None)]
+            "NEW YORK and BOSTON, Feb. 10"            -> [("new york", None), ("boston", None)]
+            "NEW YORK and ARLINGTON, Va., Feb. 10"    -> [("new york", None), ("arlington", "virginia")]
+            "CHICAGO, IL and RICHMOND, Va., Feb. 10"  -> [("chicago", "illinois"), ("richmond", "virginia")]
+            "Arlington, Virginia, Feb. 10, 2026"      -> [("arlington", "virginia")]   (GlobeNewswire)
+        """
+        locations: List[tuple[Optional[str], Optional[str]]] = []
+        if not text:
             return locations
 
-        dateline_portion = dateline_match.group(1).strip()
-
-        # Split by " and " or " AND " to get individual location segments
-        # Also handle "&" and "/"
-        segments = re.split(r'\s+and\s+|\s+AND\s+|\s*&\s*|\s*/\s*', dateline_portion)
-
-        for segment in segments:
-            segment = segment.strip().rstrip(',').rstrip('-').strip()
-            if not segment:
+        seen = set()
+        # Up to 3 date anchors: a headline like "…to Report Results on Feb. 10"
+        # precedes the real dateline; the first anchor that yields a location
+        # IS the dateline, later "CITY, State, Month DD" mentions are body text.
+        for n, anchor in enumerate(_MONTH_ANCHOR.finditer(text)):
+            if n >= 3:
+                break
+            window = text[max(0, anchor.start() - 120):anchor.start()].strip()
+            if not window:
                 continue
-
-            # Pattern: CITY, State (e.g., "ARLINGTON, Va." or "CHICAGO, IL" or "CHARLOTTE, N.C.")
-            # Handle state abbreviations with periods like "N.C.", "N.Y.", "D.C."
-            city_state_pattern = r'^([A-Z][A-Z\s]+),\s*([A-Za-z]\.?[A-Za-z]?\.?)$'
-            match = re.match(city_state_pattern, segment)
-            if match:
-                city = match.group(1).strip().lower()
-                state_abbrev = match.group(2).strip().lower().replace('.', '')
-                state = STATE_ABBREVS.get(state_abbrev, state_abbrev)
-                locations.append((city, state))
-                continue
-
-            # Pattern: Just CITY (e.g., "NEW YORK" or "BOSTON")
-            # Must be all caps to be a dateline city
-            if segment.isupper() or (segment.replace(' ', '').isupper()):
-                city = segment.lower()
-                # Check if it might be a state abbreviation at the end
-                locations.append((city, None))
+            for segment in _LOC_SPLIT.split(window):
+                segment = segment.strip().strip(',-–—').strip()
+                if not segment:
+                    continue
+                loc = self._parse_dateline_segment(segment)
+                if loc and loc not in seen:
+                    seen.add(loc)
+                    locations.append(loc)
+            if locations:
+                break
 
         return locations
 
+    def _parse_dateline_segment(self, segment: str) -> Optional[tuple[Optional[str], Optional[str]]]:
+        """One dateline segment → (city, state) or None.
+
+        "CITY, State": split on the LAST comma; the right side must validate
+        as a state (postal / AP / full name). Then the city is the trailing
+        capitalized run on the left (Title Case allowed here because the
+        state vouches for it). Without a valid state the segment must END
+        in an ALL-CAPS run ("INDIANAPOLIS", "ST. LOUIS") to count as a city.
+        """
+        if ',' in segment:
+            left, right = segment.rsplit(',', 1)
+            state = resolve_state_token(right)
+            if state:
+                m = _TITLE_RUN_END.search(left.strip())
+                city = self._canonical_city(m.group(1)) if m else None
+                return city, state
+        m = _CAPS_RUN_END.search(segment)
+        if m:
+            return self._canonical_city(m.group(1)), None
+        return None
+
+    def _canonical_city(self, run: str) -> str:
+        """Lower-case a capitalized run and trim glued headline words: the
+        longest token-suffix that is a known territory city wins
+        ("CFO ARLINGTON" → "arlington", "NEW YORK" → "new york"). Accents
+        are folded so "MONTRÉAL" / "QUÉBEC CITY" meet the config's
+        unaccented "montreal" / "quebec city"."""
+        lowered = run.replace('’', "'").lower()
+        folded = unicodedata.normalize('NFKD', lowered).encode('ascii', 'ignore').decode()
+        for variant in (lowered, folded):
+            toks = variant.split()
+            for i in range(len(toks)):
+                cand = ' '.join(toks[i:])
+                if cand in self.cities:
+                    return cand
+        return ' '.join(folded.split()) or ' '.join(lowered.split())
+
     def matches_territory(self, text: str) -> tuple[bool, List[str]]:
-        """Check if text mentions locations in our territory."""
-        text_lower = text.lower()
-        matched = []
+        """Does the text place the story in our territory? → (bool, matches)
 
-        # First check if it's an excluded location (international)
-        if self.is_excluded_location(text):
-            return False, []
+        Order matters (audit 2026-09-06: Indiana, Maine and "Duke…" were
+        dark because the exclusion list ran FIRST):
+          1. dateline city/state          → in territory, return early
+          2. whole-word body scan          → in territory
+          3. nothing found                 → not in territory
+        The excluded-location list is deliberately NOT consulted here: with
+        no in-territory signal the answer is already False, and with one it
+        must not veto. Callers that want the out/unknown distinction use
+        territory_status(); scrapers apply is_excluded_location() only in
+        the no-signal branch.
+        """
+        matched: List[str] = []
 
-        # Check dateline location first (e.g., "ARLINGTON, Va., Feb. 10, 2026")
-        dateline_city, dateline_state = self.extract_dateline_location(text)
-        if dateline_city or dateline_state:
-            # Check if dateline city matches our cities
+        # 1. Dateline (e.g. "ARLINGTON, Va., Feb. 10, 2026") — highest confidence
+        for dateline_city, dateline_state in self.extract_dateline_locations(text):
             if dateline_city and dateline_city in self.cities:
                 matched.append(dateline_city)
-
-            # Check if dateline state matches our regions
             if dateline_state and dateline_state in self.regions:
                 matched.append(dateline_state)
+        if matched:
+            return True, matched
 
-            # If dateline matched, return early with high confidence
-            if matched:
-                return True, matched
-
-        # Check regions in full text
-        for region in self.regions:
-            if region in text_lower:
+        # 2. Whole-word scan of the full text for regions and cities
+        for region, rx in self._region_res:
+            if rx.search(text):
                 matched.append(region)
-
-        # Check cities in full text
-        for city in self.cities:
-            if city in text_lower:
+        for city, rx in self._city_res:
+            if rx.search(text):
                 matched.append(city)
+        if matched:
+            return True, matched
 
-        return len(matched) > 0, matched
+        return False, []
+
+    def territory_status(self, text: str) -> str:
+        """'in' | 'out' | 'unknown' — 'out' only when there is NO in-territory
+        signal and an excluded location is mentioned as a whole word."""
+        in_territory, _ = self.matches_territory(text)
+        if in_territory:
+            return 'in'
+        if self.is_excluded_location(text):
+            return 'out'
+        return 'unknown'
 
     def matches_industry(self, text: str) -> tuple[bool, bool]:
         """

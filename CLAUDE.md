@@ -1,8 +1,20 @@
 # CLAUDE.md — Team Albert Sales Intelligence
 
-You are an AI agent (Elon, or any successor) inheriting this codebase. This document is your complete onboarding. Read it end-to-end before making changes.
+> ⚠️ **OWNERSHIP CHANGED 2026-08-15 — this engine belongs to SCOUT (`hermes-sales`), not Elon.**
+> The repo is mounted at `/projects/TeamAlbertTriggerEventSearch` in **Scout's** container; it is
+> **no longer mounted in Elon's**. The Monday "Lead Sourcing Engine Status Check" cron runs on
+> Scout and delivers to **`#scout-engine`**, as do the host script's pass/fail alerts. Rationale:
+> it is a sales engine, and the Monday job judges lead quality (territory drift, duplicates, ICP
+> fit) — the ICP definition lives in Scout's vault, and Elon never had it.
+>
+> **Sections §A and §4b below still say "Elon" throughout and have not been rewritten.** Read
+> "Elon" as "the owning Hermes agent" = Scout, and `hermes-elon` as `hermes-sales`, until those
+> sections are revised. Everything else in this file is current. `.hermes.md` — the brief that
+> actually auto-loads into the cron — IS up to date.
 
-> 📎 **Note on filename**: This file is also accessible as `.hermes.md` (symlink) so it loads automatically when Hermes agents enter the directory. Hermes loads project context in priority order: `.hermes.md` → `AGENTS.md` → `CLAUDE.md` → `.cursorrules`. Editing either filename updates both (they're the same file). **Your global SOUL.md (Hermes identity, in `HERMES_HOME`) loads independently — this file does NOT override it.**
+You are an AI agent (Scout, or any successor) inheriting this codebase. This document is your complete onboarding. Read it end-to-end before making changes.
+
+> 📎 **Note on filename**: `.hermes.md` is what auto-loads when a Hermes agent enters this directory (priority order: `.hermes.md` → `AGENTS.md` → `CLAUDE.md` → `.cursorrules`). It **used to be a symlink to this file, and is NOT any more** — it was split into a separate, short brief on 2026-08-11 because Hermes truncates every context source at 20,000 chars and silently drops the middle, which was discarding 59% of this file on every cron run. **They are two files now: editing one does NOT update the other.** Keep `.hermes.md` short and this file complete. **Your global SOUL.md (Hermes identity, in `HERMES_HOME`) loads independently — this file does NOT override it.**
 
 ---
 
@@ -130,6 +142,71 @@ This is a **sales lead intelligence tool** for A.J. Albert's NetSuite Up-Market 
 User: **A.J. Albert** — NetSuite Up-Market Sales rep on Team Albert. Non-technical. Depends on you to write code, run commands, and explain in plain language. **Always offer local-only verification (PASS/FAIL, `${VAR}`) rather than asking him to paste secrets in chat.**
 
 ---
+
+## 0b. v2 (2026-09-07) — cheap-first pipeline, hard exclusions, rationed spend
+
+Ground-up redesign after the 2026-09-04→06 audit (6-lens, 199-agent adversarial
+review; plan file `~/.claude/plans/now-with-the-new-radiant-balloon.md`). Phase 1 shipped
+2026-09-07. **Read this before touching enrichment, scrapers, sync or the dashboard.**
+
+**Governing rules**
+1. Every stage yields `in` / `out` / `unknown`. **`unknown` is never shown to reps by
+   default and never triggers paid spend on its own.**
+2. Free, deterministic gates run BEFORE any LLM or web search: `src/pipeline/gates.py`
+   (pure functions, `tests/test_gates.py` seeded with real queue names).
+3. A rep's verdict is a hard input: `account_dispositions` is read at the top of every
+   enrichment run — Not a Fit / Out of Alignment / NetSuite Customer → tombstone `rep:<status>`
+   with no research; Picked Up / On Rep TAL → `fit.verdict='decided'`, no research.
+4. Tombstones persist the research they had (`_soft_delete(..., extra=)`), and every reason
+   uses one vocabulary: `entity_shape:<kind>` · `aj_exclusion` (via entity_shape) ·
+   `fit_gate:<dims>` · `structured:<verdict>: <why>` · `formd_too_small` ·
+   `board_change_only` · `no_workable_account` · `bad_company_name` · `trigger_expired` ·
+   `rep:<status>` · `industry:<kw>`.
+
+**A.J.'s exclusions (binding, 2026-09-04/06)** — `is_non_operating_entity()` kinds:
+`fund_vehicle` (LPs, BDCs, "Fund III", SPVs, credit funds — the PE/VC FIRM stays in),
+`spac`, `political`, `government` (→ Gov team), `k12` (ALL K-12 incl. charter/private),
+`lodging` (→ Hospitality team), `greek`. Financial Services is IN broadly (crypto and
+non-hotel real estate are NOT excluded). Investor roles are no longer workable accounts —
+the company that got the money is the account.
+
+**`fit.verdict` values**: `pass` (vertical AND territory confirmed; revenue may be a chip) ·
+`unverified` (vertical known, territory/revenue unknown — hidden by default, visible under the
+dashboard toggle) · `staged` (vertical unknown — hidden; retried free; `fit.deferred_attempts`
+counts throttled searches, enriched_at stays NULL until 3 attempts) · `decided` (rep verdict) ·
+`fail` (tombstoned). Dashboard default = **verified only** ("Show unverified accounts" toggle).
+
+**Structured pre-gates** (zero search): SEC descriptions now carry `SIC: NNNN (…)`; Form D
+descriptions carry `Form D industry group: X.` `Declared revenue: <range>.` `Total offering:
+$N.` `SPAC: yes.` — parsed by `_structured_verdict()` → `sic_to_verdict` / `formd_to_verdict`.
+Form D research bar (A.J.): declared revenue ≥ $5M, or undisclosed with a ≥ $10M raise; declared
+revenue seeds the revenue band (LMM/MM) for the filer. 8-K Item 1.01 is kept only when the
+filing's full text has a definitive-agreement phrase (`MA_AGREEMENT_PHRASES`); 5.02 uses
+`locationCodes` (territory server-side).
+
+**Search spend**: `SearchBudget(tier)` per event — tier 1 (CFO/Controller hires,
+`finance_seat_open`, M&A, funding ≥ $10M) = 2 searches, paid allowed on the firmographic
+lookup only; tier 2 = 1 scrape-only; tier 3 (raise < $1M) = none. Probes are scrape-only and
+at most ONE per account. Tavily fires only after a genuine Firecrawl empty, within the monthly
+budget (`TAVILY_MONTHLY_BUDGET` 900) AND the daily ration (`TAVILY_DAILY_RATION` 25),
+charged on success, fail-closed. **Throttled = DEFER** (`{'deferred': True}`), never escalate.
+`state/search_mode=defer` (written by monitor_health's Firecrawl canary) pauses all searching.
+Bulk modes: `--estimate` pre-flight; `--re-enrich` over 50 events requires `--confirm-credits N`;
+`--reverify-unverified` is ranked (cfo > seat-open > M&A > funding, fewest unknown dims) and
+capped at 50/run.
+
+**`finance_seat_open`** (Adzuna postings = a company HIRING a CFO/Controller): its own event
+type, +3 via #NewController, never #NewCFO. Adzuna runs on a persisted once-per-day latch
+(`kv` table) and dedups postings on `(account_key, title)` so a 5-state posting is one lead.
+
+**Sync** sends only 9 scrape-owned columns (never lead_status/notes), last 14 days, batches of
+200 — the unpaginated prefetch that reset rep statuses is gone. **Monitor** reads the Tavily
+counter (never spends a credit), runs a Firecrawl usefulness canary, and fails when rep-set
+statuses drop >20%.
+
+**Queue cleanup**: `scripts/migrate_v2.py` (dry-run default, `--apply`; `--skip-sec` skips EDGAR)
+re-gates the existing queue with zero paid search. Phases 2–4 (classify-then-research reorder,
+typed columns, yield monitoring, supply sources, accounts table) are in the plan file.
 
 ## 1. Architecture (data flow)
 
@@ -367,7 +444,7 @@ A single script — `monitor_health.py` — runs end-to-end diagnostics. Three m
 
 | Mode | Runtime | What it checks |
 |---|---|---|
-| `--quick` *(default)* | ~10s | env creds, Tavily API, local LLM (llama.cpp :8091), Supabase reachable, scrape freshness, enrichment lag, local SQLite, launchd job loaded |
+| `--quick` *(default)* | ~10s | env creds, Tavily budget counter (local — never spends a credit), Firecrawl usefulness canary (→ `state/search_mode`), rep-state intact, local LLM (llama.cpp :8091), Supabase reachable, scrape freshness, enrichment lag, local SQLite (WARN when empty — authoritative DB lives in the GHA cache), launchd job loaded |
 | `--daily` | ~30s | all of the above + source health (productive vs silent feeds) + 7-day-vs-prior volume trend |
 | `--weekly` | ~60s | all of the above + cleanup_legacy_events.py dry-run (catches new noise patterns) |
 

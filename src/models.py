@@ -10,6 +10,7 @@ class EventType(Enum):
     """Types of trigger events to track."""
     EXECUTIVE_HIRE = "executive_hire"
     CFO_HIRE = "cfo_hire"
+    FINANCE_SEAT_OPEN = "finance_seat_open"  # a company is HIRING a CFO/Controller (job posting) — distinct from a seated hire (A.J. 2026-09-06: +3)
     MERGER_ACQUISITION = "merger_acquisition"
     FUNDING = "funding"
     EXPANSION = "expansion"

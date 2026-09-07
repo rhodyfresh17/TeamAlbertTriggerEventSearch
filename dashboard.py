@@ -10,14 +10,21 @@ Usage:
 """
 
 import os
+import re
 import json
 import base64
 import urllib.parse
 import pandas as pd
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Optional
 
 import streamlit as st
+
+# Shared territory vocabulary — ONE source of truth for state/province codes
+# and names across scrapers, enrichment and this UI (src/pipeline/gates.py).
+# The app runs from the repo root on Streamlit Cloud, so `src.` resolves.
+from src.pipeline.gates import ALL_STATE_CODES, STATE_NAMES, TERRITORY_STATES
 
 
 def get_logo_base64() -> str:
@@ -189,6 +196,7 @@ st.markdown("""
     .badge-funding { background: #fef3c7; color: #92400e; }
     .badge-stable  { background: #ffedd5; color: #9a3412; }
     .badge-exec    { background: #ede9fe; color: #5b21b6; }
+    .badge-seat    { background: #ccfbf1; color: #115e59; }
     .badge-other   { background: #f3f4f6; color: #374151; }
 
     .status-badge { padding: 0.25rem 0.6rem; border-radius: 50px; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; }
@@ -229,63 +237,198 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-REGIONS = {
-    "New England": [
-        "Maine", "Vermont", "New Hampshire", "Massachusetts", "Rhode Island", "Connecticut",
-        "Boston", "Providence", "Hartford", "New Haven", "Stamford", "Bridgeport",
-        "Worcester", "Springfield", "Manchester", "Portland", "Burlington", "Greenwich"
-    ],
-    "Mid-Atlantic": [
-        "New York", "New Jersey", "Pennsylvania", "Delaware", "Maryland", "Virginia",
-        "West Virginia", "Washington DC", "District of Columbia",
-        "NYC", "New York City", "Philadelphia", "Pittsburgh", "Baltimore", "Richmond",
-        "Arlington", "Alexandria", "Norfolk", "Newark", "Jersey City", "Trenton",
-        "Wilmington", "Annapolis", "Bethesda", "Rockville", "McLean", "Reston",
-        "Washington", "Hoboken", "Princeton", "Allentown", "Harrisburg", "Fairfax"
-    ],
-    "South East": [
-        "North Carolina", "South Carolina", "Georgia", "Alabama", "Florida",
-        "Tennessee", "Kentucky",
-        "Charlotte", "Raleigh", "Durham", "Greensboro", "Atlanta", "Birmingham",
-        "Miami", "Tampa", "Orlando", "Jacksonville", "Nashville", "Memphis",
-        "Louisville", "Lexington", "Columbia", "Charleston", "Savannah",
-        "Fort Lauderdale", "West Palm Beach", "Huntsville", "Knoxville", "Chattanooga"
-    ],
-    "Rust Belt": [
-        "Ohio", "Michigan", "Indiana",
-        "Columbus", "Cleveland", "Cincinnati", "Akron", "Toledo", "Dayton",
-        "Detroit", "Grand Rapids", "Ann Arbor", "Lansing", "Indianapolis",
-        "Fort Wayne", "Southfield", "Troy"
-    ],
-    "Canada": [
-        "Ontario", "Quebec", "New Brunswick", "Newfoundland", "Nova Scotia",
-        "Prince Edward Island", "PEI",
-        "Toronto", "Montreal", "Ottawa", "Halifax", "Mississauga", "Brampton",
-        "Hamilton", "Moncton", "Fredericton", "Quebec City", "Charlottetown",
-        "St. John's", "Dartmouth", "Windsor", "London"
-    ],
+# ── JSONB helpers ────────────────────────────────────────────────────────────
+# Supabase returns JSONB columns as dicts/lists, but pandas turns NULLs into
+# NaN and older rows may carry JSON *strings*. Every reader goes through here.
+def _parse_json_field(val, default):
+    """NaN/None/JSON-string tolerant unwrap of a JSONB column value."""
+    if val is None or (isinstance(val, float) and val != val):
+        return default
+    if isinstance(val, str):
+        try:
+            return json.loads(val) if val.strip() else default
+        except Exception:
+            return default
+    return val
+
+
+# Roles that mark the company an event is ABOUT, in priority order.
+_PRIMARY_ROLES = ('acquirer', 'portfolio company', 'hiring company',
+                  'primary', 'target')
+
+
+def _account_company(row) -> Optional[dict]:
+    """The companies_data entry for the event's ACCOUNT: the fit-gate-chosen
+    account (fit.account_name) when present, else the first company in a
+    primary role, else the first company. None when nothing is enriched."""
+    cd = _parse_json_field(row.get('companies_data'), [])
+    if not isinstance(cd, list):
+        return None
+    cd = [c for c in cd if isinstance(c, dict)]
+    if not cd:
+        return None
+    fit = _parse_json_field(row.get('fit'), None)
+    acct = (str(fit.get('account_name') or '').strip().lower()
+            if isinstance(fit, dict) else '')
+    if acct:
+        for c in cd:
+            if str(c.get('name') or '').strip().lower() == acct:
+                return c
+    for role in _PRIMARY_ROLES:
+        for c in cd:
+            if str(c.get('role') or '').strip().lower() == role:
+                return c
+    return cd[0]
+
+
+# ── Verification filter (fit.verdict) ────────────────────────────────────────
+# A.J. 2026-09-04: reps see VERIFIED accounts by default (vertical AND
+# territory confirmed). The "Show unverified accounts" toggle adds the two
+# undecided states; rejected/decided rows never render.
+#   pass        → verified                       (default view)
+#   unverified  → researched, not fully confirmed (toggle)
+#   staged      → never researched / vertical unknown (toggle)
+#   fail        → fit gate rejected               (never)
+#   decided     → a rep already dispositioned it  (never)
+# A row with no `fit` at all was never researched, so it counts as 'staged'.
+VERIFIED_VERDICTS = frozenset({'pass'})
+UNVERIFIED_VERDICTS = frozenset({'unverified', 'staged'})
+
+
+def fit_verdict(row) -> str:
+    """Normalized fit.verdict for a row (Series or dict); missing → 'staged'."""
+    fit = _parse_json_field(row.get('fit'), None)
+    if not isinstance(fit, dict):
+        return 'staged'
+    v = str(fit.get('verdict') or '').strip().lower()
+    return v or 'staged'
+
+
+def split_by_verdict(df: pd.DataFrame, show_unverified: bool):
+    """→ (kept_df, n_unverified). Toggle OFF keeps verdict == 'pass' only;
+    ON also keeps 'unverified' + 'staged'. 'fail' / 'decided' are dropped
+    either way. n_unverified is the count of unverified+staged rows in `df`
+    — the number the toggle hides (OFF) or reveals (ON)."""
+    if df.empty:
+        return df, 0
+    verdicts = df.apply(fit_verdict, axis=1)
+    is_verified = verdicts.isin(VERIFIED_VERDICTS)
+    is_unverified = verdicts.isin(UNVERIFIED_VERDICTS)
+    keep = (is_verified | is_unverified) if show_unverified else is_verified
+    return df[keep], int(is_unverified.sum())
+
+
+# ── Territory filter (structured) ────────────────────────────────────────────
+# v1 substring-matched region/city keywords against article text, so
+# "Manchester" hit Manchester UK, "Columbia" hit British Columbia, and
+# "Windsor" hit half of England. v2 derives ONE HQ state/province code per
+# event — from the enriched ACCOUNT company's `hq`, falling back to the
+# scraper's `matched_regions` — and filters on that code.
+_HQ_COUNTRY_TOKENS = {
+    'usa', 'u.s.', 'u.s.a.', 'us', 'united states', 'united states of america',
+    'canada', 'north america',
 }
+# Bare 2-letter tails that are also English words ("Portland ME"): only
+# trusted when a comma separates them from the city (mirrors gates.py).
+_HQ_AMBIGUOUS_TAILS = {'IN', 'OR', 'ME', 'DE', 'OH', 'HI'}
+# Longest names first so "West Virginia" wins over "Virginia" in free text.
+_STATE_NAMES_LONGEST_FIRST = sorted(STATE_NAMES.items(), key=lambda kv: -len(kv[0]))
 
 
-def filter_by_region(df: pd.DataFrame, selected_regions: list) -> pd.DataFrame:
-    if not selected_regions:
+def _pretty_state_name(n: str) -> str:
+    return ' '.join(w if w in ('of', 'and') else w.capitalize() for w in n.split())
+
+
+_CODE_TO_NAME = {}
+for _n, _c in STATE_NAMES.items():
+    _CODE_TO_NAME.setdefault(_c, _pretty_state_name(_n))
+
+
+def hq_state_code(hq) -> Optional[str]:
+    """'Boston, MA' / 'Boston, Massachusetts' / 'Toronto, ON, Canada' /
+    'massachusetts' → 'MA' / 'MA' / 'ON' / 'MA'. None when no state or
+    province can be read (city-only, foreign, blank, NaN). Same parsing
+    strategy as gates.hq_territory_status(), but returns the CODE."""
+    if hq is None or (isinstance(hq, float) and hq != hq):
+        return None
+    h = str(hq).strip()
+    if not h:
+        return None
+    h = re.sub(r'\bd\.c\.?(?=\W|$)', 'dc', h, flags=re.IGNORECASE)
+    segs = [s.strip() for s in re.split(r'[,/|]', h) if s.strip()]
+    segs = [s for s in segs if s.lower().strip('. ') not in _HQ_COUNTRY_TOKENS]
+    # Right-to-left: the state usually follows the city.
+    for seg in reversed(segs):
+        s = seg.strip('. ')
+        up = s.upper()
+        if len(up) == 2 and up.isalpha() and up in ALL_STATE_CODES:
+            return up
+        lo = s.lower()
+        if lo in STATE_NAMES:
+            return STATE_NAMES[lo]
+        m = re.search(r'\b([A-Za-z]{2})$', s)   # "Boston MA" without a comma
+        if m and len(s.split()) >= 2:
+            code = m.group(1).upper()
+            if code in ALL_STATE_CODES and code not in _HQ_AMBIGUOUS_TAILS:
+                return code
+    lo_all = h.lower()
+    for name, code in _STATE_NAMES_LONGEST_FIRST:
+        if re.search(r'\b' + re.escape(name) + r'\b', lo_all):
+            return code
+    return None
+
+
+def event_state_code(row) -> Optional[str]:
+    """HQ state/province code for an event. Account company's `hq` first;
+    then the scraper's matched_regions (SEC/Adzuna store a code, news feeds
+    store lower-case state names and city names — cities yield None)."""
+    co = _account_company(row)
+    if co:
+        code = hq_state_code(co.get('hq'))
+        if code:
+            return code
+    raw = row.get('matched_regions')
+    regions = _parse_json_field(raw, None)
+    if regions is None and isinstance(raw, str):      # legacy comma-joined
+        regions = [r.strip() for r in raw.split(',')]
+    if isinstance(regions, list):
+        for r in regions:
+            code = hq_state_code(r)
+            if code:
+                return code
+    return None
+
+
+def annotate_hq_state(df: pd.DataFrame) -> pd.DataFrame:
+    """Add a `_hq_state` column (code or None) — computed once per load and
+    shared by the territory multiselect options and the filter."""
+    df = df.copy()
+    if df.empty:
+        df['_hq_state'] = pd.Series(dtype=object)
+    else:
+        df['_hq_state'] = df.apply(event_state_code, axis=1)
+    return df
+
+
+def territory_label(code: str) -> str:
+    name = _CODE_TO_NAME.get(code)
+    return f"{code} · {name}" if name else str(code)
+
+
+def territory_options(df: pd.DataFrame) -> list:
+    """Codes actually present in df['_hq_state'], in-territory first, then
+    alphabetical — so the multiselect never lists states with zero rows."""
+    if df.empty or '_hq_state' not in df.columns:
+        return []
+    codes = {c for c in df['_hq_state'].dropna().unique() if c}
+    return sorted(codes, key=lambda c: (c not in TERRITORY_STATES, c))
+
+
+def filter_by_territory(df: pd.DataFrame, selected_codes: list) -> pd.DataFrame:
+    """Keep events whose HQ code is in `selected_codes` (empty = no filter)."""
+    if not selected_codes or df.empty or '_hq_state' not in df.columns:
         return df
-
-    keywords = []
-    for r in selected_regions:
-        keywords.extend([k.lower() for k in REGIONS.get(r, [])])
-
-    def matches(row):
-        text = " ".join([
-            str(row.get("title", "") or ""),
-            str(row.get("description", "") or ""),
-            str(row.get("company_name", "") or ""),
-            str(row.get("matched_regions", "") or ""),
-        ]).lower()
-        return any(k in text for k in keywords)
-
-    mask = df.apply(matches, axis=1)
-    return df[mask]
+    return df[df['_hq_state'].isin(set(selected_codes))]
 
 
 # 4-segment NetSuite sales taxonomy, ordered low → high.
@@ -464,6 +607,18 @@ EVENT_TYPES = {
         "badge_class": "badge-cfo",
         "bg_color": "#d1fae5"
     },
+    # Adzuna job postings: a company HIRING a CFO/Controller (v2, replaces
+    # cfo_hire/executive_hire for Adzuna events). A distinct trigger — the
+    # seat is OPEN, nobody has been named — graded +3 (A.J. 2026-09-06).
+    "finance_seat_open": {
+        "label": "Open Seat",
+        "full_label": "Open Finance Seats",
+        "color": "#14b8a6",
+        "gradient": "linear-gradient(135deg, #14b8a6 0%, #0d9488 100%)",
+        "icon": "🪑",
+        "badge_class": "badge-seat",
+        "bg_color": "#ccfbf1"
+    },
     "funding": {
         "label": "Funding",
         "full_label": "PE/VC Funding",
@@ -501,6 +656,15 @@ EVENT_TYPES = {
         "bg_color": "#f3f4f6"
     }
 }
+
+
+def event_config_for(event_type) -> dict:
+    """EVENT_TYPES entry for a row's event_type. Unknown / None / NaN →
+    the 'other' config, so a new or legacy type can never crash a card."""
+    if event_type is None or (isinstance(event_type, float) and event_type != event_type):
+        return EVENT_TYPES['other']
+    return EVENT_TYPES.get(str(event_type), EVENT_TYPES['other'])
+
 
 # Lead status options
 LEAD_STATUSES = [
@@ -835,13 +999,20 @@ def render_event_card(row, event_config, key_prefix: str = ''):
     # revenue/vertical. Rep can usually resolve in a 10-second LinkedIn
     # check. (Policy per A.J. 2026-07-16: flag unknowns, don't hide them.)
     fit_html = ""
-    fit_raw = row.get('fit')
-    if isinstance(fit_raw, str) and fit_raw.strip():
-        try:
-            fit_raw = json.loads(fit_raw)
-        except Exception:
-            fit_raw = None
-    if isinstance(fit_raw, dict) and fit_raw.get('verdict') == 'unverified':
+    fit_raw = _parse_json_field(row.get('fit'), None)
+    if fit_verdict(row) == 'staged':
+        # v2: never researched / vertical unknown. Only visible when the
+        # "Show unverified accounts" toggle is ON.
+        fit_html = (
+            f'<span title="Not yet researched — vertical and territory are '
+            f'unconfirmed. Hidden from the default (verified-only) view." '
+            f'style="display:inline-flex;align-items:center;'
+            f'padding:0.25rem 0.55rem;border-radius:6px;'
+            f'background:rgba(156,163,175,0.18);color:#d1d5db;'
+            f'font-size:0.7rem;font-weight:700;margin-left:0.4rem;'
+            f'cursor:help;">🕒 NOT YET RESEARCHED</span>'
+        )
+    elif isinstance(fit_raw, dict) and fit_raw.get('verdict') == 'unverified':
         _unk_dims = [d for d in ('territory', 'revenue', 'vertical')
                      if fit_raw.get(d) == 'unknown']
         if _unk_dims == ['revenue']:
@@ -1037,7 +1208,8 @@ def render_event_card(row, event_config, key_prefix: str = ''):
                         if co_fit:
                             _v_map = {'pass':   ('✓ FIT', '#10b981'),
                                       'fail':   ('✗ NOT A FIT', '#f87171'),
-                                      'unverified': ('⚠ VERIFY', '#fbbf24')}
+                                      'unverified': ('⚠ VERIFY', '#fbbf24'),
+                                      'staged': ('🕒 NOT RESEARCHED', '#d1d5db')}
                             _txt, _clr = _v_map.get(co_fit.get('verdict'), (None, None))
                             if co_fit.get('verdict') == 'unverified':
                                 _co_unk = [d for d in ('territory', 'revenue', 'vertical')
@@ -1268,10 +1440,18 @@ def render_event_card(row, event_config, key_prefix: str = ''):
                         st.rerun()
 
 
-def render_event_section(df, event_type, event_config, lead_filter):
-    """Render a section for a specific event type."""
+def render_event_section(df, event_type, event_config, lead_filter,
+                         include_unknown_types: bool = False):
+    """Render a section for a specific event type. With
+    include_unknown_types=True (the "Other" tab) the section also absorbs
+    any event_type that has no EVENT_TYPES entry, so a new or legacy type
+    always lands somewhere instead of vanishing from every tab."""
     # Filter by event type
-    type_df = df[df['event_type'] == event_type]
+    if include_unknown_types:
+        known_others = [t for t in EVENT_TYPES if t != event_type]
+        type_df = df[~df['event_type'].isin(known_others)]
+    else:
+        type_df = df[df['event_type'] == event_type]
 
     # Apply lead status filter
     if lead_filter:
@@ -1490,6 +1670,15 @@ def render_weekly_scorecard(df, acct_dispos):
                    if (_ts(d.get('updated_at')) or wk2_ago) >= wk_ago]
         c4.metric("Accounts dispositioned (7d)", len(decided))
 
+        # The dashboard view itself — the SAME filtered frame the metric
+        # cards, Work Queue and tabs render from (verification toggle incl.).
+        if df is not None and not df.empty:
+            _vd = df.apply(fit_verdict, axis=1)
+            st.caption(
+                f"Current view (after all filters): {len(df):,} event(s) — "
+                f"{int(_vd.isin(VERIFIED_VERDICTS).sum()):,} verified, "
+                f"{int(_vd.isin(UNVERIFIED_VERDICTS).sum()):,} unverified.")
+
         colA, colB = st.columns(2)
         with colA:
             st.caption("New events by source (7d)")
@@ -1573,14 +1762,20 @@ def _on_account_dispo_change(widget_key: str, company_name: str):
     set_account_disposition(company_name, st.session_state.get(widget_key))
 
 
+# Event types that ARE a finance-leader trigger on their own.
+FINANCE_LEADER_EVENT_TYPES = frozenset({'cfo_hire', 'finance_seat_open'})
+
+
 def _finance_leader_mask(df: pd.DataFrame) -> pd.Series:
-    """Boolean mask: rows that represent a new finance leader — either a
-    CFO-hire event OR any event tagged #NewController (Controller hires
-    stay event_type=executive_hire by design). Shared by the metric card
-    count and the drill-down focus so the number and the list always match."""
+    """Boolean mask: rows that represent a finance-leader trigger — a
+    CFO-hire event, an OPEN finance seat (Adzuna: company hiring a
+    CFO/Controller), OR any event tagged #NewController (Controller hires
+    stay event_type=executive_hire by design). Shared by the "Finance
+    Leader Triggers" metric card and its drill-down focus so the number
+    and the list always match."""
     if df.empty:
         return pd.Series(dtype=bool)
-    is_cfo = df['event_type'] == 'cfo_hire'
+    is_cfo = df['event_type'].isin(FINANCE_LEADER_EVENT_TYPES)
 
     def _has_controller_tag(h):
         if isinstance(h, str):
@@ -1606,6 +1801,41 @@ def _grade_rank(g):
     return _GRADE_RANK.get(str(g).strip().upper(), 2)
 
 
+def _score_of(r) -> int:
+    """numeric_score as int; missing/NaN/garbage → -1 (ranks last)."""
+    s = r.get('numeric_score')
+    if s is None or (isinstance(s, float) and s != s):
+        return -1
+    try:
+        return int(s)
+    except Exception:
+        return -1
+
+
+def _epoch(v) -> float:
+    """ISO date/datetime string or pandas Timestamp → epoch seconds.
+    Missing / unparseable → 0.0, so an unknown date ranks OLDEST."""
+    if v is None or (isinstance(v, float) and v != v):
+        return 0.0
+    try:
+        s = v if not isinstance(v, str) else v.strip()
+        if isinstance(s, str) and (not s or s.lower() in ('nan', 'nat', 'none')):
+            return 0.0
+        ts = pd.to_datetime(s, utc=True, errors='coerce')
+        return 0.0 if pd.isna(ts) else float(ts.timestamp())
+    except Exception:
+        return 0.0
+
+
+def work_queue_sort_key(r) -> tuple:
+    """Work Queue ranking key: grade (A → B → ungraded → C → D), then
+    numeric score DESC, then freshness DESC — the NEWEST published_date
+    wins a tie (discovered_date when the article carries no date).
+    v1 sorted the tie-break ascending, so the oldest story led."""
+    ts = _epoch(r.get('published_date')) or _epoch(r.get('discovered_date'))
+    return (_grade_rank(r.get('grade')), -_score_of(r), -ts)
+
+
 def render_work_queue(new_df: pd.DataFrame, top_n: int = 10):
     """The Monday-morning view: ONE ranked list across all event types,
     rolled up per company. Ranking: grade → numeric score → freshness."""
@@ -1623,26 +1853,9 @@ def render_work_queue(new_df: pd.DataFrame, top_n: int = 10):
 
     rows = new_df.to_dict('records')
 
-    # Rank events: grade, then score desc, then freshness desc
-    def _score(r):
-        s = r.get('numeric_score')
-        if s is None or (isinstance(s, float) and s != s):
-            return -1
-        try:
-            return int(s)
-        except Exception:
-            return -1
-
-    rows.sort(key=lambda r: (
-        _grade_rank(r.get('grade')),
-        -_score(r),
-        str(r.get('discovered_date') or ''),
-    ))
-    # For freshness DESC within same grade+score, re-sort stably:
-    rows.sort(key=lambda r: (
-        _grade_rank(r.get('grade')),
-        -_score(r),
-    ))
+    # Rank events: grade, then score DESC, then published date DESC
+    # (newest first). One sort, one key — see work_queue_sort_key.
+    rows.sort(key=work_queue_sort_key)
 
     # Roll up per company — the best-ranked event represents the account
     by_company = {}
@@ -1663,7 +1876,7 @@ def render_work_queue(new_df: pd.DataFrame, top_n: int = 10):
             break
         entry = by_company[key]
         r = entry['top']
-        event_config = EVENT_TYPES.get(r.get('event_type'), EVENT_TYPES['other'])
+        event_config = event_config_for(r.get('event_type'))
         render_event_card(r, event_config, key_prefix='wq_')
         if entry['others']:
             st.caption(f"    ↳ +{entry['others']} more event(s) for this "
@@ -1766,77 +1979,14 @@ def main():
     filter_col, search_col = st.columns([1, 5])
 
     with filter_col:
-        with st.popover("🎛️  Filters", use_container_width=True):
+        # The popover is a container we re-enter after the load: the time
+        # range must render BEFORE load_events (it drives the query), while
+        # the territory options and the "N unverified hidden" caption need
+        # the loaded frame. Streamlit allows writing into a container later
+        # in the script; the widgets still appear in call order.
+        filters_pop = st.popover("🎛️  Filters", use_container_width=True)
+        with filters_pop:
             days = st.slider("Time Range (days)", 1, 90, 30, key="flt_days")
-
-            st.markdown("**📍 Region**")
-            selected_regions = st.multiselect(
-                "Region",
-                options=list(REGIONS.keys()),
-                default=[],
-                placeholder="All regions",
-                label_visibility="collapsed",
-                key="flt_regions",
-            )
-
-            # Revenue segment filter — 4 NetSuite sales tiers:
-            #   LMM  (<$10M)   ·  MM   ($10-$20M)
-            #   Corp ($20-100M)  ·  Enterprise (>$100M)
-            st.markdown("**💵 Revenue Segment**")
-            preset = st.selectbox(
-                "Preset",
-                options=list(REVENUE_PRESETS.keys()),
-                index=0,  # NetSuite Up-Market ($0-$100M)
-                help="Quick presets. Use the multiselect below to fine-tune.",
-                label_visibility="collapsed",
-                key="flt_preset",
-            )
-            default_bands = REVENUE_PRESETS[preset]
-
-            selected_bands = st.multiselect(
-                "Segments to include",
-                options=REVENUE_BANDS,
-                default=default_bands,
-                placeholder="Select segments…",
-                help=(
-                    "LMM = Lower Mid-Market (<$10M)  ·  "
-                    "MM = Mid-Market ($10M-$20M)  ·  "
-                    "Corp = Corporate ($20M-$100M)  ·  "
-                    "Enterprise (>$100M)"
-                ),
-                label_visibility="collapsed",
-                key=f"flt_bands_{preset}",  # Reset multiselect when preset changes
-            )
-
-            include_unknown = st.checkbox(
-                "Also include companies with unknown revenue",
-                value=True,
-                help="Most newly-discovered leads don't have revenue data yet. Keep this ON to surface them; turn OFF to see only confirmed sized companies.",
-                key="flt_include_unknown",
-            )
-
-            # ── TAL Grade filter ──────────────────────────────────────────
-            st.markdown("**🎯 TAL Grade**")
-            selected_grades = st.multiselect(
-                "Grades to include",
-                options=['A', 'B', 'C', 'D'],
-                default=['A', 'B'],
-                placeholder="Select grades…",
-                help=(
-                    "Point-based TAL rubric: A = score 8+ with a high-intent "
-                    "trigger (hottest)  ·  B = 5-7  ·  C = 2-4  ·  D = 0-1. "
-                    "High-intent: NewCFO +5, NewController/Funding/PEBacked/"
-                    "Acquisitions +3. Complexity signals +2 each."
-                ),
-                label_visibility="collapsed",
-                key="flt_grades",
-            )
-            include_ungraded = st.checkbox(
-                "Also show ungraded events",
-                value=True,
-                help="Events scraped before grading was enabled, or where grading is still pending. Keep ON to avoid hiding fresh events.",
-                key="flt_include_ungraded",
-            )
 
     with search_col:
         st.markdown('<div class="search-container">', unsafe_allow_html=True)
@@ -1888,7 +2038,110 @@ def main():
             )
         return
 
-    df = filter_by_region(df, selected_regions)
+    # One HQ state/province code per event (account hq → matched_regions)
+    df = annotate_hq_state(df)
+
+    with filters_pop:
+        # ── Territory (structured: HQ state/province code) ────────────
+        st.markdown("**📍 Territory (HQ state / province)**")
+        _terr_codes = territory_options(df)
+        # Prune a stale selection (a code that left the time window)
+        # before the widget renders, so Streamlit never sees a value
+        # outside its options.
+        _prev_terr = st.session_state.get('flt_territory')
+        if isinstance(_prev_terr, list):
+            st.session_state['flt_territory'] = [
+                c for c in _prev_terr if c in _terr_codes]
+        selected_states = st.multiselect(
+            "Territory",
+            options=_terr_codes,
+            format_func=territory_label,
+            placeholder="All states / provinces",
+            help=(
+                "HQ state/province of the account (from enrichment; the "
+                "scraper's dateline as fallback). Lists only codes present "
+                "in the current time window."
+            ),
+            label_visibility="collapsed",
+            key="flt_territory",
+        )
+
+        # Revenue segment filter — 4 NetSuite sales tiers:
+        #   LMM  (<$10M)   ·  MM   ($10-$20M)
+        #   Corp ($20-100M)  ·  Enterprise (>$100M)
+        st.markdown("**💵 Revenue Segment**")
+        preset = st.selectbox(
+            "Preset",
+            options=list(REVENUE_PRESETS.keys()),
+            index=0,  # NetSuite Up-Market ($0-$100M)
+            help="Quick presets. Use the multiselect below to fine-tune.",
+            label_visibility="collapsed",
+            key="flt_preset",
+        )
+        default_bands = REVENUE_PRESETS[preset]
+
+        selected_bands = st.multiselect(
+            "Segments to include",
+            options=REVENUE_BANDS,
+            default=default_bands,
+            placeholder="Select segments…",
+            help=(
+                "LMM = Lower Mid-Market (<$10M)  ·  "
+                "MM = Mid-Market ($10M-$20M)  ·  "
+                "Corp = Corporate ($20M-$100M)  ·  "
+                "Enterprise (>$100M)"
+            ),
+            label_visibility="collapsed",
+            key=f"flt_bands_{preset}",  # Reset multiselect when preset changes
+        )
+
+        include_unknown = st.checkbox(
+            "Also include companies with unknown revenue",
+            value=True,
+            help="Most newly-discovered leads don't have revenue data yet. Keep this ON to surface them; turn OFF to see only confirmed sized companies.",
+            key="flt_include_unknown",
+        )
+
+        # ── TAL Grade filter ──────────────────────────────────────────
+        st.markdown("**🎯 TAL Grade**")
+        selected_grades = st.multiselect(
+            "Grades to include",
+            options=['A', 'B', 'C', 'D'],
+            default=['A', 'B'],
+            placeholder="Select grades…",
+            help=(
+                "Point-based TAL rubric: A = score 8+ with a high-intent "
+                "trigger (hottest)  ·  B = 5-7  ·  C = 2-4  ·  D = 0-1. "
+                "High-intent: NewCFO +5, NewController/Funding/PEBacked/"
+                "Acquisitions +3. Complexity signals +2 each."
+            ),
+            label_visibility="collapsed",
+            key="flt_grades",
+        )
+        include_ungraded = st.checkbox(
+            "Also show ungraded events",
+            value=True,
+            help="Events scraped before grading was enabled, or where grading is still pending. Keep ON to avoid hiding fresh events.",
+            key="flt_include_ungraded",
+        )
+
+        # ── Verification (A.J. 2026-09-04: verified-only by default) ──
+        st.markdown("**✅ Verification**")
+        show_unverified = st.toggle(
+            "Show unverified accounts",
+            value=False,
+            help=(
+                "OFF (default): only accounts whose vertical AND territory "
+                "are confirmed. ON: also show accounts still awaiting "
+                "verification or not yet researched. Rejected and "
+                "already-dispositioned accounts never show."
+            ),
+            key="flt_show_unverified",
+        )
+        # Filled in below once the frame is filtered (count is view-relative)
+        unverified_slot = st.empty()
+
+    df = filter_by_territory(df, selected_states)
 
     df = filter_by_revenue_bands(
         df,
@@ -1902,16 +2155,26 @@ def main():
         include_ungraded=include_ungraded,
     )
 
+    # Verification LAST so the caption states exactly what the toggle hides
+    # or reveals under the other filters. Everything below — metric cards,
+    # Work Queue, category tabs, Classified Leads, Scorecard's view line,
+    # the export — renders from this one frame.
+    df, n_unverified = split_by_verdict(df, show_unverified)
+    unverified_slot.caption(
+        f"{n_unverified:,} unverified shown" if show_unverified
+        else f"{n_unverified:,} unverified hidden")
+
     # Stats
     stats = get_stats(df)
     ma_count = stats["by_type"].get("merger_acquisition", 0)
     cfo_count = stats["by_type"].get("cfo_hire", 0)
     funding_count = stats["by_type"].get("funding", 0)
 
-    # New Finance Leaders = CFO-hire events + any event carrying the
-    # #NewController hashtag (Controller hires stay event_type=
+    # Finance Leader Triggers = CFO-hire events + open finance seats
+    # (Adzuna postings, event_type=finance_seat_open) + any event carrying
+    # the #NewController hashtag (Controller hires stay event_type=
     # executive_hire by design — see enrichment_scout._finance_role).
-    # This is THE highest-value trigger, so it gets its own card.
+    # This is THE highest-value trigger family, so it gets its own card.
     fl_mask = _finance_leader_mask(df)
     finance_leader_count = int(fl_mask.sum())
 
@@ -1926,7 +2189,7 @@ def main():
     with col2:
         render_metric_card("🆕", stats["new"], "New Leads", "#10b981")
     with col3:
-        render_metric_card("💼", finance_leader_count, "New Finance Leaders", "#8b5cf6")
+        render_metric_card("💼", finance_leader_count, "Finance Leader Triggers", "#8b5cf6")
         if st.button("Work these →", key="focus_fl", use_container_width=True,
                      type="primary" if focus == 'finance' else "secondary"):
             st.session_state['category_focus'] = None if focus == 'finance' else 'finance'
@@ -2001,7 +2264,7 @@ def main():
 
     # ── Category focus (from the metric-card buttons) ──────────────────────
     if focus:
-        labels = {'finance': '💼 New Finance Leaders',
+        labels = {'finance': '💼 Finance Leader Triggers',
                   'ma': '🔵 M&A Events', 'funding': '💰 Funding'}
         if focus == 'finance':
             new_df = new_df[_finance_leader_mask(new_df)]
@@ -2041,14 +2304,18 @@ def main():
     else:
         new_ma = len(new_df[new_df['event_type'] == 'merger_acquisition'])
         new_cfo = len(new_df[new_df['event_type'] == 'cfo_hire'])
+        new_seat = len(new_df[new_df['event_type'] == 'finance_seat_open'])
         new_funding = len(new_df[new_df['event_type'] == 'funding'])
         new_stable = len(new_df[new_df['event_type'] == 'stable_target'])
         new_exec = len(new_df[new_df['event_type'] == 'executive_hire'])
-        new_other = len(new_df[new_df['event_type'] == 'other'])
+        # "Other" absorbs every type without a tab of its own (incl. unknown)
+        _tabbed = [t for t in EVENT_TYPES if t != 'other']
+        new_other = int((~new_df['event_type'].isin(_tabbed)).sum())
 
-        tab_ma, tab_cfo, tab_funding, tab_stable, tab_exec, tab_other = st.tabs([
+        tab_ma, tab_cfo, tab_seat, tab_funding, tab_stable, tab_exec, tab_other = st.tabs([
             f"🔵 M&A ({new_ma})",
             f"💼 CFO ({new_cfo})",
+            f"🪑 Open Seat ({new_seat})",
             f"💰 Funding ({new_funding})",
             f"🎯 Stable ({new_stable})",
             f"👔 Exec ({new_exec})",
@@ -2058,6 +2325,8 @@ def main():
             render_event_section(new_df, "merger_acquisition", EVENT_TYPES["merger_acquisition"], None)
         with tab_cfo:
             render_event_section(new_df, "cfo_hire", EVENT_TYPES["cfo_hire"], None)
+        with tab_seat:
+            render_event_section(new_df, "finance_seat_open", EVENT_TYPES["finance_seat_open"], None)
         with tab_funding:
             render_event_section(new_df, "funding", EVENT_TYPES["funding"], None)
         with tab_stable:
@@ -2065,7 +2334,8 @@ def main():
         with tab_exec:
             render_event_section(new_df, "executive_hire", EVENT_TYPES["executive_hire"], None)
         with tab_other:
-            render_event_section(new_df, "other", EVENT_TYPES["other"], None)
+            render_event_section(new_df, "other", EVENT_TYPES["other"], None,
+                                 include_unknown_types=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -2101,8 +2371,7 @@ def main():
                 with tab:
                     status_df = classified_df[classified_df['lead_status'] == status_key]
                     for idx, row in status_df.iterrows():
-                        event_type = row.get('event_type', 'other')
-                        event_config = EVENT_TYPES.get(event_type, EVENT_TYPES['other'])
+                        event_config = event_config_for(row.get('event_type'))
                         render_event_card(row, event_config)
 
     st.markdown("<br>", unsafe_allow_html=True)

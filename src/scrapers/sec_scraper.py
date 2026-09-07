@@ -8,6 +8,7 @@ SEC requires a descriptive User-Agent. Be polite: max 10 req/sec.
 Docs: https://www.sec.gov/os/accessing-edgar-data
 """
 
+import html
 import re
 import time
 from datetime import datetime, timedelta, timezone, date
@@ -15,6 +16,9 @@ from typing import List, Dict, Any, Optional, Set
 
 from .base import BaseScraper
 from ..models import TriggerEvent, EventType, EventSource
+from ..pipeline.gates import (
+    is_non_operating_entity, formd_to_verdict, sic_to_verdict,
+)
 
 
 # SEC EDGAR uses standard 2-letter codes for US states and Canadian provinces
@@ -61,6 +65,18 @@ ITEM_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         'event_type': EventType.MERGER_ACQUISITION,
     },
 }
+
+# Item 1.01 content gate (v2, 2026-09-07). "Entry into a Material Definitive
+# Agreement" covers credit facilities, leases, employment contracts and
+# supply deals — 140 of 349 visible "M&A" triggers had zero acquisition
+# language. A 1.01 filing is kept ONLY when its full text contains one of
+# these definitive-agreement phrases (exact-phrase EFTS search).
+MA_AGREEMENT_PHRASES = (
+    'Agreement and Plan of Merger',
+    'Stock Purchase Agreement',
+    'Asset Purchase Agreement',
+    'Membership Interest Purchase Agreement',
+)
 
 
 class SECScraper(BaseScraper):
@@ -115,6 +131,16 @@ class SECScraper(BaseScraper):
         self._finance_adsh_set: set = set()
         self._finance_prefetch_ok: bool = False
         self._board_skipped_count: int = 0
+        # Item 1.01 content gate: accession numbers whose full text
+        # contains a definitive M&A agreement phrase (MA_AGREEMENT_PHRASES).
+        # Fails OPEN (keep all) when the prefetch comes back empty.
+        self._ma_adsh_set: set = set()
+        self._ma_prefetch_ok: bool = False
+        self._ma_skipped_count: int = 0
+        # gates.py policy counters (per kind / per verdict), reset per run
+        self._entity_skipped: Dict[str, int] = {}
+        self._sic_verdict_skipped: Dict[str, int] = {}
+        self._formd_verdict_skipped: Dict[str, int] = {}
 
         # Track source status for the dashboard
         self.source_statuses: List[Dict[str, Any]] = []
@@ -139,12 +165,18 @@ class SECScraper(BaseScraper):
         # Fail open: if the prefetch returned nothing (EFTS outage / rate
         # limit), keep the old ingest-everything behavior rather than
         # silently dropping ALL 5.02 filings. A real 7-day window always
-        # has finance-related 5.02 filings nationwide.
+        # has finance-related 5.02 filings in territory.
         self._finance_prefetch_ok = bool(self._finance_adsh_set)
 
+        # Item 1.01 content gate: union of filings whose full text carries a
+        # definitive M&A agreement phrase. Same fail-open rule as above.
+        self._ma_adsh_set = set()
+        for phrase in MA_AGREEMENT_PHRASES:
+            self._ma_adsh_set |= self._fetch_phrase_adsh_set(phrase, item_code='1.01')
+        self._ma_prefetch_ok = bool(self._ma_adsh_set)
+
         # Reset per-run counters so the counts reflect this scrape only
-        self._sic_blocked_count = 0
-        self._board_skipped_count = 0
+        self._reset_gate_counters()
 
         all_events: List[TriggerEvent] = []
         for item_code, item_def in ITEM_DEFINITIONS.items():
@@ -170,15 +202,85 @@ class SECScraper(BaseScraper):
                 })
                 print(f'  - {source_label}: ERROR {e}')
 
-        if self._sic_blocked_count > 0:
-            print(f'  - SEC SIC prefilter: blocked {self._sic_blocked_count} '
-                  f'off-target filings before enrichment')
         if self._board_skipped_count > 0:
             print(f'  - SEC 5.02 finance filter: skipped '
                   f'{self._board_skipped_count} board/CEO-only officer '
                   f'filings (no finance-leader mention)')
+        if self._ma_skipped_count > 0:
+            print(f'  - SEC 1.01 M&A content gate: skipped '
+                  f'{self._ma_skipped_count} material-agreement filings '
+                  f'with no merger/purchase-agreement language')
+        self._print_gate_summary('SEC 8-K')
 
         return all_events
+
+    # ── gates.py policy helpers (shared by 8-K and Form D) ────────────────
+
+    def _reset_gate_counters(self) -> None:
+        self._sic_blocked_count = 0
+        self._board_skipped_count = 0
+        self._ma_skipped_count = 0
+        self._entity_skipped = {}
+        self._sic_verdict_skipped = {}
+        self._formd_verdict_skipped = {}
+
+    def _skip_filer_by_name(self, company_name: str) -> bool:
+        """Entity-shape gate on the filer NAME (free, before any HTTP):
+        fund vehicles, SPACs, governments, K-12, lodging, political, greek
+        (A.J. 2026-09-04/06 exclusions in gates.is_non_operating_entity).
+        True → skip. Counted per kind for the run summary."""
+        hit, kind = is_non_operating_entity(company_name)
+        if hit:
+            self._entity_skipped[kind] = self._entity_skipped.get(kind, 0) + 1
+            return True
+        return False
+
+    def _skip_filer_by_sic(self, sic: str, sic_desc: str, company_name: str) -> bool:
+        """SIC gate: gates.sic_to_verdict ('out' / 'vehicle' → skip, counted
+        per verdict), then the legacy BLOCKED_SIC_CODES list as a belt.
+        'unknown' SICs (financial services, nonprofits, ambiguous) pass —
+        vertical fit is confirmed post-research, never here."""
+        if not sic:
+            return False
+        verdict, reason = sic_to_verdict(sic)
+        if verdict in ('out', 'vehicle'):
+            self._sic_verdict_skipped[verdict] = self._sic_verdict_skipped.get(verdict, 0) + 1
+            print(f'    🚫 {reason} — {verdict} at scrape time: {company_name[:40]}')
+            return True
+        if sic in self.BLOCKED_SIC_CODES:
+            self._sic_blocked_count += 1
+            desc = sic_desc or self.BLOCKED_SIC_CODES[sic]
+            print(f'    🚫 SIC {sic} ({desc}) — blocked at scrape time: '
+                  f'{company_name[:40]}')
+            return True
+        return False
+
+    @staticmethod
+    def _sic_phrase(filer_info: Dict[str, str]) -> str:
+        """'SIC: 6022 (STATE COMMERCIAL BANKS).' when the SIC is known, else
+        ''. Downstream parses the literal 'SIC: NNNN' — keep the shape."""
+        sic = (filer_info.get('sic') or '').strip()
+        if not sic:
+            return ''
+        desc = (filer_info.get('sic_desc') or '').strip()
+        return f'SIC: {sic} ({desc}).' if desc else f'SIC: {sic}.'
+
+    def _print_gate_summary(self, label: str) -> None:
+        if self._entity_skipped:
+            total = sum(self._entity_skipped.values())
+            detail = ', '.join(f'{k} {v}' for k, v in sorted(self._entity_skipped.items()))
+            print(f'  - {label} entity-shape gate: skipped {total} filers by name ({detail})')
+        if self._sic_verdict_skipped:
+            total = sum(self._sic_verdict_skipped.values())
+            detail = ', '.join(f'{k} {v}' for k, v in sorted(self._sic_verdict_skipped.items()))
+            print(f'  - {label} SIC verdict gate: skipped {total} filers ({detail})')
+        if self._sic_blocked_count > 0:
+            print(f'  - {label} legacy SIC prefilter: blocked {self._sic_blocked_count} '
+                  f'off-target filings before enrichment')
+        if self._formd_verdict_skipped:
+            total = sum(self._formd_verdict_skipped.values())
+            detail = ', '.join(f'{k} {v}' for k, v in sorted(self._formd_verdict_skipped.items()))
+            print(f'  - {label} Form D verdict gate: skipped {total} raises ({detail})')
 
     # ── Per-item scrape ───────────────────────────────────────────────────
 
@@ -200,13 +302,15 @@ class SECScraper(BaseScraper):
 
         return events
 
-    def _fetch_phrase_adsh_set(self, phrase: str) -> set:
-        """Pre-fetch the accession numbers of Item 5.02 filings whose full
-        text contains `phrase` (exact-phrase EFTS full-text search).
+    def _fetch_phrase_adsh_set(self, phrase: str, item_code: str = '5.02') -> set:
+        """Pre-fetch the accession numbers of 8-K filings tagged with
+        `item_code` whose full text contains `phrase` (exact-phrase EFTS
+        full-text search), restricted to territory via locationCodes so the
+        set is the same population `_search_efts` returns.
 
         Paginates through up to MAX_PAGES of results — EFTS returns ~100 hits
-        per page, and busy weeks easily exceed that for CFO-related Item 5.02
-        filings nationwide.
+        per page, and busy weeks can exceed that for "Controller" mentions
+        in Item 5.02 filings even within territory.
         """
         startdt = (date.today() - timedelta(days=self.lookback_days)).isoformat()
         enddt   = date.today().isoformat()
@@ -217,11 +321,12 @@ class SECScraper(BaseScraper):
             for page in range(MAX_PAGES):
                 params = {
                     # EFTS treats quoted phrases as required; space = AND.
-                    'q':         f'"{phrase}" "Item 5.02"',
+                    'q':         f'"{phrase}" "Item {item_code}"',
                     'forms':     '8-K',
                     'dateRange': 'custom',
                     'startdt':   startdt,
                     'enddt':     enddt,
+                    'locationCodes': ','.join(sorted(self.territory_codes)),
                     'from':      page * 100,  # EFTS pagination: 100 per page
                 }
                 resp = self.session.get(
@@ -238,11 +343,11 @@ class SECScraper(BaseScraper):
                 self.delay_request()
                 if len(hits) < 100:
                     break  # last page (partial) — done
-            print(f'  - SEC 5.02 prefetch: {len(adsh_set)} filings mention '
+            print(f'  - SEC {item_code} prefetch: {len(adsh_set)} filings mention '
                   f'"{phrase}"')
             return adsh_set
         except Exception as e:
-            print(f'  - SEC 5.02 prefetch for "{phrase}" failed: {e}')
+            print(f'  - SEC {item_code} prefetch for "{phrase}" failed: {e}')
             return adsh_set  # return whatever we got before the error
 
     # ── SIC code prefilter ───────────────────────────────────────────────
@@ -333,22 +438,39 @@ class SECScraper(BaseScraper):
     }
 
     def _search_efts(self, item_code: str) -> List[Dict[str, Any]]:
-        """Query SEC EFTS for 8-K filings tagged with a specific item."""
+        """Query SEC EFTS for 8-K filings tagged with a specific item.
+
+        Territory-filtered server-side via locationCodes (as FormDScraper
+        does) and paginated with `from` in pages of 100 up to
+        `max_per_item` hits — one nationwide page used to yield ~30
+        in-territory filings; every hit is now in territory.
+        """
         startdt = (date.today() - timedelta(days=self.lookback_days)).isoformat()
         enddt   = date.today().isoformat()
+        loc = ','.join(sorted(self.territory_codes))
+        pages = max(1, (self.max_per_item + 99) // 100)
 
-        params = {
-            'q':         f'"Item {item_code}"',
-            'forms':     '8-K',
-            'dateRange': 'custom',
-            'startdt':   startdt,
-            'enddt':     enddt,
-        }
-        resp = self.session.get(self.EFTS_URL, params=params, timeout=self.timeout)
-        resp.raise_for_status()
-        data = resp.json()
-        self.delay_request()
-        return data.get('hits', {}).get('hits', [])
+        all_hits: List[Dict[str, Any]] = []
+        for page in range(pages):
+            params = {
+                'q':         f'"Item {item_code}"',
+                'forms':     '8-K',
+                'dateRange': 'custom',
+                'startdt':   startdt,
+                'enddt':     enddt,
+                'locationCodes': loc,
+                'from':      page * 100,
+            }
+            resp = self.session.get(self.EFTS_URL, params=params, timeout=self.timeout)
+            resp.raise_for_status()
+            hits = resp.json().get('hits', {}).get('hits', []) or []
+            self.delay_request()
+            if not hits:
+                break
+            all_hits.extend(hits)
+            if len(hits) < 100 or len(all_hits) >= self.max_per_item:
+                break
+        return all_hits
 
     # ── Convert one EFTS hit into a TriggerEvent ──────────────────────────
 
@@ -371,6 +493,10 @@ class SECScraper(BaseScraper):
             return None
         # "ACME CORP  (0001234567) (Filer)" → "ACME CORP"
         company_name = re.split(r'\s*\(', display_names[0])[0].strip()
+
+        # Entity-shape gate on the filer name — free, before any HTTP
+        if self._skip_filer_by_name(company_name):
+            return None
 
         # Date filed
         file_date_str = source.get('file_date') or ''
@@ -397,16 +523,10 @@ class SECScraper(BaseScraper):
         if state.upper() not in self.territory_codes:
             return None
 
-        # SIC code prefilter — blocks off-target industries at scrape time
-        # so they never go through expensive Tavily+Ollama enrichment.
-        # Aligns with POST_ENRICHMENT_INDUSTRY_BLOCK in enrichment_scout.py.
+        # SIC gate — gates.sic_to_verdict (policy) + legacy BLOCKED_SIC_CODES
+        # belt. Off-vertical / vehicle filers never reach enrichment.
         sic = filer_info.get('sic', '')
-        if sic and sic in self.BLOCKED_SIC_CODES:
-            self._sic_blocked_count += 1
-            reason = self.BLOCKED_SIC_CODES[sic]
-            sic_desc = filer_info.get('sic_desc', reason)
-            print(f'    🚫 SIC {sic} ({sic_desc}) — blocked at scrape time: '
-                  f'{company_name[:40]}')
+        if self._skip_filer_by_sic(sic, filer_info.get('sic_desc', ''), company_name):
             return None
 
         # Skip industry-excluded targets where applicable (name-based)
@@ -441,6 +561,14 @@ class SECScraper(BaseScraper):
             else:
                 event_type = EventType.EXECUTIVE_HIRE  # prefetch failed — fail open
 
+        # Item 1.01 content gate: a material-definitive-agreement filing is
+        # M&A only when its full text carries a merger / purchase-agreement
+        # phrase (see MA_AGREEMENT_PHRASES). Fail open if the prefetch was
+        # empty, mirroring the 5.02 finance filter.
+        if item_code == '1.01' and self._ma_prefetch_ok and adsh not in self._ma_adsh_set:
+            self._ma_skipped_count += 1
+            return None
+
         title = (
             f'SEC 8-K Item {item_code} ({item_def["name"]}) — {company_name}'
         )
@@ -448,6 +576,9 @@ class SECScraper(BaseScraper):
             f'SEC 8-K filing by {company_name} ({state}) — Item {item_code}: '
             f'{item_def["name"]}. Filing date: {file_date_str}.'
         )
+        sic_phrase = self._sic_phrase(filer_info)
+        if sic_phrase:
+            description = f'{description} {sic_phrase}'
 
         return TriggerEvent(
             id=self.generate_event_id(url, company_name),
@@ -552,6 +683,7 @@ class FormDScraper(SECScraper):
         label = 'SEC Form D (private raises)'
         events: List[TriggerEvent] = []
         skipped_funds = 0
+        self._reset_gate_counters()
         try:
             startdt = (date.today() - timedelta(days=self.lookback_days)).isoformat()
             enddt = date.today().isoformat()
@@ -599,6 +731,7 @@ class FormDScraper(SECScraper):
             })
             print(f'  - {label}: {len(events)} operating-company raises in '
                   f'territory ({skipped_funds} fund vehicles skipped)')
+            self._print_gate_summary(label)
         except Exception as e:
             self.source_statuses.append({
                 'source_name':   label,
@@ -627,6 +760,11 @@ class FormDScraper(SECScraper):
             return None, False
         company_name = re.split(r'\s*\(', display_names[0])[0].strip()
 
+        # Entity-shape gate (gates.py policy) — funds, SPACs, governments,
+        # K-12, lodging, political, greek. FUND_NAME_PATTERNS stays as a
+        # second belt for the fund shapes the gate's regexes don't cover.
+        if self._skip_filer_by_name(company_name):
+            return None, False
         low = f' {company_name.lower()} '
         if any(p in low for p in self.FUND_NAME_PATTERNS):
             return None, True
@@ -658,8 +796,7 @@ class FormDScraper(SECScraper):
         sic = filer_info.get('sic', '')
         if sic and sic in self.FUND_SIC_CODES:
             return None, True
-        if sic and sic in self.BLOCKED_SIC_CODES:
-            self._sic_blocked_count += 1
+        if self._skip_filer_by_sic(sic, filer_info.get('sic_desc', ''), company_name):
             return None, False
 
         try:
@@ -671,19 +808,47 @@ class FormDScraper(SECScraper):
         url = (f'https://www.sec.gov/Archives/edgar/data/'
                f'{int(cik)}/{adsh_clean}/{adsh}-index.htm')
 
-        amount_txt, industry_grp = '', ''
+        details: Dict[str, Any] = {}
         if self.fetch_details:
-            amount_txt, industry_grp, is_fund = self._formd_details(cik, adsh_clean)
-            if is_fund:
+            details = self._formd_details(cik, adsh_clean)
+            if details.get('is_fund'):
                 return None, True
+        amount_txt   = details.get('amount') or ''
+        industry_grp = details.get('industry') or ''
+        revenue_rng  = details.get('revenue_range') or ''
+        spac_flag    = bool(details.get('spac'))
+        entity_type  = details.get('entity_type') or ''
 
+        # Structured verdict (gates.formd_to_verdict): industry group,
+        # declared revenue bar (≥$5M, or undisclosed with a ≥$10M raise),
+        # SPAC flag. 'unknown' = worth researching → keep.
+        verdict, _segment, reason = formd_to_verdict(
+            industry_grp, revenue_rng, details.get('amount_float'), spac_flag
+        )
+        if verdict in ('out', 'vehicle', 'too_small'):
+            self._formd_verdict_skipped[verdict] = self._formd_verdict_skipped.get(verdict, 0) + 1
+            print(f'    ⏭  Form D {verdict}: {company_name[:40]} — {reason}')
+            return None, False
+
+        # Downstream parses these literal phrases — keep the shapes:
+        #   'Total offering: $N.' · 'Form D industry group: X.' ·
+        #   'Declared revenue: Y.' · 'SPAC: yes.' · 'SIC: NNNN'
         desc_bits = [f'SEC Form D filed by {company_name} ({state}) — '
                      f'private capital raise (Reg D exempt offering).']
         if amount_txt:
             desc_bits.append(f'Total offering: {amount_txt}.')
         if industry_grp:
             desc_bits.append(f'Form D industry group: {industry_grp}.')
+        if revenue_rng:
+            desc_bits.append(f'Declared revenue: {revenue_rng}.')
+        if spac_flag:
+            desc_bits.append('SPAC: yes.')
+        if entity_type:
+            desc_bits.append(f'Entity type: {entity_type}.')
         desc_bits.append(f'Filing date: {file_date_str}.')
+        sic_phrase = self._sic_phrase(filer_info)
+        if sic_phrase:
+            desc_bits.append(sic_phrase)
 
         return TriggerEvent(
             id=self.generate_event_id(url, company_name),
@@ -700,10 +865,24 @@ class FormDScraper(SECScraper):
             matched_regions=[state],
         ), False
 
-    def _formd_details(self, cik: str, adsh_clean: str):
-        """Fetch the Form D primary XML for offering amount + industry.
-        Returns (amount_text, industry_group, is_fund_vehicle). Best-effort:
-        any failure returns blanks rather than dropping the event."""
+    _FORMD_EMPTY: Dict[str, Any] = {
+        'amount': '', 'amount_float': None, 'industry': '', 'revenue_range': '',
+        'spac': False, 'entity_type': '', 'is_fund': False,
+    }
+
+    def _formd_details(self, cik: str, adsh_clean: str) -> Dict[str, Any]:
+        """Fetch the Form D primary XML and parse the typed fields:
+
+            amount / amount_float   <totalOfferingAmount>  ('Indefinite' → None)
+            industry                <industryGroupType>
+            revenue_range           <revenueRange>          (issuerSize)
+            spac                    <isBusinessCombinationTransaction>
+            entity_type             <entityType>            (primaryIssuer)
+            is_fund                 <investmentFundInfo> present / pooled fund
+
+        Best-effort: any failure returns the blank dict rather than dropping
+        the event (formd_to_verdict treats blanks as 'unknown')."""
+        out: Dict[str, Any] = dict(self._FORMD_EMPTY)
         try:
             idx = self.session.get(
                 f'https://www.sec.gov/Archives/edgar/data/{int(cik)}/'
@@ -714,29 +893,35 @@ class FormDScraper(SECScraper):
                  if f.get('name', '').endswith('.xml')
                  and 'primary' in f.get('name', '').lower()), None)
             if not xml_name:
-                return '', '', False
+                return out
             time.sleep(self.sec_sleep)
             xml = self.session.get(
                 f'https://www.sec.gov/Archives/edgar/data/{int(cik)}/'
                 f'{adsh_clean}/{xml_name}', timeout=self.timeout).text
 
             if '<investmentFundInfo>' in xml or 'Pooled Investment Fund' in xml:
-                return '', '', True
+                out['is_fund'] = True
+                return out
 
-            m = re.search(r'<totalOfferingAmount>([^<]+)</totalOfferingAmount>', xml)
-            amount = ''
-            if m:
-                raw = m.group(1).strip()
+            def tag(name: str) -> str:
+                m = re.search(rf'<{name}>([^<]*)</{name}>', xml)
+                return html.unescape(m.group(1)).strip() if m else ''
+
+            raw = tag('totalOfferingAmount')
+            if raw:
                 if raw.lower() == 'indefinite':
-                    amount = 'Indefinite'
+                    out['amount'] = 'Indefinite'
                 else:
                     try:
-                        amount = f'${int(float(raw)):,}'
+                        out['amount_float'] = float(raw)
+                        out['amount'] = f'${int(float(raw)):,}'
                     except Exception:
-                        amount = raw
-            g = re.search(r'<industryGroupType>([^<]+)</industryGroupType>', xml)
-            industry = g.group(1).strip() if g else ''
+                        out['amount'] = raw
+            out['industry'] = tag('industryGroupType')
+            out['revenue_range'] = tag('revenueRange')
+            out['spac'] = tag('isBusinessCombinationTransaction').lower() == 'true'
+            out['entity_type'] = tag('entityType')
             time.sleep(self.sec_sleep)
-            return amount, industry, False
+            return out
         except Exception:
-            return '', '', False
+            return out

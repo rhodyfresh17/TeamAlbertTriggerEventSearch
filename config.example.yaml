@@ -162,8 +162,10 @@ territory:
     # Indiana
     - "Indianapolis"
     - "Fort Wayne"
+    - "Evansville"
     - "South Bend"
     - "Carmel"
+    - "Bloomington"
     # Kentucky
     - "Louisville"
     - "Lexington"
@@ -501,6 +503,9 @@ territory:
   require_territory_match: true
 
   excluded_locations:
+    # Matched as WHOLE WORDS only (base.py::is_excluded_location) and only
+    # when the text has NO in-territory dateline/city/state signal. Keep
+    # entries ≥4 chars and never list an in-territory city name here.
     # Asia
     - "Singapore"
     - "Hong Kong"
@@ -523,8 +528,8 @@ territory:
     - "Philippines"
     # Europe
     - "United Kingdom"
-    - "UK"
-    - "London"
+    # "UK" removed 2026-09-07 — ≤3 chars: substring-matched "Duke"/"Milwaukee"; "United Kingdom"/"England"/"London" cover it
+    # "London" removed 2026-09-07 — in-territory city (London, Ontario); "United Kingdom"/"England" stay, enrichment HQ gate catches London UK
     - "England"
     - "Scotland"
     - "Ireland"
@@ -565,7 +570,7 @@ territory:
     - "Israel"
     - "Tel Aviv"
     - "Dubai"
-    - "UAE"
+    # "UAE" removed 2026-09-07 — ≤3 chars; "United Arab Emirates"/"Dubai" cover it
     - "United Arab Emirates"
     - "Saudi Arabia"
     - "Qatar"
@@ -604,7 +609,7 @@ territory:
     - "Washington State"
     - "Seattle"
     - "Oregon"
-    - "Portland"
+    # "Portland" removed 2026-09-07 — in-territory city (Portland, Maine); Oregon stays excluded
     - "Colorado"
     - "Denver"
     - "Arizona"
@@ -809,6 +814,7 @@ territory:
       - "market cap"
 
     excluded_public_companies:
+    - "GS Finance Corp"          # Goldman Sachs notes issuer (subsidiary — name check misses it)
       # ── US mega-banks (Tier 1: G-SIBs + super-regionals) ──────────
       # All way too large for NetSuite up-market ($0-$200M target band)
       - "JPMorgan"
@@ -1177,8 +1183,9 @@ alerts:
     smtp_port: 587
     sender_email: "your-email@gmail.com"
     sender_password: ""
-    recipient_emails:
-      - "mwjacobs3@gmail.com"
+    # Recipient is injected at CI runtime from the ALERT_RECIPIENT GitHub
+    # secret (the repo is public — never commit a personal address here).
+    recipient_emails: []
 
   slack:
     enabled: false
@@ -1220,6 +1227,7 @@ form_d:
   lookback_days: 3     # scraper runs every ~4h; URL dedup handles overlap
   max_results: 300     # EFTS pages of 100
   fetch_details: true  # pull offering amount + industry group from the XML
+  max_lookups: 120     # revenue gate reads each XML; 50 starved Form D to ~5 events/run
 
 # ── Adzuna job board API ───────────────────────────────────────────────
 # Structured API source for finance leadership job postings — replaces the

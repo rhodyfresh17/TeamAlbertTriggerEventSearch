@@ -1,13 +1,19 @@
 """Tests for the trigger event scrapers."""
 
+import os
+import tempfile
 import unittest
 from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime, timezone
+
+import yaml
 
 from src.models import TriggerEvent, EventType, EventSource
 from src.scrapers.base import BaseScraper
 from src.scrapers.rss_scraper import RSSScraper
 from src.scrapers.news_scraper import GoogleNewsScraper
+from src.scrapers.adzuna_scraper import AdzunaScraper
+from src.database import DatabaseManager
 
 
 class TestBaseScraper(unittest.TestCase):
@@ -72,10 +78,11 @@ class TestBaseScraper(unittest.TestCase):
         """Test territory matching."""
         scraper = RSSScraper(self.config)
 
-        # Should match region
+        # Should match region (matched_regions are returned lowercased —
+        # BaseScraper lowercases the configured regions at init)
         in_territory, regions = scraper.matches_territory("Company based in New York announces...")
         self.assertTrue(in_territory)
-        self.assertIn('New York', regions)
+        self.assertIn('new york', regions)
 
         # Should match city
         in_territory, regions = scraper.matches_territory("Boston-based startup raises funds")
@@ -224,21 +231,44 @@ class TestGoogleNewsScraper(unittest.TestCase):
         }
 
     def test_builds_search_queries(self):
-        """Test that search queries are built correctly."""
+        """Test that search queries are built correctly (v2 query set)."""
         scraper = GoogleNewsScraper(self.config)
         queries = scraper._build_search_queries()
+
+        # Every entry is a (query, event_type_hint) pair — the old
+        # skip_territory_filter third element is gone
+        self.assertTrue(all(len(q) == 2 for q in queries))
+        for query, hint in queries:
+            self.assertIsInstance(query, str)
+            self.assertIn(hint, (EventType.CFO_HIRE, EventType.MERGER_ACQUISITION,
+                                 EventType.FUNDING))
 
         # Should have CFO queries
         cfo_queries = [q for q, t in queries if 'CFO' in q]
         self.assertGreater(len(cfo_queries), 0)
 
-        # Should have LinkedIn queries
-        linkedin_queries = [q for q, t in queries if 'linkedin.com' in q]
-        self.assertGreater(len(linkedin_queries), 0)
-
         # Should have Crunchbase queries
         crunchbase_queries = [q for q, t in queries if 'crunchbase.com' in q]
         self.assertGreater(len(crunchbase_queries), 0)
+
+        # Deleted 2026-09-06: LinkedIn (territory bypass), TechCrunch, and
+        # the OTHER-typed expansion / launch queries
+        self.assertEqual([q for q, t in queries if 'linkedin.com' in q], [])
+        self.assertEqual([q for q, t in queries if 'techcrunch.com' in q], [])
+        self.assertEqual([q for q, t in queries if t == EventType.OTHER], [])
+
+    def test_process_entry_requires_detected_event_type(self):
+        """The query hint is no longer a fallback: an article that does not
+        read as a trigger is dropped even when the query implied a type."""
+        import xml.etree.ElementTree as ET
+        scraper = GoogleNewsScraper(self.config)
+        item = ET.fromstring(
+            '<item><title>Boston company opens new office - Local News</title>'
+            '<link>https://example.com/a</link>'
+            '<description>Boston firm expands footprint downtown.</description>'
+            '</item>'
+        )
+        self.assertIsNone(scraper._process_entry(item, EventType.CFO_HIRE))
 
 
 class TestTriggerEventModel(unittest.TestCase):
@@ -250,7 +280,7 @@ class TestTriggerEventModel(unittest.TestCase):
             id="test-123",
             title="Test CFO Hire",
             event_type=EventType.CFO_HIRE,
-            source=EventSource.RSS_FEED,
+            source=EventSource.PR_NEWSWIRE,
             url="https://example.com/news",
             published_date=datetime.now(timezone.utc),
             company_name="Test Corp",
@@ -278,6 +308,183 @@ class TestTriggerEventModel(unittest.TestCase):
         self.assertEqual(event.company_website, "https://testcorp.com")
         self.assertEqual(event.company_revenue, "$50M")
         self.assertEqual(event.company_employees, "200")
+
+    def test_finance_seat_open_is_valid_event_type(self):
+        """finance_seat_open — an open CFO/Controller seat (job posting) —
+        is a first-class EventType, distinct from a seated cfo_hire."""
+        self.assertIs(EventType('finance_seat_open'), EventType.FINANCE_SEAT_OPEN)
+        self.assertNotEqual(EventType.FINANCE_SEAT_OPEN, EventType.CFO_HIRE)
+        # Round-trips through the storage representation
+        ev = TriggerEvent(
+            id="seat-1", title="Acme Corp hiring: Controller",
+            event_type=EventType.FINANCE_SEAT_OPEN, source=EventSource.ADZUNA,
+            url="https://example.com/job", published_date=datetime.now(timezone.utc),
+        )
+        self.assertEqual(TriggerEvent.from_dict(ev.to_dict()).event_type,
+                         EventType.FINANCE_SEAT_OPEN)
+
+
+ADZUNA_TEST_CONFIG = {
+    'territory': {'regions': [], 'cities': [], 'industries': [],
+                  'excluded_industries': ['mining'],
+                  'company_filters': {'exclude_public_companies': False}},
+    'keywords': {'executive_hires': ['CFO'], 'mergers_acquisitions': [],
+                 'funding_events': []},
+    'scraper': {'timeout': 5, 'request_delay': 0},
+    'adzuna': {'enabled': True, 'app_id': 'test-id', 'app_key': 'test-key',
+               'countries': ['us'], 'run_hours': [12]},
+}
+
+
+def _adzuna_job(company: str, title: str, state: str, url: str) -> dict:
+    return {
+        'title': title,
+        'company': {'display_name': company},
+        'location': {'area': ['US', state, 'Some City'],
+                     'display_name': f'Some City, {state}'},
+        'redirect_url': url,
+        'description': f'{company} seeks a {title}.',
+        'created': datetime.now(timezone.utc).isoformat(),
+    }
+
+
+class TestAdzunaScraper(unittest.TestCase):
+    """Adzuna: event typing and the persisted once-per-day latch."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = DatabaseManager(os.path.join(self.tmp.name, 'scratch.db'))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_posting_becomes_finance_seat_open(self):
+        scraper = AdzunaScraper(ADZUNA_TEST_CONFIG)
+        job = _adzuna_job('Acme, Inc.', 'Corporate Controller', 'New York',
+                          'https://adzuna.example/j/1')
+        ev = scraper._job_to_event(job, 'us', scraper.us_states)
+        self.assertIsNotNone(ev)
+        self.assertEqual(ev.event_type, EventType.FINANCE_SEAT_OPEN)
+        self.assertEqual(ev.source, EventSource.ADZUNA)
+        self.assertEqual(ev.title, 'Acme, Inc. hiring: Corporate Controller')
+        # A CFO posting is ALSO an open seat, not a cfo_hire
+        job = _adzuna_job('Acme, Inc.', 'Chief Financial Officer', 'Ohio',
+                          'https://adzuna.example/j/2')
+        self.assertEqual(scraper._job_to_event(job, 'us', scraper.us_states).event_type,
+                         EventType.FINANCE_SEAT_OPEN)
+
+    def test_daily_latch_runs_once_per_utc_day(self):
+        """With a db, the first scrape() of the day hits the API; the next
+        call the same day is skipped. run_hours is ignored (no latch_mode:
+        hour), so the drifting-cron hour mismatch can never starve Adzuna."""
+        scraper = AdzunaScraper(ADZUNA_TEST_CONFIG, db=self.db)
+        self.assertEqual(scraper.run_hours, [])  # ignored without latch_mode: hour
+        with patch.object(AdzunaScraper, '_scrape_country', return_value=[]) as api:
+            scraper.scrape()
+            self.assertEqual(api.call_count, len(scraper.title_queries))
+            self.assertEqual(self.db.get_kv(AdzunaScraper.LATCH_KEY),
+                             datetime.now(timezone.utc).date().isoformat())
+            scraper.scrape()
+            self.assertEqual(api.call_count, len(scraper.title_queries),
+                             'second call the same day must not hit the API')
+        # Without a db there is no latch: every call runs
+        free = AdzunaScraper(ADZUNA_TEST_CONFIG)
+        with patch.object(AdzunaScraper, '_scrape_country', return_value=[]) as api:
+            free.scrape(); free.scrape()
+            self.assertEqual(api.call_count, 2 * len(free.title_queries))
+
+    def test_latch_not_set_when_every_call_fails(self):
+        scraper = AdzunaScraper(ADZUNA_TEST_CONFIG, db=self.db)
+        with patch.object(AdzunaScraper, '_scrape_country', side_effect=RuntimeError('429')):
+            scraper.scrape()
+        self.assertIsNone(self.db.get_kv(AdzunaScraper.LATCH_KEY),
+                          'a failed day must be retried next cycle')
+
+    def test_query_params_include_finance_category(self):
+        scraper = AdzunaScraper(ADZUNA_TEST_CONFIG)
+        resp = MagicMock(); resp.json.return_value = {'results': []}
+        with patch.object(scraper.session, 'get', return_value=resp) as get:
+            scraper._scrape_country('us', 'controller')
+        self.assertEqual(get.call_args.kwargs['params']['category'],
+                         'accounting-finance-jobs')
+
+
+class TestJobPostingDedup(unittest.TestCase):
+    """One national Adzuna posting listed under N territory states must
+    collapse to ONE lead (composite key: account_key + job title)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = {
+            'scraper': {'database': os.path.join(self.tmp.name, 'scratch.db'),
+                        'max_age_hours': 72, 'timeout': 5, 'request_delay': 0},
+            'territory': {'regions': [], 'cities': [], 'industries': [],
+                          'excluded_industries': [],
+                          'company_filters': {'exclude_public_companies': False}},
+            'keywords': {'executive_hires': [], 'mergers_acquisitions': [],
+                         'funding_events': []},
+            'alerts': {'file': {'enabled': False}, 'desktop': {'enabled': False},
+                       'email': {'enabled': False}, 'slack': {'enabled': False}},
+            'sources': {'rss_feeds': [], 'google_news': {'enabled': False}},
+            'adzuna': {'enabled': False},
+        }
+        self.config_path = os.path.join(self.tmp.name, 'config.yaml')
+        with open(self.config_path, 'w') as f:
+            yaml.safe_dump(cfg, f)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    @staticmethod
+    def _posting(company, title, state, url):
+        return TriggerEvent(
+            id=url, title=f'{company} hiring: {title}',
+            event_type=EventType.FINANCE_SEAT_OPEN, source=EventSource.ADZUNA,
+            url=url, published_date=datetime.now(timezone.utc),
+            company_name=company, company_location=f'Somewhere, {state}',
+            matched_regions=[state],
+        )
+
+    def _monitor(self, events):
+        from src.main import TriggerEventMonitor
+        monitor = TriggerEventMonitor(self.config_path)
+        fake = MagicMock(); fake.scrape.return_value = events; fake.source_statuses = []
+        monitor.scrapers = [fake]
+        monitor.alert_manager.send_alerts = MagicMock(return_value=0)
+        return monitor
+
+    def test_same_posting_across_states_collapses_to_one(self):
+        ny = self._posting('Acme, Inc.', 'Corporate Controller', 'New York',
+                           'https://adzuna.example/j/ny')
+        ma = self._posting('Acme Inc', 'Corporate Controller', 'Massachusetts',
+                           'https://adzuna.example/j/ma')
+        # Different job title at the same company is a DIFFERENT open seat
+        cfo = self._posting('Acme Inc', 'Chief Financial Officer', 'Ohio',
+                            'https://adzuna.example/j/oh')
+        new_events = self._monitor([ny, ma, cfo]).run_once()
+        self.assertEqual([e.url for e in new_events],
+                         ['https://adzuna.example/j/ny', 'https://adzuna.example/j/oh'])
+
+    def test_dedup_persists_across_runs(self):
+        first = self._monitor([self._posting('Acme Inc', 'Controller', 'Ohio',
+                                             'https://adzuna.example/j/1')]).run_once()
+        self.assertEqual(len(first), 1)
+        # Next run (same SQLite file) — the same seat under another state
+        second = self._monitor([self._posting('Acme, Inc.', 'Controller', 'Maine',
+                                              'https://adzuna.example/j/2')]).run_once()
+        self.assertEqual(second, [])
+
+    def test_sec_templated_titles_stay_exempt_from_title_dedup(self):
+        """Two distinct 8-K filings with identical templated titles are both
+        kept (the SEC exemption is unchanged)."""
+        def sec(url):
+            return TriggerEvent(
+                id=url, title='SEC 8-K Item 5.02 — Acme Corp',
+                event_type=EventType.CFO_HIRE, source=EventSource.SEC_EDGAR,
+                url=url, published_date=datetime.now(timezone.utc), company_name='Acme Corp',
+            )
+        new_events = self._monitor([sec('https://sec.example/1'), sec('https://sec.example/2')]).run_once()
+        self.assertEqual(len(new_events), 2)
 
 
 if __name__ == '__main__':

@@ -45,6 +45,15 @@ import subprocess
 
 import requests
 
+# v2 deterministic gates (2026-09-06) — pure functions, no network. Policy
+# (A.J.'s exclusions, SIC/Form D routing, territory parsing) lives there.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from src.pipeline.gates import (  # noqa: E402
+    hq_territory_status as _gates_hq_status, is_non_operating_entity,
+    is_bad_company_name, sic_to_verdict, formd_to_verdict,
+    account_key as _gates_account_key,
+)
+
 # ── .env ─────────────────────────────────────────────────────────────────────
 try:
     from dotenv import load_dotenv
@@ -260,38 +269,10 @@ _ALL_STATE_CODES = {
 
 
 def hq_territory_status(hq: str) -> str:
-    """Classify a researched HQ string: 'in' | 'out' | 'unknown'.
-
-    Handles 'City, ST', bare state/province names, and full-name tails
-    ('Boston, Massachusetts'). Foreign or non-territory locations that are
-    clearly identifiable → 'out'; unparseable/missing → 'unknown'."""
-    if not hq or not str(hq).strip():
-        return 'unknown'
-    h = str(hq).strip()
-    tail = h.split(',')[-1].strip() if ',' in h else h
-    tail_up = tail.upper()
-    # 2-letter code path
-    if tail_up in TERRITORY_STATES:
-        return 'in'
-    if tail_up in _ALL_STATE_CODES:
-        return 'out'
-    # Full-name path
-    tail_lo = tail.lower()
-    if tail_lo in _TERRITORY_NAME_TO_CODE:
-        return 'in'
-    h_lo = h.lower()
-    if h_lo in _TERRITORY_NAME_TO_CODE:
-        return 'in'
-    # Recognizable foreign markers → confidently OUT
-    FOREIGN = ('germany', 'france', 'uk', 'united kingdom', 'england',
-               'india', 'china', 'japan', 'australia', 'israel', 'singapore',
-               'switzerland', 'netherlands', 'sweden', 'ireland', 'spain',
-               'italy', 'brazil', 'mexico', 'hong kong', 'korea', 'norway',
-               'denmark', 'finland', 'belgium', 'austria', 'chile',
-               'british columbia', 'alberta', 'manitoba', 'saskatchewan')
-    if any(f in h_lo for f in FOREIGN):
-        return 'out'
-    return 'unknown'
+    """'in' | 'out' | 'unknown'. Delegates to src.pipeline.gates (v2): scans
+    EVERY comma segment, so 'Boston, MA, USA' is IN and 'Seattle, Washington'
+    is confidently OUT (v1 read only the last segment → 'unknown')."""
+    return _gates_hq_status(hq)
 
 
 # Roles that can carry a WORKABLE account. A fitting company in one of these
@@ -299,8 +280,103 @@ def hq_territory_status(hq: str) -> str:
 # Mentioned never do — they're context, not accounts to sell into.
 WORKABLE_ROLES = [
     'acquirer', 'portfolio company', 'hiring company', 'primary', 'target',
-    'lead investor', 'investor',
 ]
+# 'investor' / 'lead investor' were removed 2026-09-06: the company that got
+# the money is the account; a PE/VC firm is an account only when the trigger
+# is about the firm itself (then it is extracted as 'primary'/'hiring company').
+
+# Rep verdicts are a HARD input to the pipeline (v2): these statuses mean
+# never research / never surface this account again.
+REP_NOT_FIT_STATUSES = {'Not a Fit', 'Out of Alignment', 'NetSuite Customer'}
+REP_DECIDED_STATUSES = {'Picked Up', 'On Rep TAL'}
+
+
+def _excluded_public_companies() -> set:
+    """Mega-cap blocklist from config.yaml (territory.company_filters.
+    excluded_public_companies) as account keys. Cached; empty if unreadable."""
+    cache = getattr(_excluded_public_companies, '_cache', None)
+    if cache is not None:
+        return cache
+    keys = set()
+    try:
+        import yaml
+        cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.yaml')
+        cfg = yaml.safe_load(open(cfg_path)) or {}
+        def _walk(o):
+            if isinstance(o, dict):
+                for k, v in o.items():
+                    if k == 'excluded_public_companies' and isinstance(v, list):
+                        for n in v:
+                            if n:
+                                keys.add(_gates_account_key(str(n)))
+                    else:
+                        _walk(v)
+            elif isinstance(o, list):
+                for v in o:
+                    _walk(v)
+        _walk(cfg)
+    except Exception:
+        pass
+    _excluded_public_companies._cache = keys
+    return keys
+
+
+def _is_excluded_public_company(name: str) -> bool:
+    k = _gates_account_key(name)
+    if not k:
+        return False
+    ex = _excluded_public_companies()
+    return k in ex or any(e and (e == k or k.startswith(e + ' ')) for e in ex)
+
+
+def _load_rep_dispositions(client) -> dict:
+    """{account_key(company_name): status} from account_dispositions."""
+    try:
+        rows = client.table('account_dispositions').select('company_name,status').execute().data or []
+        return {_gates_account_key(r.get('company_name') or ''): r.get('status')
+                for r in rows if r.get('company_name')}
+    except Exception:
+        return {}
+
+
+def _rep_verdict_for(companies: list, dispositions: dict):
+    """First (name, status) among workable companies that a rep already decided."""
+    if not dispositions:
+        return None
+    for c in companies:
+        if (c.get('role') or '').lower() not in WORKABLE_ROLES:
+            continue
+        st = dispositions.get(_gates_account_key(c.get('name') or ''))
+        if st:
+            return c.get('name'), st
+    return None
+
+
+def _structured_verdict(event: dict) -> dict:
+    """Free, deterministic pre-search verdict from structured facts the
+    scrapers now embed in the description (SIC code; Form D industry group,
+    declared revenue range, offering amount, SPAC flag)."""
+    import re as _re
+    desc = event.get('description') or ''
+    out = {'verdict': 'unknown', 'reason': '', 'revenue_segment': ''}
+    if 'sec.gov' not in (event.get('source_url') or ''):
+        return out
+    m = _re.search(r'SIC:\s*(\d{4})', desc)
+    if m:
+        v, why = sic_to_verdict(m.group(1))
+        if v in ('out', 'vehicle'):
+            return {'verdict': v, 'reason': why, 'revenue_segment': ''}
+    if 'Form D' in (event.get('title') or ''):
+        grp = (_re.search(r'industry group: ([^.]+)\.', desc) or [None, ''])[1]
+        rr = (_re.search(r'Declared revenue: ([^.]+?)\.(?:\s|$)', desc) or [None, ''])[1]
+        amt = _re.search(r'Total offering: \$([\d,]+)', desc)
+        amount = float(amt.group(1).replace(',', '')) if amt else None
+        spac = 'SPAC: yes' in desc
+        v, seg, why = formd_to_verdict(grp.strip() if grp else None,
+                                       rr.strip() if rr else None, amount, spac)
+        return {'verdict': v, 'reason': why, 'revenue_segment': seg}
+    return out
+
 
 
 # Public school districts procure through RFPs — dead ends, never workable
@@ -327,10 +403,21 @@ def company_fit(c: dict) -> dict:
 
     Returns {'verdict': 'pass'|'fail'|'unverified', 'territory': ...,
              'revenue': ..., 'vertical': ..., 'reasons': [...]}"""
-    if _is_public_school_district(c.get('name') or ''):
+    _name = c.get('name') or ''
+    if _is_public_school_district(_name):
         return {'verdict': 'fail', 'territory': 'n/a', 'revenue': 'n/a',
                 'vertical': 'out',
                 'reasons': ['public school district (RFP procurement — dead end)']}
+    _nonop, _kind = is_non_operating_entity(
+        _name, c.get('descriptor') or c.get('industry') or '')
+    if _nonop:
+        return {'verdict': 'fail', 'territory': 'n/a', 'revenue': 'n/a',
+                'vertical': 'out',
+                'reasons': [f'entity_shape:{_kind} ({_name[:40]})']}
+    if _is_excluded_public_company(_name):
+        return {'verdict': 'fail', 'territory': 'n/a', 'revenue': 'out',
+                'vertical': 'n/a',
+                'reasons': ['excluded_public_company (mega-cap blocklist)']}
 
     territory = hq_territory_status(c.get('hq') or '')
 
@@ -363,7 +450,11 @@ def company_fit(c: dict) -> dict:
     elif territory == 'in' and revenue == 'in' and vertical == 'in':
         verdict = 'pass'
     else:
-        verdict = 'unverified'
+        # v2 'unknown' semantics: an UNKNOWN VERTICAL is 'staged' (hidden by
+        # default, retried free) — never shown as a workable account.
+        # Unknown territory/revenue with a known vertical is 'unverified'
+        # (hidden by default too, visible under the dashboard toggle).
+        verdict = 'staged' if vertical == 'unknown' else 'unverified'
         for dim, val in (('territory', territory), ('revenue', revenue),
                          ('vertical', vertical)):
             if val == 'unknown':
@@ -406,6 +497,7 @@ def apply_fit_gates(companies_data: list) -> dict:
 
     account = (_pick([c for c in workable if c['fit']['verdict'] == 'pass'])
                or _pick([c for c in workable if c['fit']['verdict'] == 'unverified'])
+               or _pick([c for c in workable if c['fit']['verdict'] == 'staged'])
                or _pick(workable)
                or (companies_data[0] if companies_data else None))
 
@@ -621,15 +713,20 @@ def check_columns(client):
     return exists
 
 
-def _soft_delete(client, event_id: str, reason: str) -> None:
+def _soft_delete(client, event_id: str, reason: str, extra: dict = None) -> None:
     """Tombstone an event: sets blocked_at (hidden from dashboard, immune to
     supabase_sync resurrection) + enriched_at (skipped by future enrichment).
+    `extra` (e.g. companies_data / fit) is persisted too so paid research is
+    never thrown away (v1 discarded it for ~52% of tombstones).
     Falls back to hard DELETE only if the blocked_at column is missing."""
     payload = {
         'blocked_at':     datetime.utcnow().isoformat(),
         'blocked_reason': (reason or '')[:300],
         'enriched_at':    datetime.utcnow().isoformat(),
     }
+    for k, v in (extra or {}).items():
+        if v is not None:
+            payload[k] = v
     try:
         client.table('events').update(payload).eq('id', event_id).execute()
     except Exception as e:
@@ -949,7 +1046,7 @@ _SEARCH_TIER = {'tier': 1}
 
 def _event_search_tier(event: dict) -> int:
     et = (event.get('event_type') or '').strip()
-    if et == 'cfo_hire' or _finance_role(event):
+    if et in ('cfo_hire', 'finance_seat_open') or _finance_role(event):
         return 1
     if et == 'merger_acquisition':
         return 1
@@ -1032,11 +1129,84 @@ def _scrape_budget_ok(record: bool = False) -> bool:
         return True
 
 
+_STATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'state')
+
+
+def _search_mode_defer() -> bool:
+    """monitor_health writes state/search_mode = 'defer' after the Firecrawl
+    canary comes back empty twice. In defer mode nothing scrapes and nothing
+    pays — events wait (enriched_at stays null) for a free retry."""
+    try:
+        with open(os.path.join(_STATE_DIR, 'search_mode')) as f:
+            return f.read().strip().lower() == 'defer'
+    except Exception:
+        return False
+
+
 def _scrape_rungs_available() -> bool:
     """True when it's civil to hit the scraping backends right now."""
+    if _search_mode_defer():
+        return False
     if time.time() < _breaker['open_until']:
         return False
     return _scrape_budget_ok()
+
+
+# ── Tavily rationing (v2) ────────────────────────────────────────────────────
+TAVILY_DAILY_RATION = int(os.environ.get('TAVILY_DAILY_RATION', '25'))
+
+
+def _tavily_day_count(increment: bool = False) -> Optional[int]:
+    """Today's Tavily calls (UTC day) from the cache DB. None on error so the
+    caller can FAIL CLOSED (a budget you can't read is a budget you don't spend)."""
+    day = datetime.utcnow().strftime('%Y-%m-%d')
+    try:
+        conn = sqlite3.connect(CACHE_DB_PATH, timeout=5)
+        cur = conn.cursor()
+        cur.execute('CREATE TABLE IF NOT EXISTS tavily_daily (day TEXT PRIMARY KEY, calls INTEGER)')
+        if increment:
+            cur.execute('INSERT INTO tavily_daily (day, calls) VALUES (?, 1) '
+                        'ON CONFLICT(day) DO UPDATE SET calls = calls + 1', (day,))
+            conn.commit()
+        cur.execute('SELECT calls FROM tavily_daily WHERE day = ?', (day,))
+        row = cur.fetchone()
+        conn.close()
+        return row[0] if row else 0
+    except Exception:
+        return None
+
+
+def _tavily_budget_ok() -> bool:
+    """Paid search allowed only when BOTH the monthly budget and the daily
+    ration have room. Fails closed when either counter is unreadable."""
+    try:
+        month = _tavily_month_count()
+    except Exception:
+        return False
+    day = _tavily_day_count()
+    if day is None:
+        return False
+    return month < TAVILY_MONTHLY_BUDGET and day < TAVILY_DAILY_RATION
+
+
+class SearchBudget:
+    """Per-event search allowance (v2). tier1 = 2 searches, paid allowed on
+    the firmographic lookup; tier2 = 1 scrape-only search; tier3 = none."""
+    def __init__(self, tier: int):
+        self.tier = tier
+        self.max_searches = {1: 2, 2: 1}.get(tier, 0)
+        self.allow_paid = tier == 1
+        self.used = 0
+        self.deferred = False
+
+    def take(self) -> bool:
+        if self.used >= self.max_searches:
+            return False
+        self.used += 1
+        return True
+
+
+_BUDGET = {'obj': SearchBudget(1)}   # default: standalone callers keep full access
 
 
 def _note_scrape_outcome(got_results: bool) -> None:
@@ -1054,24 +1224,45 @@ def _note_scrape_outcome(got_results: bool) -> None:
                     f'API rungs only.')
 
 
-def tavily_search(company_name: str, industry_hint: str = '') -> dict:
+def tavily_search(company_name: str, industry_hint: str = '',
+                  paid_ok: bool = True) -> dict:
     """Public search interface. Despite the legacy name, dispatches to the
     configured SEARCH_BACKEND (firecrawl by default) with persistent caching.
-    Function name kept for backwards-compat with the rest of the file."""
+    Function name kept for backwards-compat with the rest of the file.
+
+    v2 semantics: every call is charged against the per-event SearchBudget
+    (tier); paid Tavily fires ONLY for tier-1 firmographic lookups
+    (`paid_ok=True`), only after a genuine Firecrawl empty, and only while
+    the monthly budget AND daily ration have room. When the scrape rungs are
+    unavailable (cap / breaker / defer mode) the call returns
+    {'deferred': True} so the event waits for a free retry instead of
+    escalating to paid quota."""
     # Cache check first — saves cost regardless of backend
     cached = _cache_get(company_name, industry_hint)
     if cached:
         SEARCH_COUNTS['cache'] += 1
         return cached
 
+    budget = _BUDGET['obj']
+    if not budget.take():
+        SEARCH_COUNTS['budget_skipped'] = SEARCH_COUNTS.get('budget_skipped', 0) + 1
+        return {}
+    paid_allowed = (paid_ok and budget.allow_paid and bool(TAVILY_API_KEY)
+                    and not _search_mode_defer())
+
     # Backend dispatch
     if SEARCH_BACKEND == 'tavily':
+        if not (paid_allowed and _tavily_budget_ok()):
+            return {}
         SEARCH_COUNTS['tavily'] += 1
-        _tavily_month_count(increment=True)
         results = _tavily_search(company_name, industry_hint)
+        if results and results.get('results'):
+            _tavily_month_count(increment=True)
+            _tavily_day_count(increment=True)
     elif SEARCH_BACKEND == 'firecrawl':
         results = {}
-        if _scrape_rungs_available():
+        scrape_ran = _scrape_rungs_available()
+        if scrape_ran:
             SEARCH_COUNTS['firecrawl'] += 1
             _scrape_budget_ok(record=True)
             results = _firecrawl_search(company_name, industry_hint)
@@ -1092,21 +1283,29 @@ def tavily_search(company_name: str, industry_hint: str = '') -> dict:
             _note_scrape_outcome(bool(results and results.get('results')))
         else:
             SEARCH_COUNTS['throttled'] = SEARCH_COUNTS.get('throttled', 0) + 1
-        # Tavily fallback — only if configured AND monthly budget remains
-        # Tavily is TIER-1-ONLY: the 900/month goes to finance-leader, M&A,
-        # and substantive funding events. Tier-2 events stay scrape-only.
-        if (_SEARCH_TIER['tier'] == 1
-                and (not results or not results.get('results'))
-                and TAVILY_API_KEY):
-            used = _tavily_month_count()
-            if used >= TAVILY_MONTHLY_BUDGET:
-                log.info(f'  → Firecrawl empty; Tavily budget spent '
-                         f'({used}/{TAVILY_MONTHLY_BUDGET} this month) — skipping fallback')
-            else:
+        # Tavily fallback — ONLY after a genuine Firecrawl empty (never as a
+        # substitute for a throttled scrape), only for tier-1 firmographic
+        # lookups, only within the monthly budget AND the daily ration.
+        if (paid_allowed and scrape_ran
+                and (not results or not results.get('results'))):
+            if _tavily_budget_ok():
                 log.info('  → Firecrawl empty, falling back to Tavily')
                 SEARCH_COUNTS['tavily'] += 1
-                _tavily_month_count(increment=True)
                 results = _tavily_search(company_name, industry_hint)
+                if results and results.get('results'):
+                    _tavily_month_count(increment=True)
+                    _tavily_day_count(increment=True)
+            else:
+                log.info(f'  → Firecrawl empty; Tavily ration exhausted '
+                         f'(month {_tavily_month_count()}/{TAVILY_MONTHLY_BUDGET}, '
+                         f'today {_tavily_day_count()}/{TAVILY_DAILY_RATION}) — deferring')
+                budget.deferred = True
+                return {'deferred': True}
+        if not scrape_ran and not (results and results.get('results')):
+            # Throttled/defer mode: this is NOT 'searched and found nothing'.
+            # Signal DEFER so the event is retried free on a later run.
+            budget.deferred = True
+            return {'deferred': True}
     else:
         log.warning(f'  Unknown SEARCH_BACKEND={SEARCH_BACKEND!r}, defaulting to firecrawl')
         SEARCH_COUNTS['firecrawl'] += 1
@@ -1275,8 +1474,11 @@ def enrich_one_company(company_name: str, industry_hint: str = '',
              'revenue_source': None, 'hq': None, 'linkedin': None}
 
     search = {} if no_search else tavily_search(company_name, industry_hint)
+    deferred = bool(search.get('deferred'))
+    if deferred:
+        search = {}
     if not search.get('results') and not (article_context or '').strip():
-        return empty  # nothing to extract from at all
+        return dict(empty, deferred=deferred)  # nothing to extract from at all
 
     lines = []
     if search.get('answer'):
@@ -1309,7 +1511,7 @@ def enrich_one_company(company_name: str, industry_hint: str = '',
     if (not no_search and data is not None
             and not (data.get('hq') and data.get('revenue')
                      and data.get('size'))):
-        probe = tavily_search(company_name, 'zoominfo')
+        probe = tavily_search(company_name, 'zoominfo', paid_ok=False)
         if probe.get('results'):
             _probe_results = probe['results']
             plines = [
@@ -1368,6 +1570,7 @@ def enrich_one_company(company_name: str, industry_hint: str = '',
         'revenue_source': revenue_src,
         'hq':             data.get('hq')       or None,
         'linkedin':       data.get('linkedin') or None,
+        'deferred':       deferred,
     }
 
 
@@ -1504,7 +1707,9 @@ NOTE: a solo #NewCFO (no other hashtag) = 5 points = Grade B — this is \
 intentional: a new CFO is the single highest-value NetSuite sales trigger.
 - **#NewController (+3)** — Controller, VP Accounting, or Chief Accounting \
 Officer hired within last 18 months. Use this INSTEAD of #NewCFO when the \
-role is Controller / VP Accounting / Chief Accounting (not CFO-track).
+role is Controller / VP Accounting / Chief Accounting (not CFO-track). \
+ALSO apply (+3) when event_type=finance_seat_open — the company is HIRING \
+a CFO/Controller (open seat, job posting); never #NewCFO for an open seat.
 - **#Funding (+3)** — Verified funding/financing/recapitalization within \
 last 18 months for a FOR-PROFIT company. Apply if event_type=funding. DO \
 NOT apply to nonprofit grants/donations or companies BEING acquired.
@@ -1726,7 +1931,7 @@ def probe_funding_history(company_name: str) -> str:
     """Search for funding events (rubric: #Funding = verified within last
     18 months). Returns a compact evidence block ('' if nothing)."""
     try:
-        res = tavily_search(company_name, 'funding round investment raised')
+        res = tavily_search(company_name, 'funding round investment raised', paid_ok=False)
         hits = (res or {}).get('results') or []
         if not hits:
             return ''
@@ -1746,7 +1951,7 @@ def probe_aum(company_name: str) -> str:
     """Search for AUM/AUA evidence for asset managers (rubric:
     #AssetManagerScale). Returns a compact evidence block ('' if nothing)."""
     try:
-        res = tavily_search(company_name, 'AUM assets under management funds')
+        res = tavily_search(company_name, 'AUM assets under management funds', paid_ok=False)
         hits = (res or {}).get('results') or []
         if not hits:
             return ''
@@ -1772,8 +1977,7 @@ def probe_complexity(company_name: str) -> str:
     this ("has locations in the United States, Canada, ..."), as do the
     companies' own locations/franchise pages. Returns '' if nothing."""
     try:
-        res = tavily_search(company_name,
-                            'locations offices subsidiaries franchise')
+        res = tavily_search(company_name, 'locations offices subsidiaries franchise', paid_ok=False)
         hits = (res or {}).get('results') or []
         if not hits:
             return ''
@@ -1857,28 +2061,21 @@ def gather_extra_evidence(event: dict, companies_data: list,
         b = probe_nonprofit_990(name)
         if b:
             blocks.append(b)
-    else:
-        # For-profits: funding lookback (skip when the event IS the funding
-        # announcement — that evidence is already in the title/description)
-        if (event.get('event_type') or '') != 'funding':
+    # v2: at most ONE web-search probe per account, scrape-only, chosen by
+    # what the rubric most needs. (v1 fired up to three, each a separate
+    # paid-eligible ladder call.) Nonprofit 990 is a free HTTP API, not a
+    # search, so it never counts.
+    et = (event.get('event_type') or '')
+    if vertical != NONPROFIT_VERTICAL:
+        if zi in ASSET_MANAGER_SUBINDUSTRIES:
+            b = probe_aum(name)
+        elif (et in ('cfo_hire', 'finance_seat_open', 'merger_acquisition', 'funding')
+              and fit.get('verdict') == 'pass'):
+            b = probe_complexity(name)
+        elif et != 'funding':
             b = probe_funding_history(name)
-            if b:
-                blocks.append(b)
-
-    # Asset managers → AUM/AUA for #AssetManagerScale
-    if zi in ASSET_MANAGER_SUBINDUSTRIES:
-        b = probe_aum(name)
-        if b:
-            blocks.append(b)
-
-    # Complexity probe — only for events that can actually reach Grade A:
-    # a high-intent trigger type on a company whose fit isn't a hard fail.
-    # (A = 8+ points; the +2 complexity signals are the usual gap between
-    # a 5-point trigger and an 8-point A. One extra ladder search, cached.)
-    if ((event.get('event_type') or '') in
-            ('cfo_hire', 'merger_acquisition', 'funding')
-            and fit.get('verdict') != 'fail'):
-        b = probe_complexity(name)
+        else:
+            b = ''
         if b:
             blocks.append(b)
 
@@ -1965,13 +2162,22 @@ def grade_event(event: dict, companies_data: list,
     # description must state the role, or the tag is stripped.
     _evid_text = ' '.join([(event.get('title') or ''),
                            (event.get('description') or '')]).lower()
-    if '#NewCFO' in hashtags and not (
-            event.get('event_type') == 'cfo_hire'
-            or any(p in _evid_text for p in _CFO_EQUIV_PATTERNS)):
-        hashtags.remove('#NewCFO')
-    if '#NewController' in hashtags and not any(
-            p in _evid_text for p in _CONTROLLER_PATTERNS):
-        hashtags.remove('#NewController')
+    _et = event.get('event_type')
+    if _et == 'finance_seat_open':
+        # An OPEN finance seat (job posting) is a +3 Controller-equivalent
+        # trigger (A.J. 2026-09-06), never a seated new CFO.
+        if '#NewCFO' in hashtags:
+            hashtags.remove('#NewCFO')
+        if '#NewController' not in hashtags:
+            hashtags.append('#NewController')
+    else:
+        if '#NewCFO' in hashtags and not (
+                _et == 'cfo_hire'
+                or any(p in _evid_text for p in _CFO_EQUIV_PATTERNS)):
+            hashtags.remove('#NewCFO')
+        if '#NewController' in hashtags and not any(
+                p in _evid_text for p in _CONTROLLER_PATTERNS):
+            hashtags.remove('#NewController')
 
     # ── DETERMINISTIC scoring + grade (overrides LLM math) ──────────────
     if llm_says_unable:
@@ -2023,6 +2229,8 @@ def enrich_events(
     missing_fit_only: bool = False,
     reverify_unverified: bool = False,
     complexity_sweep: bool = False,
+    estimate_only: bool = False,
+    confirm_credits: int = None,
 ):
     check_required_keys()
     client  = get_supabase()
@@ -2043,7 +2251,7 @@ def enrich_events(
     # research_notes. Without it, the TAL prompt receives empty article_url
     # and the LLM has no primary source to reference.
     query = client.table('events').select(
-        'id, company_name, event_type, title, description, source_url'
+        'id, company_name, event_type, title, description, source_url, fit'
     )
     if not re_enrich and col_ok.get('enriched_at'):
         query = query.is_('enriched_at', 'null')
@@ -2058,7 +2266,7 @@ def enrich_events(
         # get uncapped (A becomes reachable) or tombstoned if confirmed-out;
         # still-unknown stay flagged. Run when the search backend is healthy
         # (e.g. after burst throttling subsided).
-        query = query.eq('fit->>verdict', 'unverified')
+        query = query.in_('fit->>verdict', ['unverified', 'staged'])
     if complexity_sweep and col_ok.get('fit'):
         # A-hunt mode: fit-CONFIRMED Grade-B events with a high-intent
         # trigger type — the only population the complexity probe
@@ -2085,12 +2293,48 @@ def enrich_events(
     # they're visible (just ungraded) much sooner regardless.
     result = query.order('discovered_at', desc=False).execute()
     events = result.data or []
+
+    if reverify_unverified:
+        # v2: re-verification is RANKED and CAPPED — best trigger types first,
+        # fewest unknown dimensions first — never the whole backlog at once.
+        _prio = {'cfo_hire': 0, 'finance_seat_open': 1, 'merger_acquisition': 2,
+                 'funding': 3}
+        def _unknown_dims(ev):
+            f = ev.get('fit') or {}
+            if isinstance(f, str):
+                try:
+                    f = json.loads(f)
+                except Exception:
+                    f = {}
+            return sum(1 for r in (f.get('reasons') or []) if 'unverified' in str(r))
+        events.sort(key=lambda ev: (_prio.get(ev.get('event_type'), 9), _unknown_dims(ev)))
+        if not limit:
+            limit = 50
+            log.info('Re-verify capped at 50 events/run (ranked by trigger value); '
+                     'pass --limit to change')
     if limit:
         events = events[:limit]
 
     if not events:
         log.info('No unenriched events — nothing to do.')
         return
+
+    if estimate_only or (re_enrich and confirm_credits is not None):
+        n = len(events)
+        est_searches = n * 2
+        est_tavily = int(round(est_searches * 0.3))
+        month_used = _tavily_month_count()
+        log.info(f'ESTIMATE: {n} events → ~{est_searches} searches → ~{est_tavily} '
+                 f'Tavily credits (30% fallback rate); month used {month_used}/'
+                 f'{TAVILY_MONTHLY_BUDGET}, daily ration {TAVILY_DAILY_RATION}')
+        if estimate_only:
+            return
+        if confirm_credits is not None and confirm_credits < est_tavily:
+            sys.exit(f'Refusing: --confirm-credits {confirm_credits} < estimate '
+                     f'{est_tavily}. Re-run with --limit or a higher confirmation.')
+    elif re_enrich and len(events) > 50 and not dry_run:
+        sys.exit(f'Bulk mode over {len(events)} events needs a pre-flight: run with '
+                 f'--estimate, then --confirm-credits N (or --limit ≤ 50).')
 
     tag = 'DRY RUN — ' if dry_run else ''
     log.info(f'{tag}Processing {len(events)} event(s)')
@@ -2099,6 +2343,9 @@ def enrich_events(
     firm_cache: dict = {}
     reset_search_counts()
     ok = fail = 0
+    dispositions = _load_rep_dispositions(client)
+    if dispositions:
+        log.info(f'Loaded {len(dispositions)} rep account verdict(s) — decided accounts skip research')
 
     for idx, event in enumerate(events, 1):
         eid   = event['id']
@@ -2143,9 +2390,76 @@ def enrich_events(
         co_summary = ', '.join(f'{c["name"]} ({c["role"]})' for c in companies)
         log.info(f'  Companies: {co_summary}')
 
+        # ── v2 pre-search gates (all free; run BEFORE any LLM/search spend) ──
+        _ctx_text = f"{event.get('title') or ''} {event.get('description') or ''}"
+        _kept = [c for c in companies
+                 if not is_bad_company_name(c.get('name') or '', _ctx_text)]
+        if len(_kept) < len(companies):
+            log.info('  → Dropping junk company name(s): '
+                     + ', '.join(c['name'] for c in companies if c not in _kept))
+        companies = _kept
+        if not companies:
+            log.info('  🚫 No real company name extracted — soft-deleting.')
+            if not dry_run:
+                _soft_delete(client, eid, 'bad_company_name: no real company name extracted')
+            ok += 1
+            continue
+        if not any((c.get('role') or '').lower() in WORKABLE_ROLES for c in companies):
+            log.info('  🚫 No workable-role company (advisors/investors only) — soft-deleting.')
+            if not dry_run:
+                _soft_delete(client, eid, 'no_workable_account: only advisor/investor/'
+                                          'mentioned roles extracted')
+            ok += 1
+            continue
+        _rep = _rep_verdict_for(companies, dispositions)
+        if _rep:
+            _rname, _rstatus = _rep
+            _mini = [{'name': c['name'], 'role': c['role']} for c in companies]
+            if _rstatus in REP_NOT_FIT_STATUSES:
+                log.info(f'  🚫 Rep verdict "{_rstatus}" on {_rname} — soft-deleting, no research.')
+                if not dry_run:
+                    _soft_delete(client, eid, f'rep:{_rstatus} ({_rname[:60]})',
+                                 extra={'companies_data': _mini})
+            else:
+                log.info(f'  ✋ Rep verdict "{_rstatus}" on {_rname} — decided, no research.')
+                if not dry_run:
+                    _pl = {'companies_data': _mini,
+                           'fit': {'verdict': 'decided', 'account_name': _rname,
+                                   'territory': 'n/a', 'revenue': 'n/a', 'vertical': 'n/a',
+                                   'reasons': [f'rep: {_rstatus}']}}
+                    if col_ok.get('enriched_at'):
+                        _pl['enriched_at'] = datetime.utcnow().isoformat()
+                    try:
+                        client.table('events').update(_pl).eq('id', eid).execute()
+                    except Exception as _e:
+                        log.warning(f'  write failed: {_e}')
+            ok += 1
+            continue
+        _sv = _structured_verdict(event)
+        if _sv['verdict'] in ('out', 'vehicle', 'too_small'):
+            log.info(f'  🚫 Structured gate ({_sv["verdict"]}): {_sv["reason"]} — soft-deleting.')
+            if not dry_run:
+                _soft_delete(client, eid, f'structured:{_sv["verdict"]}: {_sv["reason"]}')
+            ok += 1
+            continue
+        _workable_ops = [c for c in companies
+                         if (c.get('role') or '').lower() in WORKABLE_ROLES
+                         and not is_non_operating_entity(c.get('name') or '',
+                                                         c.get('descriptor') or '')[0]]
+        if not _workable_ops:
+            _kinds = {is_non_operating_entity(c.get('name') or '', c.get('descriptor') or '')[1]
+                      for c in companies if (c.get('role') or '').lower() in WORKABLE_ROLES}
+            log.info(f'  🚫 Every workable company is a non-operating entity '
+                     f'({", ".join(sorted(k for k in _kinds if k))}) — soft-deleting.')
+            if not dry_run:
+                _soft_delete(client, eid, 'entity_shape:' + ','.join(sorted(k for k in _kinds if k)))
+            ok += 1
+            continue
+
         # ── 2. Enrich each company ────────────────────────────────────────
         tier = _event_search_tier(event)
         _SEARCH_TIER['tier'] = tier
+        _BUDGET['obj'] = SearchBudget(tier)
         if tier == 3:
             log.info('  Search tier 3 (micro-raise/minimal) — grading from '
                      'article evidence only, no web searches')
@@ -2176,8 +2490,9 @@ def enrich_events(
                 continue
             # (b) Auto-fail names (public school districts) fail the fit
             #     gate on name alone — researching them is pure waste.
-            if _is_public_school_district(name):
-                log.info(f'  → Skipping search (public school district): {name}')
+            _nonop_kind = is_non_operating_entity(name, co.get('descriptor') or '')[1]
+            if _is_public_school_district(name) or _nonop_kind:
+                log.info(f'  → Skipping search ({_nonop_kind or "public school district"}): {name}')
                 enriched.append({'name': name, 'role': role, 'url': None,
                                  'industry': None, 'zi_subindustry': None,
                                  'size': None, 'revenue': None,
@@ -2240,6 +2555,12 @@ def enrich_events(
                             'A7': 'PE', 'A8': 'QC'}.get(m.group(1), m.group(1))
                     firm = dict(firm, hq=code)
                     log.info(f'     hq seeded from SEC filing: {code}')
+            if (not firm.get('revenue') and _sv.get('revenue_segment') in ('LMM', 'MM', 'Corp')
+                    and name.strip().lower() ==
+                        (event.get('company_name') or '').strip().lower()):
+                firm = dict(firm, revenue=_sv['revenue_segment'],
+                            revenue_source='SEC Form D declared revenue range')
+                log.info(f'     revenue seeded from Form D declared range: {_sv["revenue_segment"]}')
 
             found = [f'{k}: {v}' for k, v in firm.items() if v]
             if found:
@@ -2272,7 +2593,8 @@ def enrich_events(
             )
             if not dry_run:
                 _soft_delete(client, eid,
-                             f'industry: {primary.get("industry")} (matched "{kw}")')
+                             f'industry: {primary.get("industry")} (matched "{kw}")',
+                             extra={'companies_data': enriched})
             ok += 1  # count as processed (not failed)
             continue
 
@@ -2281,11 +2603,41 @@ def enrich_events(
         # on any dimension → soft-delete. Unknowns → keep, cap grade at B,
         # flag for a 10-second rep verification.
         fit = apply_fit_gates(enriched)
+        _event_deferred = any(c.get('deferred') for c in enriched)
+        for c in enriched:
+            c.pop('deferred', None)
         if fit['verdict'] == 'fail':
             log.info(f'  🚫 Fit gate FAIL — {"; ".join(fit["reasons"])}. '
                      f'Soft-deleting.')
             if not dry_run:
-                _soft_delete(client, eid, f'fit_gate: {"; ".join(fit["reasons"])}')
+                _soft_delete(client, eid, f'fit_gate: {"; ".join(fit["reasons"])}',
+                             extra={'companies_data': enriched, 'fit': fit})
+            ok += 1
+            continue
+        if fit['verdict'] == 'staged':
+            # Vertical unknown → hidden from reps, no grading spend. If the
+            # search was throttled/deferred, leave enriched_at NULL so the
+            # next run retries for free (up to 3 attempts).
+            _prev = event.get('fit') or {}
+            if isinstance(_prev, str):
+                try:
+                    _prev = json.loads(_prev)
+                except Exception:
+                    _prev = {}
+            attempts = int(_prev.get('deferred_attempts') or 0) + (1 if _event_deferred else 0)
+            fit['deferred_attempts'] = attempts
+            log.info(f'  ⏸  Staged (vertical unknown{", search deferred" if _event_deferred else ""}) '
+                     f'— hidden; attempt {attempts}')
+            if not dry_run:
+                _pl = {'companies_data': enriched}
+                if col_ok.get('fit'):
+                    _pl['fit'] = fit
+                if col_ok.get('enriched_at') and not (_event_deferred and attempts < 3):
+                    _pl['enriched_at'] = datetime.utcnow().isoformat()
+                try:
+                    client.table('events').update(_pl).eq('id', eid).execute()
+                except Exception as _e:
+                    log.warning(f'  write failed: {_e}')
             ok += 1
             continue
         if fit['verdict'] == 'unverified':
@@ -2418,7 +2770,8 @@ def enrich_events(
         # Controller/VP-Accounting hires stay executive_hire — relabeling them
         # caused a #NewCFO(+5) vs #NewController(+3) double-count on regrade.
         current_etype = (event.get('event_type') or '').lower()
-        if current_etype != 'cfo_hire' and _finance_role(event) == 'cfo':
+        if (current_etype not in ('cfo_hire', 'finance_seat_open')
+                and _finance_role(event) == 'cfo'):
             payload['event_type'] = 'cfo_hire'
             log.info(f'    Reclassifying event_type {current_etype!r} → cfo_hire')
 
@@ -2452,7 +2805,10 @@ def enrich_events(
         f'Searches: {sum(sc.values())} '
         f'(cache:{sc["cache"]} firecrawl:{sc["firecrawl"]} '
         f'tavily:{sc["tavily"]} '
-        f'throttled:{sc.get("throttled", 0)})'
+        f'throttled:{sc.get("throttled", 0)} '
+        f'budget_skipped:{sc.get("budget_skipped", 0)})  ·  '
+        f'Tavily month {_tavily_month_count()}/{TAVILY_MONTHLY_BUDGET}, '
+        f'today {_tavily_day_count()}/{TAVILY_DAILY_RATION}'
     )
 
 
@@ -2720,6 +3076,12 @@ if __name__ == '__main__':
                    help='With --re-enrich: only fit-confirmed Grade-B events '
                         'with a high-intent trigger — runs the complexity '
                         'probe so eligible B accounts can reach Grade A')
+    p.add_argument('--estimate',      action='store_true',
+                   help='Pre-flight only: count eligible events and print the '
+                        'projected search/Tavily cost, then exit')
+    p.add_argument('--confirm-credits', type=int, default=None,
+                   help='Required for bulk --re-enrich runs over 50 events: the '
+                        'number of Tavily credits you accept spending')
     p.add_argument('--dry-run',       action='store_true',
                    help='Preview without writing to Supabase')
     args = p.parse_args()
@@ -2736,4 +3098,6 @@ if __name__ == '__main__':
             missing_fit_only=args.missing_fit_only,
             reverify_unverified=args.reverify_unverified,
             complexity_sweep=args.complexity_sweep,
+            estimate_only=args.estimate,
+            confirm_credits=args.confirm_credits,
         )

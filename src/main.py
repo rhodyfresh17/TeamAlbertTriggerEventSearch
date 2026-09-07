@@ -12,6 +12,7 @@ Usage:
 """
 
 import argparse
+import re
 import signal
 import sys
 import time
@@ -21,7 +22,7 @@ from typing import List
 
 import yaml
 
-from .models import TriggerEvent
+from .models import TriggerEvent, EventSource
 from .database import DatabaseManager
 from .alerts import AlertManager
 from .scrapers import (
@@ -29,15 +30,32 @@ from .scrapers import (
     FinSMEsScraper, SECScraper, FormDScraper, AdzunaScraper,
 )
 from .enrichment import CompanyEnricher
+from .pipeline.gates import account_key
 
-# Import Supabase sync for cloud dashboard
-try:
-    import sys
-    sys.path.insert(0, str(Path(__file__).parent.parent))
-    from supabase_sync import sync_to_supabase
-    SUPABASE_SYNC_AVAILABLE = True
-except ImportError:
-    SUPABASE_SYNC_AVAILABLE = False
+# NOTE: Supabase sync is NOT called from here. The GitHub Actions workflow's
+# "Sync to Supabase" step (supabase_sync.py) is the single sync path; calling
+# it from the scrape cycle was a no-op in CI and a landmine locally.
+
+
+def _job_posting_dedup_key(event: TriggerEvent) -> str:
+    """Composite dedup identity for job postings (Adzuna): the ACCOUNT plus
+    the normalized job title. One national posting that Adzuna lists under
+    five territory states arrives as five URLs with the same company +
+    title — that is ONE open seat, so it must collapse to ONE lead.
+
+    Key = 'job|<account_key(company)>|<normalized title>'. The job title is
+    the part after ' hiring: ' in the templated event title; falls back to
+    the whole title when the template is absent.
+    """
+    title = (event.title or '').strip()
+    if ' hiring: ' in title:
+        job_title = title.split(' hiring: ', 1)[1]
+    else:
+        job_title = title
+    norm_title = re.sub(r'[^a-z0-9]+', ' ', job_title.lower()).strip()
+    company = account_key(event.company_name) or account_key(
+        title.split(' hiring: ', 1)[0] if ' hiring: ' in title else '')
+    return f'job|{company}|{norm_title}'
 
 
 class TriggerEventMonitor:
@@ -61,7 +79,7 @@ class TriggerEventMonitor:
             FinSMEsScraper(self.config),
             SECScraper(self.config),
             FormDScraper(self.config),
-            AdzunaScraper(self.config),
+            AdzunaScraper(self.config, db=self.db),
         ]
 
         if self.enricher.enabled:
@@ -116,14 +134,17 @@ class TriggerEventMonitor:
                 print(f"  Error: {e}")
 
         # Filter for new events (not seen before) and recent events only.
-        # Two-pass dedup:
-        #   1. URL-based (existing) — catches scraping the same URL twice
-        #   2. Title-based (new) — catches syndicated press releases that
-        #      appear at different URLs (e.g. Globe Newswire + Financial Post
-        #      both publishing the same release with different URLs)
+        # Three dedup channels, all persistent across runs via SQLite:
+        #   1. URL-based — catches scraping the same URL twice
+        #   2. Title-based — catches syndicated press releases that appear
+        #      at different URLs (e.g. Globe Newswire + Financial Post both
+        #      publishing the same release); SEC templated titles exempt
+        #   3. Job-posting key (account_key(company) + normalized job title)
+        #      — collapses one Adzuna posting fanned out across N states
         old_events_skipped = 0
         title_dupes_skipped = 0
         seen_titles_this_run: set = set()
+        seen_job_keys_this_run: set = set()
 
         for event in all_events:
             # Check if event is too old
@@ -139,23 +160,43 @@ class TriggerEventMonitor:
             if self.db.has_seen_url(event.url):
                 continue
 
-            # Title dedup catches syndicated press releases (same real headline
-            # republished at different URLs). But it must SKIP machine-templated
-            # titles: SEC "SEC 8-K Item X — Company" and Adzuna "{Co} hiring: X"
-            # collide across DISTINCT items (a company filing multiple 8-Ks of
-            # the same item type, weeks apart, produces identical titles). Those
-            # are separate real events, deduped correctly by URL above. Applying
-            # title-dedup to them silently drops legitimate filings.
             title_key = (event.title or '').strip().lower()
-            is_templated = title_key.startswith('sec 8-k') or ' hiring: ' in title_key
-            if title_key and not is_templated:
-                if title_key in seen_titles_this_run:
+            is_job_posting = (event.source == EventSource.ADZUNA
+                              or ' hiring: ' in title_key)
+
+            if is_job_posting:
+                # Job postings (Adzuna) dedup on (account_key(company),
+                # normalized job title) — NOT on the raw title, and NOT
+                # exempt. Adzuna lists one national posting under every
+                # territory state with a different redirect_url each, so URL
+                # dedup lets 5 copies through; this collapses them to ONE.
+                # Persistent across runs via the dedup_keys table.
+                job_key = _job_posting_dedup_key(event)
+                if job_key in seen_job_keys_this_run:
                     title_dupes_skipped += 1
                     continue
-                if self.db.has_recent_event_title(title_key, hours=max_age_hours):
+                if self.db.has_recent_dedup_key(job_key, hours=max_age_hours):
                     title_dupes_skipped += 1
                     continue
-                seen_titles_this_run.add(title_key)
+                seen_job_keys_this_run.add(job_key)
+                self.db.mark_dedup_key(job_key)
+            else:
+                # Title dedup catches syndicated press releases (same real
+                # headline republished at different URLs). It must SKIP the
+                # machine-templated SEC titles "SEC 8-K Item X — Company":
+                # a company filing multiple 8-Ks of the same item type, weeks
+                # apart, produces identical titles that are DISTINCT filings,
+                # deduped correctly by URL above. Applying title-dedup to
+                # them silently drops legitimate filings.
+                is_templated = title_key.startswith('sec 8-k')
+                if title_key and not is_templated:
+                    if title_key in seen_titles_this_run:
+                        title_dupes_skipped += 1
+                        continue
+                    if self.db.has_recent_event_title(title_key, hours=max_age_hours):
+                        title_dupes_skipped += 1
+                        continue
+                    seen_titles_this_run.add(title_key)
 
             new_events.append(event)
             self.db.mark_url_seen(event.url)
@@ -164,7 +205,7 @@ class TriggerEventMonitor:
         print(f"\n{'-'*40}")
         print(f"Total potential events: {len(all_events)}")
         print(f"Skipped (older than {max_age_hours}h): {old_events_skipped}")
-        print(f"Skipped (duplicate titles, syndicated): {title_dupes_skipped}")
+        print(f"Skipped (duplicate titles / duplicate job postings): {title_dupes_skipped}")
         print(f"New events (not seen before): {len(new_events)}")
 
         # Send alerts for all new events (no company verification)
@@ -177,16 +218,8 @@ class TriggerEventMonitor:
         else:
             print("\nNo new events this cycle.")
 
-        # Sync to Supabase for cloud dashboard
-        if SUPABASE_SYNC_AVAILABLE:
-            print("\nSyncing to Supabase for cloud dashboard...")
-            try:
-                sync_to_supabase()
-            except Exception as e:
-                print(f"Supabase sync failed (dashboard may be stale): {e}")
-        else:
-            print("\nNote: Supabase sync not available. Run 'pip install supabase' for cloud dashboard.")
-
+        # Supabase sync happens in the GitHub Actions workflow step
+        # (supabase_sync.py), never from the scrape cycle.
         return new_events
 
     def _send_alerts(self, events: List[TriggerEvent]):

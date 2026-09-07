@@ -2,8 +2,9 @@
 """
 monitor_health.py — End-to-end health check for TeamAlbertTriggerEventSearch.
 
-Designed to be run periodically by Elon (or as a launchd cron) to catch
-issues before A.J. notices them in the dashboard.
+Designed to be run periodically as a launchd cron (com.teamalbert.healthcheck)
+to catch issues before A.J. notices them in the dashboard. Scout reads the
+resulting logs/health_alerts.log and summarises it Mondays.
 
 Usage:
     python monitor_health.py            # default = --quick (~10s)
@@ -15,12 +16,23 @@ Usage:
 Exit codes:
     0  — all checks PASS, or any WARN
     1  — at least one FAIL (cron/CI can detect)
+
+Cost rule (2026-09-06): this script never spends a paid credit. Tavily is
+judged from the local `tavily_usage` counter, never by calling the API.
+Firecrawl is judged by a single free local search (the "usefulness canary").
+
+State files (state/, gitignored — created on first run):
+    state/search_mode              'ok' | 'defer' — enrichment_scout.py reads this;
+                                   'defer' after 2 consecutive empty Firecrawl canaries
+    state/firecrawl_empty_streak   consecutive empty canaries (int)
+    state/lead_status_nonnew.txt   previous run's count of rep-set lead_status rows
 """
 
 import os
 import sys
 import json
 import argparse
+import calendar
 import sqlite3
 import requests
 from pathlib import Path
@@ -49,6 +61,33 @@ FAIL = '🔴 FAIL'
 # Symbols stripped for --json mode
 PLAIN = {PASS: 'pass', WARN: 'warn', FAIL: 'fail'}
 
+PROJECT_DIR = Path(__file__).parent
+DB_PATH = PROJECT_DIR / 'trigger_events.db'   # same file enrichment_scout.py's CACHE_DB_PATH defaults to
+STATE_DIR = PROJECT_DIR / 'state'
+
+
+# ── Tiny state store (plain text files, one value each) ──────────────────────
+
+def _state_read(name: str):
+    """Return the stripped contents of state/<name>, or None if absent/unreadable."""
+    try:
+        return (STATE_DIR / name).read_text().strip()
+    except (FileNotFoundError, OSError):
+        return None
+
+
+def _state_write(name: str, value) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    (STATE_DIR / name).write_text(f'{value}\n')
+
+
+def _state_int(name: str, default: int = 0) -> int:
+    raw = _state_read(name)
+    try:
+        return int(raw) if raw is not None else default
+    except ValueError:
+        return default
+
 
 # ── Individual checks (each returns (status, message)) ───────────────────────
 
@@ -74,70 +113,138 @@ def check_env_creds():
     return PASS, 'All env vars set'
 
 
-def check_firecrawl():
-    """Verify the PRIMARY search backend (local Firecrawl) is reachable.
-    This is the one that matters — ~97% of enrichment searches go here."""
+FIRECRAWL_CANARY_QUERY = 'Bank of America headquarters'
+FIRECRAWL_DEFER_AFTER = 2   # consecutive empty canaries before state/search_mode = defer
+
+
+def check_firecrawl_canary():
+    """USEFULNESS canary for the PRIMARY search backend (local Firecrawl).
+
+    A liveness ping (GET /) said "up" while Firecrawl's search — DuckDuckGo
+    from the Mac's single home IP — was returning empty ~70% of the time, and
+    every empty answer escalated an event to paid Tavily. So we ask it a
+    question any working search engine answers: {"query": "Bank of America
+    headquarters", "limit": 3}. One free local call, no paid credit.
+
+    PASS  ≥1 result → state/search_mode = ok, empty streak reset.
+    WARN  0 results → empty streak +1; after FIRECRAWL_DEFER_AFTER in a row,
+          state/search_mode = defer (enrichment_scout.py reads this and holds
+          off paid escalation until a canary succeeds again).
+    FAIL  unreachable → search backend DOWN; streak/mode left unchanged
+          (down ≠ throttled — enrichment already refuses to run without it).
+    """
     url = os.environ.get('FIRECRAWL_URL', 'http://localhost:3002')
     try:
-        # Hit the root — Firecrawl returns 200 with a small JSON banner.
-        resp = requests.get(f'{url}/', timeout=8)
-        if resp.status_code == 200:
-            return PASS, f'Firecrawl reachable at {url} (primary search backend)'
-        return WARN, (
-            f'Firecrawl at {url} returned HTTP {resp.status_code} — '
-            f'enrichment will lean on the Tavily fallback. '
-            f'Check: docker compose ps firecrawl-api-1'
+        resp = requests.post(
+            f'{url}/v1/search',
+            json={'query': FIRECRAWL_CANARY_QUERY, 'limit': 3},
+            timeout=25,
         )
     except requests.ConnectionError:
         return FAIL, (
             f'Firecrawl not reachable at {url} — enrichment search backend '
-            f'is DOWN. Start it: docker compose up -d firecrawl-api-1'
+            f'is DOWN. Start it: docker compose up -d firecrawl-api-1 '
+            f'(state/search_mode unchanged)'
         )
     except requests.Timeout:
-        return WARN, f'Firecrawl slow to respond (>8s) at {url}'
+        return WARN, f'Firecrawl canary timed out (>25s) at {url} — could not judge search usefulness'
     except Exception as e:
-        return WARN, f'Firecrawl check error: {e}'
+        return WARN, f'Firecrawl canary error: {e}'
+
+    n_results, note = 0, ''
+    if resp.status_code == 200:
+        try:
+            body = resp.json()
+        except ValueError:
+            body = {}
+        if body.get('success', True):
+            n_results = len(body.get('data') or [])
+        else:
+            note = f' (success=false: {str(body.get("error", ""))[:60]})'
+    else:
+        note = f' (HTTP {resp.status_code})'
+
+    if n_results >= 1:
+        _state_write('search_mode', 'ok')
+        _state_write('firecrawl_empty_streak', 0)
+        return PASS, (
+            f'Firecrawl search useful — {n_results} result(s) for '
+            f'"{FIRECRAWL_CANARY_QUERY}"; state/search_mode=ok'
+        )
+
+    streak = _state_int('firecrawl_empty_streak') + 1
+    _state_write('firecrawl_empty_streak', streak)
+    if streak >= FIRECRAWL_DEFER_AFTER:
+        _state_write('search_mode', 'defer')
+        mode_note = ('state/search_mode=defer → enrichment holds off paid Tavily '
+                     'escalation until a canary succeeds')
+    else:
+        mode = _state_read('search_mode') or 'ok'
+        _state_write('search_mode', mode)   # make sure the file exists for enrichment_scout
+        mode_note = f'state/search_mode={mode} (unchanged)'
+    return WARN, (
+        f'Firecrawl search returned 0 results for "{FIRECRAWL_CANARY_QUERY}"{note} '
+        f'— {streak} consecutive empty canar{"y" if streak == 1 else "ies"} '
+        f'(IP throttling likely); {mode_note}'
+    )
 
 
-def check_tavily_fallback():
-    """Check the OPTIONAL Tavily fallback. Tavily is only used ~3% of the
-    time (when Firecrawl returns empty), so problems here are INFORMATIONAL,
-    never a hard failure — a depleted Tavily quota does not break enrichment.
+TAVILY_WARN_PCT = 60
+TAVILY_FAIL_PCT = 85
+TAVILY_PROJECTION_MIN_DAYS = 3   # a run-rate projection on day 1-2 is noise, not signal
 
-    Returns PASS when healthy or when not configured (it's optional). Returns
-    WARN only to surface a depleted/invalid key for awareness, not alarm."""
-    key = os.environ.get('TAVILY_API_KEY', '')
-    if not key:
-        return PASS, 'Tavily fallback not configured (optional — Firecrawl is primary)'
+
+def check_tavily_budget():
+    """Tavily spend vs monthly budget, read from the LOCAL counter — never a
+    live API call. The old probe spent one paid credit every day just to ask
+    "are you there?", and reported PASS on HTTP 429 (quota gone), which is
+    exactly the condition this check exists to catch.
+
+    Source: `tavily_usage` in trigger_events.db, written by
+    enrichment_scout._tavily_month_count() on every paid call (month key is
+    UTC, same as SQLite's strftime('now')). Budget: TAVILY_MONTHLY_BUDGET env
+    (default 900 — same constant enrichment_scout uses to stop escalating).
+
+    PASS  < 60% of budget
+    WARN  60-85%, or run-rate projection over budget in the first 2 days
+    FAIL  ≥ 85%, or linear projection (used / days elapsed × days in month)
+          exceeds the budget from day 3 onward
+    """
     try:
-        resp = requests.post(
-            'https://api.tavily.com/search',
-            json={'api_key': key, 'query': 'test', 'max_results': 1,
-                  'search_depth': 'basic'},
-            timeout=10
-        )
-        if resp.status_code == 200:
-            return PASS, 'Tavily fallback healthy (used for ~3% of searches)'
-        if resp.status_code in (401, 403):
-            return WARN, (
-                f'Tavily fallback key invalid (HTTP {resp.status_code}) — '
-                f'not urgent; Firecrawl handles ~97% of searches. '
-                f'Rotate the key when convenient.'
-            )
-        if resp.status_code in (429, 432):
-            # Quota exhaustion on the free tier is the EXPECTED steady state,
-            # not a problem — Firecrawl handles ~97% of searches. Report as
-            # PASS so it doesn't trigger a daily alert; the message still
-            # carries the info for anyone reading the full report.
-            return PASS, (
-                f'Tavily fallback quota used up (HTTP {resp.status_code}) — '
-                f'expected on free tier, enrichment unaffected (Firecrawl primary)'
-            )
-        return WARN, f'Tavily fallback HTTP {resp.status_code}: {resp.text[:60]}'
-    except requests.Timeout:
-        return PASS, 'Tavily fallback slow (>10s) — non-critical, Firecrawl is primary'
-    except Exception as e:
-        return WARN, f'Tavily fallback check error (non-critical): {e}'
+        budget = int(os.environ.get('TAVILY_MONTHLY_BUDGET', '900') or 900)
+    except ValueError:
+        budget = 900
+    if budget <= 0:
+        return WARN, f'TAVILY_MONTHLY_BUDGET={budget!r} is not a usable budget'
+    if not DB_PATH.exists():
+        return WARN, 'trigger_events.db not present — cannot read the tavily_usage counter'
+    try:
+        with sqlite3.connect(str(DB_PATH)) as conn:
+            row = conn.execute(
+                "SELECT calls FROM tavily_usage WHERE month = strftime('%Y-%m','now')"
+            ).fetchone()
+        used = int(row[0]) if row and row[0] is not None else 0
+    except sqlite3.OperationalError as e:
+        return WARN, f'Could not read tavily_usage counter ({e}) — spend unverified'
+
+    now = datetime.now(timezone.utc)
+    days_elapsed = now.day
+    days_in_month = calendar.monthrange(now.year, now.month)[1]
+    projected = round(used / days_elapsed * days_in_month)
+    pct = used / budget * 100
+    msg = (f'Tavily {used}/{budget} used ({pct:.0f}%) · day {days_elapsed}/{days_in_month} '
+           f'· projected {projected}/month')
+
+    if pct >= TAVILY_FAIL_PCT:
+        return FAIL, msg + (f' — ≥{TAVILY_FAIL_PCT}% of budget; enrichment stops escalating '
+                            f'at the cap, events stay unenriched')
+    if projected > budget:
+        if days_elapsed >= TAVILY_PROJECTION_MIN_DAYS:
+            return FAIL, msg + ' — run-rate will blow the monthly budget; find what is escalating'
+        return WARN, msg + ' — run-rate over budget, but too early in the month to call'
+    if pct >= TAVILY_WARN_PCT:
+        return WARN, msg + f' — past {TAVILY_WARN_PCT}% of budget'
+    return PASS, msg
 
 
 def check_llamacpp():
@@ -292,18 +399,78 @@ def check_enrichment_lag():
         return WARN, f'Could not check enrichment lag: {e}'
 
 
+REP_STATE_DROP_FAIL_PCT = 20
+REP_STATE_FILE = 'lead_status_nonnew.txt'
+
+
+def check_rep_state_intact():
+    """Sanity check that rep work is not being wiped.
+
+    Counts events whose lead_status a rep has set (anything but 'NEW'; NULL
+    counts as untouched) and compares with the count stored from the previous
+    run in state/lead_status_nonnew.txt. Reps only ever ADD statuses, so a
+    drop of more than REP_STATE_DROP_FAIL_PCT% means something is overwriting
+    them — the class of bug supabase_sync.py had until 2026-09-06 (an
+    unpaginated prefetch reset every row past 1,000 to NEW each cycle; only 20
+    of 2,774 survived).
+
+    On FAIL the baseline is deliberately NOT overwritten, so the alarm keeps
+    firing until the count recovers or a human resets the file.
+    """
+    client = get_supabase()
+    if not client:
+        return WARN, 'Supabase unavailable — cannot check'
+    try:
+        r = client.table('events').select('id', count='exact').neq(
+            'lead_status', 'NEW').limit(1).execute()
+        now_n = r.count or 0
+    except Exception as e:
+        return WARN, f'Could not count rep-set lead_status rows: {e}'
+
+    prev_raw = _state_read(REP_STATE_FILE)
+    prev = int(prev_raw) if prev_raw is not None and prev_raw.isdigit() else None
+    if prev is None:
+        _state_write(REP_STATE_FILE, now_n)
+        return PASS, f'{now_n} events carry a rep-set lead_status — baseline recorded (first run)'
+
+    if prev > 0 and now_n < prev * (1 - REP_STATE_DROP_FAIL_PCT / 100):
+        drop = (prev - now_n) / prev * 100
+        return FAIL, (
+            f'Rep-set lead_status count DROPPED {prev} → {now_n} ({drop:.0f}%) since last run '
+            f'— something is overwriting rep work (check supabase_sync.py payload + any '
+            f'bulk script). Baseline kept; once explained, reset with '
+            f'`echo {now_n} > state/{REP_STATE_FILE}`'
+        )
+    _state_write(REP_STATE_FILE, now_n)
+    return PASS, f'{now_n} events carry a rep-set lead_status (previous run: {prev})'
+
+
 def check_local_sqlite():
-    """Verify the local SQLite DB exists and has the expected schema."""
-    db_path = Path(__file__).parent / 'trigger_events.db'
-    if not db_path.exists():
+    """Verify the local SQLite DB exists and has the expected schema.
+
+    WARNs (never PASSes) when the events table is empty: the scraper runs in
+    GitHub Actions and its SQLite — the authoritative dedup history + the
+    rows supabase_sync.py pushes — lives in the Actions cache
+    (trigger-events-db-v2-*), not on this Mac. The local file is only the
+    enrichment cache + Tavily counter. An empty local table is expected here,
+    but it means nothing on this machine can verify what the scraper stored;
+    a 0-row table used to PASS and hid that blind spot."""
+    if not DB_PATH.exists():
         return WARN, 'trigger_events.db not present locally (normal if scraper only runs in CI)'
     try:
-        with sqlite3.connect(str(db_path)) as conn:
+        with sqlite3.connect(str(DB_PATH)) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM events")
             n_events = cursor.fetchone()[0]
             cursor.execute("SELECT COUNT(*) FROM seen_urls")
             n_urls = cursor.fetchone()[0]
+        if n_events == 0:
+            return WARN, (
+                f'Local SQLite has 0 events ({n_urls} seen URLs) — the authoritative '
+                f'scrape DB lives in the GitHub Actions cache (trigger-events-db-v2-*), '
+                f'so nothing local can verify scraped rows; expected on this Mac, but '
+                f'a problem if the scraper is supposed to run here'
+            )
         return PASS, f'Local SQLite OK ({n_events} events, {n_urls} seen URLs)'
     except sqlite3.OperationalError as e:
         return WARN, f'SQLite schema issue: {e}'
@@ -440,12 +607,13 @@ def run_checks(mode: str):
     """Return list of (check_name, status, message)."""
     checks = [
         ('Environment credentials',     check_env_creds),
-        ('Firecrawl (search backend)',  check_firecrawl),
-        ('Tavily fallback',             check_tavily_fallback),
+        ('Firecrawl search canary',     check_firecrawl_canary),
+        ('Tavily budget',               check_tavily_budget),
         ('llama.cpp (local LLM)',       check_llamacpp),
         ('Supabase connection',         check_supabase),
         ('Scrape freshness',            check_scrape_freshness),
         ('Enrichment lag',              check_enrichment_lag),
+        ('Rep state intact',            check_rep_state_intact),
         ('Local SQLite DB',             check_local_sqlite),
         ('launchd enrichment job',      check_launchd_job),
     ]
@@ -509,7 +677,7 @@ def main():
     results = run_checks(mode)
     print_report(results, mode, args.json)
 
-    # Exit non-zero if anything failed (so cron / Elon can detect)
+    # Exit non-zero if anything failed (so cron / the reading agent can detect)
     if any(s == FAIL for _, s, _ in results):
         sys.exit(1)
 

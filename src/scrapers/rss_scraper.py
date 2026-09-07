@@ -264,8 +264,12 @@ class RSSScraper(BaseScraper):
         else:
             # NOT in territory by dateline - apply stricter filtering
 
-            # Skip excluded international locations
-            if self.is_excluded_location(full_text):
+            # Skip excluded (out-of-territory) locations — but ONLY when the
+            # body carries no in-territory city/state signal. An in-territory
+            # match always wins (v2 ordering contract, see
+            # base.py::matches_territory); a false admit is caught by the
+            # enrichment HQ gate, a false reject here is lost forever.
+            if not in_territory and self.is_excluded_location(full_text):
                 return None
 
             # If no trigger event, skip
