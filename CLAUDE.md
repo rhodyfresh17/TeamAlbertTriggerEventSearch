@@ -147,7 +147,15 @@ User: **A.J. Albert** — NetSuite Up-Market Sales rep on Team Albert. Non-techn
 ## 0b. v2 (2026-09-07) — cheap-first pipeline, hard exclusions, rationed spend
 
 Ground-up redesign after the 2026-09-04→06 audit (6-lens, 199-agent adversarial
-review; plan file `~/.claude/plans/now-with-the-new-radiant-balloon.md`). Phase 1 shipped
+review; plan file `~/.claude/plans/now-with-the-new-radiant-balloon.md`).
+
+**STATUS 2026-09-08 — ALL FOUR PHASES ARE LIVE.** Commits `747d54d` (Phase 1), `488db2d`
+(Phase 2), `a57924d` (config fix), `c584331` (daily re-verify), `b3bdfb9` (Phase 3), `4a5f24b`
+(Phase 4) are pushed; migrations 001–003 have been run in Supabase (typed columns 2026-09-07,
+`accounts` 2026-09-08, both backfilled); the four Mac jobs are loaded (`enrichment` 6×/day,
+`reverify` 06:30 = expiry + ranked re-verify, `healthcheck` 07:00, `oracles` 2nd 05:00). The
+v2 plan is COMPLETE — the job now is to operate, tune thresholds from evidence, and grow the
+golden set with A.J. See §0b-Phase 4 "Operating posture". Phase 1 shipped
 2026-09-07. **Read this before touching enrichment, scrapers, sync or the dashboard.**
 
 **Governing rules**
@@ -236,7 +244,7 @@ passes never count as attempts** (only `fit.deferred_attempts` moves). Local LLM
 `fit_verdict`, `verify_state`, `hq_state`, `in_territory`, `vertical`, `zi_subindustry`,
 `revenue_segment`, `expires_at`, `sic`, `formd_*`, `enrich_attempts`, `retry_after`,
 `classification_confidence`, `classified_by`; `source_status.items_fetched/filtered_out`.
-**They do not exist until A.J. runs `supabase/migrations/002_v2_typed_columns.sql` in the
+**They exist live since 2026-09-07** (A.J. ran `supabase/migrations/002_v2_typed_columns.sql` in the
 Supabase SQL Editor**, then `venv/bin/python scripts/backfill_typed_columns.py` (dry-run) and
 `--apply` (fills NULLs only; relabels legacy Adzuna rows to `finance_seat_open`). Every
 writer/reader probes (`typed.probe_columns`) and runs JSON-only until then; `typed_payload`
@@ -352,7 +360,8 @@ vertical/subindustry, revenue segment, entity class, fit/verify state, firmograp
 (+ which event earned it), best trigger, event count, and the rep's disposition WITH a reason
 code. Module `src/pipeline/accounts.py` (fill-only merge: facts never downgraded, verified never
 demoted, grade replaced only when better / re-graded / expired; dispositions are rep-owned and
-never touched by enrichment). Until the table exists every reader/writer probes and degrades to
+never touched by enrichment). The table went live 2026-09-08 (003 run + backfill: 2,292 rows, all 8
+rep verdicts carried over); every reader/writer still probes and degrades to
 the Phase 1-3 behaviour.
 
 **One grade per account** (plan, supersedes the 2026-07-17 per-company/headline rule): the
@@ -401,6 +410,25 @@ config tests on every scrape.
 dismissals require a reason code (wrong vertical · out of territory · too big · too small · not a
 real trigger · duplicate · already a customer · other), the Scorecard gets a "why events were
 removed" pivot (reason × source × subindustry), and `expansion` events render with their own card.
+
+**Operating posture (from 2026-09-09).** Nothing needs a human on a schedule. What to read:
+- `#scout-engine` daily: the 06:30 re-verify post (expiry line + `verified:N ambiguous:N staged:N
+  not_fit:N`), the 07:00 health check (WARN/FAIL only; "Source yield … went quiet" is REAL — it
+  repeats until the feed recovers; Adzuna/Google News flags from Sept 8 should clear as the
+  Phase 3 scrapers run), Mondays the weekly lines (finance-leader share vs 30%, vertical mix,
+  finance-leader source mix on change only).
+- The first weeks after 2026-09-08 carry a supply surge (first Phase 3 scrape: 112 events,
+  52 `cfo_hire` vs ~10/day before). Expect more `not_fit` and `staged` for a while; that is
+  the free gates working, not noise. Firecrawl/DuckDuckGo throttling — not Tavily budget — is
+  the search bottleneck; staged rows are retried free.
+- A.J.'s two feedback channels into the tool: dismiss accounts WITH a reason code (dashboard),
+  and mark rows in `tests/golden/accounts.json` `reviewed: true` with a note.
+- Known follow-ups (not blockers): `src/scrapers/base.py` still rejects "Former X executive
+  named CFO" / "Longtime … CFO" / "Taps Industry Veteran … as CFO" titles (hires.py handles
+  them — mirror `_NOT_THE_SEAT_RES`); `_board_only_event` is still substring-based;
+  `scripts/backfill_typed_columns.py` should import `structured_verdict` from
+  `src/pipeline/structured.py`; the post-fit email digest (Phase 2 offer) is unbuilt; DOL 5500 /
+  NCUA / CRA oracles and FDIC structure-change triggers are researched but unbuilt.
 
 ## 1. Architecture (data flow)
 
@@ -892,11 +920,14 @@ will stop working on web search until updated.
 
 ## 7. Recent change history (current state as of today's last commit)
 
-Today's session (commit `14157c2` and back, in chronological order):
+Newest first (v2 phases on top; the older rows are the v1 history):
 
 | Commit | What |
 |---|---|
-| *(2026-09-07, Phase 2)* | Classify-then-research reorder, typed columns (+migration 002, backfill), AccountCache + negative cache, run lock + PAUSE, LLM-outage handling, yield monitoring, sync source column/relabel/reaper, dashboard server-side verify_state filter — see §0b |
+| `4a5f24b` | v2 Phase 4 (2026-09-08): accounts table + backfill, one grade per account, hashtag guards, hire-subject detection, nightly expiry, golden set in CI, orphans deleted — see §0b |
+| `b3bdfb9` | v2 Phase 3 (2026-09-08): finance-leader feeds + detector fixes, Google News revived, free oracles, sec_iapd trigger, domains, supply scorecard — see §0b |
+| `a57924d` / `c584331` | config.example.yaml indentation fix (had failed two Actions runs) · daily re-verify job |
+| `488db2d` | Classify-then-research reorder, typed columns (+migration 002, backfill), AccountCache + negative cache, run lock + PAUSE, LLM-outage handling, yield monitoring, sync source column/relabel/reaper, dashboard server-side verify_state filter — see §0b |
 | `747d54d` | v2 Phase 1: cheap-first gates, hard exclusions, rationed search, honest 'unknown' (2026-09-07) |
 | `6cd73c5` | Rebuilt SEC 8-K scraper using EFTS search API + added PR Newswire Personnel/M&A feeds |
 | `83cb1ca` | Expanded mega-bank exclusion list + added `cleanup_legacy_events.py` |
@@ -982,12 +1013,12 @@ These came up during today's session but were deferred. Surface them when releva
 
 | Priority | Item | Notes |
 |---|---|---|
-| Medium | **Consumer Services feed gap** | Auto Dealers, Real Estate, Personal Care, Repair Services — no dedicated feeds yet. Possibilities: Automotive News, GlobeSt (real estate), Cleanlink Daily. |
-| Medium | **Daily digest email** | Morning email to A.J./team with top fresh Grade A+B leads. Email creds already in GitHub Secrets. |
-| Medium | **Adzuna recruiter blacklist** | Vaco, Robert Half, Korn Ferry, Heidrick & Struggles, JM Search, McCracken Alliance — they post "Hiring: CFO" on behalf of unnamed clients, creating noise. Wait for ~1 week of production data before blocking. |
+| Medium | **Post-fit email digest** (Phase 2 offer to A.J.) | Today's alert email is the raw pre-fit scrape stream (~50% noise). A Mac-side digest of fit-confirmed Grade A/B accounts would replace it. Needs A.J.'s go-ahead. |
+| Medium | **More oracles** | DOL Form 5500 (state + NAICS for consumer services), NCUA credit unions, CRA T3010 (eastern Canada charities) — researched 2026-09-08, feasible as local SQLite tables like `state/oracles.db`. FDIC `/history` structure changes as a bank trigger. |
+| Medium | **Adzuna recruiter blacklist** | Vaco, Robert Half, Korn Ferry, Heidrick & Struggles, JM Search, McCracken Alliance post "Hiring: CFO" for unnamed clients. Judge from the accounts table after a few weeks. |
+| Low | **Hire-detector consolidation** | `src/scrapers/base.py` and `src/pipeline/hires.py` keep two regex sets; base.py still rejects "Former X named CFO" shapes. One shared module in `src/pipeline/` (importable by CI) would end the drift. |
 | Low | **Dashboard polish** | Kanban/pipeline view, hot-lead badges, saved filter presets per user, mobile responsive. |
-| Low | **CLAUDE.md** has stale Canadian SEC state-code comments in `sec_scraper.py:31-38`. The codes A0-A5 are likely wrong (real EDGAR mapping differs); the standard codes ON/QC/NB/NS/PE/NL handle Canadian filings anyway. Worth cleaning up. |
-
+| Low | `sec_scraper.py:31-38` Canadian SEC state-code comments (A0–A5) look wrong; the standard ON/QC/NB/NS/PE/NL codes handle Canadian filings anyway. |
 ---
 
 ## 10. When in doubt
