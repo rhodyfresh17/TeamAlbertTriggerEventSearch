@@ -250,7 +250,7 @@ a scrape-only empty never blocks a later paid attempt). A Firecrawl transport fa
 DEFER, never a known-empty. The legacy `firmographic_cache` table is dead (not migrated).
 Counters: `lookups` (once per search), `firecrawl_attempts` (HTTP calls), `negative_cache`.
 
-**Run safety**: `state/enrichment.lock` (flock; a second run exits 0) and `state/PAUSE`
+**Daily re-verify** (A.J. 2026-09-07): `run_reverify.sh` via `com.teamalbert.reverify.plist` at 06:30 ET runs the ranked, capped re-verify pass and posts the summary line to Mattermost #scout-engine (engine tier). **Run safety**: `state/enrichment.lock` (flock; a second run exits 0) and `state/PAUSE`
 (`touch state/PAUSE` makes `run_enrichment.sh` skip runs — used while editing/migrating;
 delete it to resume). httpx request logging is silenced.
 
@@ -618,6 +618,7 @@ source venv/bin/activate
 | **Pause / resume the launchd enrichment runs** | `touch state/PAUSE` … `rm state/PAUSE` (wrapper skips runs while the file exists) |
 | **Typed-column migration (one-time, A.J.)** | paste `supabase/migrations/002_v2_typed_columns.sql` into Supabase → SQL Editor → Run; then `python scripts/backfill_typed_columns.py` (dry-run) and `--apply` |
 | Re-verify hidden accounts (ranked, capped 50, honors retry_after) | `python enrichment_scout.py --re-enrich --reverify-unverified` |
+| Daily re-verify job (06:30 ET, `com.teamalbert.reverify.plist` → `run_reverify.sh`, posts to #scout-engine) | `tail -f logs/reverify.log` · pause with `touch state/PAUSE` |
 | Re-gate the queue with zero paid search | `python scripts/migrate_v2.py` (dry-run) / `--apply` |
 | Full re-enrich (hits Firecrawl by default; Tavily only on fallbacks ~3%) | `python enrichment_scout.py --re-enrich` |
 | Cleanup industry leaks + dupes (dry-run) | `python cleanup_legacy_events.py` |
