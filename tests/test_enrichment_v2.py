@@ -1276,6 +1276,11 @@ def _phase3_offline(monkeypatch, tmp_path):
                         lambda name, hints=None, **kw: {'domain': None, 'host': None, 'method': None,
                                                         'confidence': None, 'aliases': [], 'evidence': {}},
                         raising=False)
+    # Phase 4 (2026-09-08): the accounts module is another engineer's and
+    # lands concurrently — every test here runs WITHOUT it unless it installs
+    # the AccountsStub below itself, so the real module's probe never reads
+    # the fake events table as an accounts table.
+    monkeypatch.setattr(es, '_accounts', None, raising=False)
 
 
 BANK_HIT = {'kind': 'bank', 'hq': 'Westerly, RI', 'hq_state': 'RI', 'in_territory': True,
@@ -1808,3 +1813,755 @@ def test_p2_k12_label_fails_the_vertical_gate_but_only_on_settled_evidence(env, 
     assert env.fc.calls == [] and env.tv.calls == [] and llm.count('search') == 0
     pl = client.payload_for('ev1')
     assert 'subindustry K-12 Schools' in pl['blocked_reason'] and pl['verify_state'] == 'not_fit'
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 4 slice C2 (2026-09-08): one grade per account, enrich-once, rep
+# verdicts through the accounts table, hashtag guards
+# ═══════════════════════════════════════════════════════════════════════════
+import json  # noqa: E402
+from datetime import timedelta  # noqa: E402
+
+
+class AccountsStub:
+    """Stand-in for src/pipeline/accounts.py (slice C1, another engineer,
+    written concurrently) with EXACTLY the API enrichment codes against.
+    Records every call so the tests can assert on what the hooks did."""
+    REP_NOT_FIT = es.REP_NOT_FIT_STATUSES
+    REP_DECIDED = es.REP_DECIDED_STATUSES
+    TRIGGER_PRIORITY = {'cfo_hire': 0, 'finance_seat_open': 1, 'merger_acquisition': 2,
+                        'funding': 3}
+    account_key = staticmethod(es._gates_account_key)
+
+    def __init__(self, present=True, dispositions=None, fail=False):
+        self.present, self.dispositions, self.fail = present, dispositions or {}, fail
+        self.rows_built, self.upserts, self.touches, self.probe_calls = [], [], [], 0
+        self.new_flags = []          # is_new_event= per upsert (review 2026-09-08, 2c)
+
+    def probe_accounts(self, client):
+        self.probe_calls += 1
+        return self.present
+
+    def build_account_row(self, event, company, fit, grading=None, now=None, *, trigger_live=True):
+        row = {'account_key': es._gates_account_key(company.get('name') or ''),
+               'canonical_name': company.get('name'),
+               'verify_state': typed.verify_state_for((fit or {}).get('verdict')),
+               'grade': (grading or {}).get('grade') if trigger_live else None,
+               'hashtags': list((grading or {}).get('hashtags') or []),
+               'graded_event_id': event.get('id') if (grading and trigger_live) else None,
+               'best_trigger_type': event.get('event_type') if trigger_live else None,
+               'trigger_live': trigger_live}
+        self.rows_built.append(row)
+        return row
+
+    def upsert_account(self, client, row, *, present=None, now=None, is_new_event=None):
+        if self.fail:
+            raise RuntimeError('accounts table exploded')
+        self.upserts.append(copy.deepcopy(row))
+        self.new_flags.append(is_new_event)
+        return True
+
+    def touch_secondary(self, client, company, event, fit, now=None):
+        # the real one refuses non-workable roles and failed fits
+        if (company.get('role') or '').lower() not in es.WORKABLE_ROLES:
+            return False
+        if ((company.get('fit') or {}).get('verdict') or (fit or {}).get('verdict')) == 'fail':
+            return False
+        self.touches.append({'name': company.get('name'), 'event': event.get('id'),
+                             'verdict': (fit or {}).get('verdict')})
+        return True
+
+    def load_dispositions(self, client):
+        return copy.deepcopy(self.dispositions)
+
+
+class _AccountsQuery:
+    """The fake's `accounts` table — enough postgrest surface for the REAL
+    accounts module too: eq / is_ (with not_) filtered selects, order,
+    range, recorded updates, upserts merged into the stored rows."""
+
+    def __init__(self, client):
+        self.client, self.filters, self._update, self._upsert = client, [], None, None
+        self._negate, self._range = False, None
+
+    def select(self, cols='*'):
+        return self
+
+    def limit(self, n):
+        return self
+
+    def order(self, col, desc=False):
+        return self
+
+    def range(self, a, b):
+        self._range = (a, b)
+        return self
+
+    @property
+    def not_(self):
+        self._negate = True
+        return self
+
+    def eq(self, col, v):
+        self.filters.append(('eq', col, v, False))
+        return self
+
+    def is_(self, col, v):
+        self.filters.append(('is', col, v, self._negate))
+        self._negate = False
+        return self
+
+    def update(self, payload):
+        self._update = payload
+        return self
+
+    def upsert(self, payload, on_conflict=None, **kw):
+        self._upsert = payload
+        return self
+
+    def execute(self):
+        if self._update is not None:
+            self.client.account_updates.append(
+                ({c: v for _, c, v, _n in self.filters}, copy.deepcopy(self._update)))
+            return SimpleNamespace(data=[])
+        if self._upsert is not None:
+            self.client.account_upserts.append(copy.deepcopy(self._upsert))
+            key = self._upsert.get('account_key')
+            row = next((r for r in self.client.accounts if r.get('account_key') == key), None)
+            if row is None:
+                self.client.accounts.append(copy.deepcopy(self._upsert))
+            else:
+                row.update(copy.deepcopy(self._upsert))
+            return SimpleNamespace(data=[])
+        self.client.account_reads.append([(c, v) for _, c, v, _n in self.filters])
+        rows = list(self.client.accounts)
+        for op, col, val, neg in self.filters:
+            if op == 'eq':
+                rows = [r for r in rows if r.get(col) == val]
+            elif op == 'is' and val == 'null':
+                rows = [r for r in rows if (r.get(col) is not None) == neg]
+        if self._range:
+            a, b = self._range
+            rows = rows[a:b + 1]
+        return SimpleNamespace(data=copy.deepcopy(rows))
+
+
+class AccountsFakeClient(FakeClient):
+    def __init__(self, events, columns, dispositions=None, accounts=None):
+        super().__init__(events, columns, dispositions)
+        self.accounts = list(accounts or [])
+        self.account_reads, self.account_updates, self.account_upserts = [], [], []
+
+    def table(self, name):
+        if name == 'accounts':
+            return _AccountsQuery(self)
+        return _Query(self, name)
+
+
+def _install_accounts(monkeypatch, **kw):
+    stub = AccountsStub(**kw)
+    monkeypatch.setattr(es, '_accounts', stub, raising=False)
+    return stub
+
+
+def _seed_cache(env, name, **facts):
+    base = {'zi_subindustry': 'Banking', 'hq': 'Boston, MA', 'revenue': 'MM',
+            'size': '201-500', 'url': f'https://{name.split()[0].lower()}.example',
+            'classification_confidence': 'High'}
+    base.update(facts)
+    AccountCache(env.cache_path).set_firmographics(es._gates_account_key(name), base)
+
+
+MA_EVENT = dict(id='ev1', company_name='Acme Bank', event_type='merger_acquisition',
+                title='Acme Bank to acquire Beta Trust Company',
+                description=('BOSTON, MA — Acme Bank today announced a definitive agreement to '
+                             'acquire Beta Trust Company, a Providence, RI bank with 14 branches.'),
+                source_url='https://www.businesswire.com/news/acme-beta', fit=None,
+                published_date='2026-09-01T12:00:00+00:00', discovered_at='2026-09-02T00:00:00+00:00')
+MA_COMPANIES = [{'name': 'Acme Bank', 'role': 'Acquirer', 'descriptor': 'bank'},
+                {'name': 'Beta Trust Company', 'role': 'Target', 'descriptor': 'bank'}]
+GRADE_MA = {'grade': 'B', 'confidence': 'High', 'numeric_score': 5,
+            'hashtags': ['#Acquisitions', '#100EE'], 'cfo_status': 'Unable to verify',
+            'grade_justification': '#Acquisitions +3, #100EE +2 = 5 → B', 'research_notes': []}
+
+
+# ── 1. ONE grade per account ────────────────────────────────────────────────
+def test_one_grade_per_account_no_secondary_grades(env, monkeypatch):
+    stub = _install_accounts(monkeypatch)
+    _seed_cache(env, 'Acme Bank')
+    _seed_cache(env, 'Beta Trust Company', hq='Providence, RI', size='51-200')
+    llm = LLMStub(MA_COMPANIES, grade=GRADE_MA)
+    client = _run(monkeypatch, AccountsFakeClient([dict(MA_EVENT)], TYPED_COLS), llm)
+    # exactly ONE grading call — no per-company secondary grade_event
+    assert llm.count('grade') == 1
+    pl = client.payload_for('ev1')
+    assert pl['fit']['account_name'] == 'Acme Bank'          # acquirer outranks target
+    assert pl['grade'] == 'B' and pl['hashtags'] == ['#Acquisitions', '#100EE']
+    by_name = {c['name']: c for c in pl['companies_data']}
+    assert by_name['Acme Bank']['tal']['grade'] == 'B'
+    assert by_name['Acme Bank']['tal']['hashtags'] == ['#Acquisitions', '#100EE']
+    assert 'tal' not in by_name['Beta Trust Company']          # fit chip only
+    assert by_name['Beta Trust Company']['fit']['verdict'] == 'pass'
+    # the accounts table: the chosen account upserted WITH the grade, the
+    # secondary touched facts-only
+    assert [r['account_key'] for r in stub.upserts] == ['acme bank']
+    assert stub.upserts[0]['grade'] == 'B' and stub.upserts[0]['graded_event_id'] == 'ev1'
+    assert stub.touches == [{'name': 'Beta Trust Company', 'event': 'ev1', 'verdict': 'pass'}]
+    assert stub.probe_calls == 1
+
+
+def test_headline_is_never_promoted_to_a_better_secondary(env, monkeypatch, caplog):
+    # the target passes, the acquirer is unverified — the chosen account is
+    # still the (unverified) acquirer? No: apply_fit_gates picks pass first.
+    # Either way, ONE grade, ONE account, and no "Headline promoted" line.
+    _install_accounts(monkeypatch)
+    _seed_cache(env, 'Acme Bank', hq=None)                     # territory unknown → unverified
+    _seed_cache(env, 'Beta Trust Company', hq='Providence, RI')
+    llm = LLMStub(MA_COMPANIES, grade=GRADE_MA, search={})
+    with caplog.at_level(logging.INFO):
+        client = _run(monkeypatch, AccountsFakeClient([dict(MA_EVENT)], TYPED_COLS), llm)
+    assert llm.count('grade') == 1
+    assert 'Headline promoted' not in caplog.text and 'Secondary account' not in caplog.text
+    pl = client.payload_for('ev1')
+    assert pl['fit']['account_name'] == 'Beta Trust Company'   # the pass beats the unverified
+    tals = [c['name'] for c in pl['companies_data'] if c.get('tal')]
+    assert tals == ['Beta Trust Company']
+
+
+def test_accounts_hooks_are_noops_without_the_module_or_the_table(env, monkeypatch):
+    _seed_cache(env, 'Zorblat Robotics Inc')
+    llm = LLMStub(COMPANIES, grade=GRADE_B)
+    client = _run(monkeypatch, AccountsFakeClient([_event()], TYPED_COLS), llm)   # _accounts is None
+    assert client.payload_for('ev1')['grade'] == 'B' and client.account_reads == []
+    stub = _install_accounts(monkeypatch, present=False)
+    client = _run(monkeypatch, AccountsFakeClient([_event()], TYPED_COLS), llm)
+    assert client.payload_for('ev1')['grade'] == 'B'
+    assert stub.upserts == [] and stub.touches == [] and client.account_reads == []
+
+
+def test_accounts_bookkeeping_failure_never_fails_the_event(env, monkeypatch, caplog):
+    _install_accounts(monkeypatch, fail=True)
+    _seed_cache(env, 'Zorblat Robotics Inc')
+    llm = LLMStub(COMPANIES, grade=GRADE_B)
+    with caplog.at_level(logging.INFO):
+        client = _run(monkeypatch, AccountsFakeClient([_event()], TYPED_COLS), llm)
+    assert client.payload_for('ev1')['grade'] == 'B'
+    assert 'accounts bookkeeping failed' in caplog.text
+    assert re.search(r'Done — enriched: 1, failed: 0', caplog.text)
+
+
+def test_tombstoned_event_touches_the_chosen_account_facts_only(env, monkeypatch):
+    stub = _install_accounts(monkeypatch)
+    _seed_cache(env, 'Zorblat Robotics Inc', hq='Austin, TX')    # researched hq → out, pre-search
+    llm = LLMStub(COMPANIES, grade=GRADE_B)
+    client = _run(monkeypatch, AccountsFakeClient([_event()], TYPED_COLS), llm)
+    pl = client.payload_for('ev1')
+    assert pl['blocked_reason'].startswith('fit_gate:') and pl['verify_state'] == 'not_fit'
+    # facts-only: build_account_row(trigger_live=False) + upsert — the failed
+    # fit IS the fact the tombstone establishes; no grade, no trigger
+    assert len(stub.upserts) == 1 and stub.touches == []
+    row = stub.upserts[0]
+    assert row['account_key'] == 'zorblat robotics' and row['trigger_live'] is False
+    assert row['verify_state'] == 'not_fit' and row['grade'] is None
+    assert row['best_trigger_type'] is None and row['graded_event_id'] is None
+    assert llm.count('grade') == 0
+
+
+def test_staged_event_upserts_the_account_without_a_grade(env, monkeypatch):
+    stub = _install_accounts(monkeypatch)
+    ev = _event(event_type='funding', title='Zorblat Robotics Inc raises $500,000 seed',
+                description='BOSTON, MA — Zorblat Robotics Inc raised $500,000.')
+    llm = LLMStub([{'name': 'Zorblat Robotics Inc', 'role': 'Portfolio Company',
+                    'descriptor': 'robotics maker'}],
+                  article={'zi_subindustry': None, 'hq': 'Boston, MA',
+                           'classification_confidence': 'Low'}, grade=GRADE_B)
+    client = _run(monkeypatch, AccountsFakeClient([ev], TYPED_COLS), llm)
+    assert client.payload_for('ev1')['verify_state'] == 'staged'
+    assert len(stub.upserts) == 1 and stub.upserts[0]['grade'] is None
+    assert stub.upserts[0]['verify_state'] == 'staged' and stub.upserts[0]['graded_event_id'] is None
+
+
+# ── 2. Enrich ONCE per account ──────────────────────────────────────────────
+def _fm(days_ago=10, researched=True, **over):
+    """The chosen company dict an accounts row keeps in `firmographics`,
+    with its field_sources provenance and — review 2026-09-08 (Phase 4),
+    2a — the researched_at stamp _sync_accounts writes (`researched=False`
+    leaves it out: a backfilled / never-researched row)."""
+    fm = {'size': '201-500', 'industry': 'Community bank',
+          'field_sources': {'hq': 'search', 'zi_subindustry': 'search',
+                            'revenue': 'search', 'size': 'search'}}
+    if researched:
+        fm['researched_at'] = (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
+    fm.update(over)
+    return fm
+
+
+def _fresh_row(days_ago=10, **over):
+    """An accounts row in the C1 shape (003_accounts.sql): typed fact
+    columns, the chosen company dict in `firmographics`. updated_at is
+    TODAY on purpose — every write refreshes it (the enrich-once pass
+    itself, a facts-only touch, the backfill), so it must never count as
+    research freshness (2a); only firmographics.researched_at does."""
+    row = {'account_key': 'zorblat robotics', 'canonical_name': 'Zorblat Robotics Inc',
+           'verify_state': 'verified', 'hq_state': 'MA', 'zi_subindustry': 'Banking',
+           'revenue_segment': 'MM', 'domain': 'zorblat.example', 'classified_by': 'search',
+           'firmographics': _fm(days_ago),
+           'updated_at': datetime.now(timezone.utc).isoformat(),
+           'grade': 'B', 'disposition': None}
+    row.update(over)
+    return row
+
+
+def test_enrich_once_fresh_verified_account_skips_all_research_but_grades(env, monkeypatch, caplog):
+    stub = _install_accounts(monkeypatch)
+    llm = LLMStub(COMPANIES, article={'zi_subindustry': 'OTHER', 'classification_confidence': 'High'},
+                  grade=GRADE_B)
+    with caplog.at_level(logging.INFO):
+        client = _run(monkeypatch, AccountsFakeClient([_event()], TYPED_COLS,
+                                                      accounts=[_fresh_row()]), llm)
+    # ZERO searches — not even the grader's complexity probe — and no article LLM
+    assert env.fc.calls == [] and env.tv.calls == []
+    assert llm.count('article') == 0 and llm.count('search') == 0
+    assert llm.count('grade') == 1                              # the trigger is new
+    pl = client.payload_for('ev1')
+    assert pl['grade'] == 'B' and pl['verify_state'] == 'verified'
+    assert pl['classified_by'] == 'account' and pl['hq_state'] == 'MA'
+    rec = pl['companies_data'][0]
+    assert rec['field_sources'] == {'hq': 'account', 'zi_subindustry': 'account', 'revenue': 'account',
+                                    'size': 'account', 'industry': 'account', 'url': 'account'}
+    assert rec['url'] == 'https://zorblat.example' and rec['size'] == '201-500'
+    assert re.search(r'→ account known: Zorblat Robotics Inc \(verified \d{4}-\d{2}-\d{2}\)', caplog.text)
+    assert re.search(r'Served without a search: .*account:1', caplog.text)
+    assert es.SEARCH_COUNTS['account'] == 1
+    assert client.account_reads == [[('account_key', 'zorblat robotics')]]
+    assert [r['account_key'] for r in stub.upserts] == ['zorblat robotics']
+
+
+@pytest.mark.parametrize('row', [
+    _fresh_row(days_ago=100),                                # researched 100d ago, updated_at TODAY (2a)
+    _fresh_row(verify_state='researched_ambiguous'),         # not verified
+    _fresh_row(firmographics=_fm(researched=False)),         # no researched_at stamp at all (a backfilled row)
+    _fresh_row(disposition='Picked Up'),                     # rep-decided → the verdict path owns it
+    _fresh_row(classified_by='article',                      # verified on an article-only hq/zi:
+               firmographics=_fm(field_sources={'hq': 'article', 'zi_subindustry': 'article'})),
+    _fresh_row(classified_by=None, firmographics=_fm(field_sources={})),   # no provenance recorded at all
+])
+def test_enrich_once_needs_a_fresh_verified_undispositioned_row(env, monkeypatch, row):
+    _install_accounts(monkeypatch)
+    _seed_cache(env, 'Zorblat Robotics Inc')                  # research is served from the cache
+    llm = LLMStub(COMPANIES, grade=GRADE_B)
+    client = _run(monkeypatch, AccountsFakeClient([_event()], TYPED_COLS, accounts=[row]), llm)
+    assert client.payload_for('ev1')['classified_by'] == 'cache'    # researched as usual
+    assert es.SEARCH_COUNTS['account'] == 0
+
+
+def test_known_account_probes_read_the_cache_only(env, monkeypatch):
+    _install_accounts(monkeypatch)
+    AccountCache(env.cache_path).set_search('zorblat robotics', 'complexity',
+                                            {'results': [{'title': 'Zorblat locations',
+                                                          'url': 'https://zorblat.example/locations',
+                                                          'content': 'Zorblat operates 6 offices'}]})
+    grade = dict(GRADE_B, hashtags=['#NewCFO', '#Locations'], numeric_score=7)
+    llm = LLMStub(COMPANIES, grade=grade)
+    client = _run(monkeypatch, AccountsFakeClient([_event()], TYPED_COLS,
+                                                  accounts=[_fresh_row()]), llm)
+    assert env.fc.calls == []                                   # the cached probe, never the ladder
+    assert client.payload_for('ev1')['hashtags'] == ['#NewCFO', '#Locations']   # evidence reached the guard
+
+
+def test_account_facts_reads_json_then_typed_columns():
+    row = {'firmographics': json.dumps({'hq': 'Westerly, RI', 'size': '51-200'}), 'hq_state': 'MA',
+           'zi_subindustry': 'Banking', 'revenue_segment': 'Corp', 'domain': 'acme.example',
+           'classification_confidence': 'High', 'url': None}
+    facts = es._account_facts(row)
+    assert facts['hq'] == 'Westerly, RI' and facts['size'] == '51-200'        # JSON wins
+    assert facts['zi_subindustry'] == 'Banking' and facts['revenue'] == 'Corp'
+    assert facts['url'] == 'https://acme.example' and facts['domain'] == 'acme.example'
+    assert es._account_facts({'hq_state': 'CT'})['hq'] == 'CT'
+    assert es._account_facts({'revenue_segment': 'huge'}) == {}
+    assert es._account_verified_on({'firmographics': {'researched_at': '2026-09-01T10:00:00Z'}}) == '2026-09-01'
+    assert es._account_verified_on({'updated_at': '2026-09-01T10:00:00Z'}) == '?'      # never updated_at (2a)
+    assert es._account_verified_on({}) == '?'
+
+
+def test_account_row_prefers_the_modules_loader_when_it_has_one(monkeypatch):
+    stub = _install_accounts(monkeypatch)
+    stub.load_account = lambda client, key: {'account_key': key, 'verify_state': 'verified'}
+    assert es._account_row(object(), 'acme')['verify_state'] == 'verified'
+    del stub.load_account
+    assert es._account_row(AccountsFakeClient([], TYPED_COLS, accounts=[{'account_key': 'acme'}]),
+                           'acme') == {'account_key': 'acme'}
+    assert es._account_row(AccountsFakeClient([], TYPED_COLS), 'acme') is None
+    assert es._account_row(AccountsFakeClient([], TYPED_COLS), '') is None
+
+
+# ── 3. Rep verdicts through the accounts table ─────────────────────────────
+def test_rep_not_a_fit_from_accounts_never_reaches_search(env, monkeypatch):
+    _install_accounts(monkeypatch, dispositions={
+        'zorblat robotics': {'status': 'Not a Fit', 'reason': 'wrong vertical', 'notes': '',
+                             'name': 'Zorblat Robotics Inc', 'at': '2026-09-01T00:00:00Z'}})
+    env.fc.result = HIT
+    llm = LLMStub(COMPANIES, article={'zi_subindustry': 'Banking', 'hq': 'Boston, MA',
+                                      'classification_confidence': 'High'}, grade=GRADE_B)
+    client = _run(monkeypatch, AccountsFakeClient([_event()], TYPED_COLS), llm)
+    assert env.fc.calls == [] and env.tv.calls == []             # zero search calls
+    assert llm.count('article') == 0 and llm.count('search') == 0 and llm.count('grade') == 0
+    pl = client.payload_for('ev1')
+    assert pl['blocked_reason'] == 'rep:Not a Fit (Zorblat Robotics Inc)'
+    assert pl['verify_state'] == 'not_fit' and pl['fit_verdict'] == 'fail'
+
+
+def test_rep_decided_from_accounts_attaches_without_research(env, monkeypatch):
+    # keyed only by the module's own key (no name) — the lookup still hits
+    _install_accounts(monkeypatch, dispositions={'zorblat robotics': {'status': 'On Rep TAL'}})
+    llm = LLMStub(COMPANIES, grade=GRADE_B)
+    client = _run(monkeypatch, AccountsFakeClient([_event()], TYPED_COLS), llm)
+    assert env.fc.calls == [] and llm.count('article') == 0
+    pl = client.payload_for('ev1')
+    assert pl['fit']['verdict'] == 'decided' and pl['verify_state'] == 'decided'
+
+
+def test_load_rep_dispositions_falls_back_to_the_legacy_table(monkeypatch):
+    legacy = [{'company_name': 'Legacy Widgets Inc', 'status': 'NetSuite Customer'}]
+    client = FakeClient([], TYPED_COLS, dispositions=legacy)
+    monkeypatch.setattr(es, '_accounts', None, raising=False)
+    assert es._load_rep_dispositions(client) == {'legacy widgets': 'NetSuite Customer'}
+    stub = _install_accounts(monkeypatch)
+    stub.load_dispositions = lambda c: (_ for _ in ()).throw(RuntimeError('table missing'))
+    assert es._load_rep_dispositions(client) == {'legacy widgets': 'NetSuite Customer'}
+    # the module's answer is re-keyed by gates.account_key(name) as well
+    stub.load_dispositions = lambda c: {'k1': {'status': 'Not a Fit', 'name': 'Acme Bank, Inc.'},
+                                        'k2': {'status': None}, 'k3': 'Picked Up'}
+    assert es._load_rep_dispositions(client) == {'k1': 'Not a Fit', 'acme bank': 'Not a Fit',
+                                                 'k3': 'Picked Up'}
+
+
+# ── 4. Hashtag guards in the grading path ──────────────────────────────────
+def test_guards_strip_unsupported_tags_before_the_score(env, monkeypatch, caplog):
+    _seed_cache(env, 'Zorblat Robotics Inc')
+    stuffed = dict(GRADE_B, hashtags=['#NewCFO', '#Funding', '#FormerUser', '#Global'],
+                   numeric_score=13, grade='A')
+    llm = LLMStub(COMPANIES, grade=stuffed)
+    with caplog.at_level(logging.INFO):
+        client = _run(monkeypatch, FakeClient([_event()], TYPED_COLS), llm)
+    pl = client.payload_for('ev1')
+    assert pl['hashtags'] == ['#NewCFO']                        # the real hire keeps its tag
+    assert pl['numeric_score'] == 5 and pl['grade'] == 'B'      # recomputed AFTER the strips
+    assert ('  guard: -#Funding (no verified raise ≥ $1M within 18 months in the text or the '
+            'FUNDING SEARCH evidence (event_type cfo_hire; no parseable amount))') in caplog.text
+    assert '  guard: -#FormerUser (' in caplog.text and '  guard: -#Global (' in caplog.text
+    assert re.search(r'Guards stripped:3', caplog.text)
+    assert re.search(r'Accounts upserted:0 touched:0', caplog.text)
+
+
+def test_cfo_hire_without_a_cfo_subject_loses_new_cfo(env, monkeypatch):
+    # an earnings release the scraper labelled cfo_hire
+    ev = _event(title='Zorblat Robotics Inc Reports Second Quarter Results',
+                description=('BOSTON, MA — Zorblat Robotics Inc, a maker of warehouse robotics and '
+                             'automation systems for regional distributors, today reported results. '
+                             '"We delivered," said Jane Doe, Chief Financial Officer of the company.'))
+    _seed_cache(env, 'Zorblat Robotics Inc')
+    llm = LLMStub(COMPANIES, grade=GRADE_B)
+    client = _run(monkeypatch, FakeClient([ev], TYPED_COLS), llm)
+    pl = client.payload_for('ev1')
+    assert pl['hashtags'] == [] and pl['grade'] == 'D' and pl['numeric_score'] == 0
+    assert pl['companies_data'][0]['tal']['grade'] == 'D'
+    assert 'event_type' not in pl                                # no cfo_hire relabel either
+    assert es._finance_role(ev) is None
+
+
+def test_finance_role_follows_the_hire_subject():
+    assert es._finance_role({'title': 'Acme names Jane Doe CFO'}) == 'cfo'
+    assert es._finance_role({'title': 'Acme promotes Jane Doe to VP Finance'}) == 'cfo'
+    assert es._finance_role({'title': 'Acme names Jane Doe Corporate Controller',
+                             'description': 'Doe reports to CFO John Smith.'}) == 'controller'
+    assert es._finance_role({'title': 'Acme taps Jane Doe as Chief Accounting Officer'}) == 'controller'
+    assert es._finance_role({'title': 'Acme appoints Jane Doe Treasurer'}) is None
+    assert es._finance_role({'title': 'Acme Reports Q2', 'description': 'said Jane Doe, CFO'}) is None
+    assert es._finance_role({'event_type': 'cfo_hire', 'title': 'Jane Doe, CFO of Acme, joins Beta board'}) is None
+    assert es._event_search_tier({'event_type': 'executive_hire',
+                                  'title': 'Acme names Jane Doe Corporate Controller'}) == 1
+
+
+def test_grade_event_records_guard_notes(monkeypatch):
+    monkeypatch.setattr(es, 'llm_json', lambda prompt, max_tokens=600: dict(
+        GRADE_B, hashtags=['#NewCFO', '#PrevConvo', '#100EE']))
+    ev = _event()
+    cd = [{'name': 'Zorblat Robotics Inc', 'role': 'Hiring Company', 'size': '51-200',
+           'zi_subindustry': 'Banking'}]
+    g = es.grade_event(ev, cd, extra_evidence='ZoomInfo: 140 employees',
+                       account_name='Zorblat Robotics Inc', fit={'zi_subindustry': 'Banking'})
+    assert g['hashtags'] == ['#NewCFO', '#100EE'] and g['numeric_score'] == 7 and g['grade'] == 'B'
+    assert g['guard_notes'] == ['-#PrevConvo (CRM-only fact — no pipeline input can evidence it)']
+    monkeypatch.setattr(es, 'llm_json', lambda prompt, max_tokens=600: {})
+    assert es.grade_event(ev, cd)['guard_notes'] == []
+
+
+# ── 5. The regrade path stays consistent ───────────────────────────────────
+def test_regrade_only_grades_the_chosen_account_once_and_upserts_it(env, monkeypatch):
+    stub = _install_accounts(monkeypatch)
+    stale = {'grade': 'A', 'score': 9, 'confidence': 'High'}
+    ev = dict(MA_EVENT, companies_data=[
+        {'name': 'Acme Bank', 'role': 'Acquirer', 'zi_subindustry': 'Banking', 'hq': 'Boston, MA',
+         'revenue': 'MM', 'size': '201-500', 'tal': dict(stale)},
+        {'name': 'Beta Trust Company', 'role': 'Target', 'zi_subindustry': 'Banking',
+         'hq': 'Providence, RI', 'revenue': 'LMM', 'size': '51-200', 'tal': dict(stale)}])
+    llm = LLMStub([], grade=GRADE_MA)
+    monkeypatch.setattr(es, 'get_supabase', lambda: AccountsFakeClient([ev], TYPED_COLS))
+    monkeypatch.setattr(es, 'llm_json', llm)
+    client = es.get_supabase()
+    monkeypatch.setattr(es, 'get_supabase', lambda: client)
+    es.regrade_only_events()
+    assert llm.count('grade') == 1
+    pl = client.payload_for('ev1')
+    by_name = {c['name']: c for c in pl['companies_data']}
+    assert by_name['Acme Bank']['tal']['grade'] == 'B'          # the fresh grade, not the stale A
+    assert 'tal' not in by_name['Beta Trust Company']           # the stale secondary grade is gone
+    assert pl['grade'] == 'B' and pl['fit']['account_name'] == 'Acme Bank'
+    assert [r['account_key'] for r in stub.upserts] == ['acme bank']
+    assert stub.touches == [{'name': 'Beta Trust Company', 'event': 'ev1', 'verdict': 'pass'}]
+
+
+# ── 6. The REAL accounts module (slice C1) through the same hooks ───────────
+# The stub above pins the contract; this pins the two modules against each
+# other now that src/pipeline/accounts.py has landed: one event creates the
+# account row with its grade, a second event for the same account takes the
+# enrich-once path off that row, and a rep verdict recorded on the row
+# short-circuits a third.
+try:
+    from src.pipeline import accounts as _real_accounts
+except ImportError:                                  # pragma: no cover
+    _real_accounts = None
+
+
+@pytest.fixture
+def real_accounts(monkeypatch):
+    if _real_accounts is None:
+        pytest.skip('src/pipeline/accounts.py not present')
+    _real_accounts.reset_probe_cache()
+    monkeypatch.setattr(es, '_accounts', _real_accounts, raising=False)
+    yield _real_accounts
+    _real_accounts.reset_probe_cache()
+
+
+def test_real_accounts_module_one_grade_then_enrich_once_then_verdict(env, monkeypatch, caplog,
+                                                                      real_accounts):
+    _seed_cache(env, 'Zorblat Robotics Inc')
+    client = AccountsFakeClient([_event()], TYPED_COLS)
+    llm = LLMStub(COMPANIES, grade=GRADE_B)
+    with caplog.at_level(logging.INFO):
+        _run(monkeypatch, client, llm)
+    # 1. the account row exists, carries the event's grade and trigger, facts from the cache
+    assert len(client.accounts) == 1
+    row = client.accounts[0]
+    assert row['account_key'] == 'zorblat robotics' and row['grade'] == 'B'
+    assert row['graded_event_id'] == 'ev1' and row['best_trigger_type'] == 'cfo_hire'
+    assert row['verify_state'] == 'verified' and row['hq_state'] == 'MA'
+    assert row['firmographics']['field_sources']['hq'] == 'cache' and row['classified_by'] == 'cache'
+    assert re.search(r'Accounts upserted:1 touched:0', caplog.text)
+    # 2. a second, weaker event for the same account: enrich-once — no LLM
+    #    classification, no search; graded; the account keeps its better grade
+    #    (phase 1 legitimately ran the complexity probe: clear that recorder)
+    caplog.clear()
+    env.fc.calls.clear()
+    client.events = [_event(id='ev2', title='Zorblat Robotics Inc names Jane Doe Controller',
+                            event_type='executive_hire',
+                            published_date='2026-09-05T12:00:00+00:00',
+                            discovered_at='2026-09-06T00:00:00+00:00')]
+    llm2 = LLMStub(COMPANIES, article={'zi_subindustry': 'OTHER', 'classification_confidence': 'High'},
+                   grade=dict(GRADE_B, grade='C', numeric_score=3, hashtags=['#NewController']))
+    with caplog.at_level(logging.INFO):
+        _run(monkeypatch, client, llm2)
+    assert llm2.count('article') == 0 and llm2.count('search') == 0 and env.fc.calls == []
+    assert llm2.count('grade') == 1
+    pl = client.payload_for('ev2')
+    assert pl['grade'] == 'C' and pl['classified_by'] == 'account' and pl['verify_state'] == 'verified'
+    assert '→ account known: Zorblat Robotics Inc (verified' in caplog.text
+    row = client.accounts[0]
+    assert row['grade'] == 'B' and row['graded_event_id'] == 'ev1'      # a C never replaces a live B
+    assert row['best_trigger_type'] == 'cfo_hire'                        # nor does a weaker trigger
+    assert row['event_count'] == 2
+    # 3. the rep marks the account Not a Fit ON THE ACCOUNTS ROW — the next event never reaches search
+    row.update({'disposition': 'Not a Fit', 'disposition_reason': 'wrong_vertical'})
+    caplog.clear()
+    env.fc.calls.clear()
+    client.events = [_event(id='ev3', title='Zorblat Robotics Inc raises $25M',
+                            event_type='funding')]
+    env.fc.result = HIT
+    llm3 = LLMStub(COMPANIES, grade=GRADE_B)
+    _run(monkeypatch, client, llm3)
+    assert env.fc.calls == [] and llm3.count('article') == 0 and llm3.count('grade') == 0
+    pl = client.payload_for('ev3')
+    assert pl['blocked_reason'] == 'rep:Not a Fit (Zorblat Robotics Inc)' and pl['verify_state'] == 'not_fit'
+
+
+def test_real_accounts_module_tombstone_and_secondary_calls_match_its_signatures(env, monkeypatch,
+                                                                                   real_accounts):
+    # an M&A: the acquirer is the graded account, the target a facts-only touch
+    _seed_cache(env, 'Acme Bank')
+    _seed_cache(env, 'Beta Trust Company', hq='Providence, RI', size='51-200')
+    client = AccountsFakeClient([dict(MA_EVENT)], TYPED_COLS)
+    _run(monkeypatch, client, LLMStub(MA_COMPANIES, grade=GRADE_MA))
+    by_key = {r['account_key']: r for r in client.accounts}
+    assert by_key['acme bank']['grade'] == 'B' and by_key['acme bank']['graded_event_id'] == 'ev1'
+    assert 'grade' not in by_key['beta trust'] and by_key['beta trust']['best_trigger_event_id'] == 'ev1'
+    assert by_key['beta trust']['hq_state'] == 'RI' and by_key['beta trust']['verify_state'] == 'verified'
+    # a tombstoned event (out of territory): facts only, trigger NOT live, state not_fit
+    client2 = AccountsFakeClient([_event()], TYPED_COLS)
+    _seed_cache(env, 'Zorblat Robotics Inc', hq='Austin, TX')
+    _run(monkeypatch, client2, LLMStub(COMPANIES, grade=GRADE_B))
+    [row] = client2.accounts
+    assert row['verify_state'] == 'not_fit' and row['hq_state'] == 'TX'
+    assert 'grade' not in row and 'best_trigger_type' not in row and row['event_count'] == 1
+
+
+# ── 7. Review 2026-09-08 (Phase 4): 2a / 1b / 2c / (a) / (b) ────────────────
+def test_2a_stale_research_with_a_fresh_updated_at_is_re_researched(env, monkeypatch, caplog):
+    # researched 100 days ago; updated_at is today (the row was touched by
+    # yesterday's enrich-once pass) — research must run again
+    stub = _install_accounts(monkeypatch)
+    _seed_cache(env, 'Zorblat Robotics Inc')
+    row = _fresh_row(days_ago=100)
+    assert es._account_fresh_ts(row).date() < (datetime.now(timezone.utc) - timedelta(days=99)).date()
+    llm = LLMStub(COMPANIES, grade=GRADE_B)
+    with caplog.at_level(logging.INFO):
+        client = _run(monkeypatch, AccountsFakeClient([_event()], TYPED_COLS, accounts=[row]), llm)
+    assert 'account known' not in caplog.text
+    assert client.payload_for('ev1')['classified_by'] == 'cache' and es.SEARCH_COUNTS['account'] == 0
+    # … and the row this run upserts carries a NEW researched_at (facts came from research)
+    [up] = stub.upserts
+    stamp = typed.parse_ts(up['firmographics']['researched_at'])
+    assert (datetime.now(timezone.utc) - stamp).total_seconds() < 120
+    # the same row researched 10 days ago is fresh: enrich-once, and the stamp is NOT refreshed
+    stub.upserts.clear()
+    with caplog.at_level(logging.INFO):
+        _run(monkeypatch, AccountsFakeClient([_event()], TYPED_COLS, accounts=[_fresh_row(days_ago=10)]), llm)
+    assert 'account known' in caplog.text and es.SEARCH_COUNTS['account'] == 1
+    [up] = stub.upserts
+    assert 'researched_at' not in (up.get('firmographics') or {})
+
+
+def test_2a_freshness_reads_only_firmographics_researched_at():
+    ts = '2026-09-01T10:00:00+00:00'
+    assert es._ACCOUNT_FRESH_KEYS == ('researched_at',)
+    assert es._account_fresh_ts({'firmographics': {'researched_at': ts}}).isoformat() == ts
+    assert es._account_fresh_ts({'firmographics': json.dumps({'researched_at': ts})}).isoformat() == ts
+    # the row-level stamps every write refreshes never count
+    assert es._account_fresh_ts({'updated_at': ts, 'verified_at': ts, 'researched_at': ts}) is None
+    assert es._account_fresh_ts({'firmographics': {}}) is None and es._account_fresh_ts({}) is None
+
+
+def test_2a_sync_accounts_stamps_researched_at_only_for_researched_sources(monkeypatch):
+    stub = _install_accounts(monkeypatch)
+    ev = _event()
+    fit = {'verdict': 'pass', 'account_name': 'Zorblat Robotics Inc', 'zi_subindustry': 'Banking'}
+    now = datetime(2026, 9, 8, 6, 0, tzinfo=timezone.utc)
+
+    def _sync(company, **kw):
+        stub.upserts.clear()
+        es._sync_accounts(object(), ev, [dict(company, name='Zorblat Robotics Inc', role='Hiring Company')],
+                          fit, grading=GRADE_B, now=now, **kw)
+        return (stub.upserts[0].get('firmographics') or {}).get('researched_at')
+
+    stamped = now.isoformat()
+    assert _sync({'field_sources': {'hq': 'search', 'zi_subindustry': 'search'}, 'classified_by': 'search'}) == stamped
+    assert _sync({'field_sources': {'hq': 'cache', 'zi_subindustry': 'cache'}, 'classified_by': 'cache'}) == stamped
+    assert _sync({'field_sources': {'hq': 'seed', 'zi_subindustry': 'oracle'}, 'classified_by': 'oracle'}) == stamped
+    assert _sync({'field_sources': {'hq': 'search'}, 'classified_by': 'search'}) == stamped   # classified_by stands in for zi
+    # the enrich-once provenance never refreshes the stamp; nor does an article-only pass
+    assert _sync({'field_sources': {'hq': 'account', 'zi_subindustry': 'account'}, 'classified_by': 'account'}) is None
+    assert _sync({'field_sources': {'hq': 'article', 'zi_subindustry': 'article'}, 'classified_by': 'article'}) is None
+    assert _sync({'field_sources': {'hq': 'article', 'zi_subindustry': 'search'}, 'classified_by': 'search'}) is None
+    assert _sync({'classified_by': 'search'}) is None                        # hq never researched
+    # a tombstoned event's chosen company (facts-only) is stamped on the same rule
+    assert _sync({'field_sources': {'hq': 'cache', 'zi_subindustry': 'cache'}, 'classified_by': 'cache'},
+                 tombstoned=True) == stamped
+    assert stub.upserts[0]['trigger_live'] is False
+
+
+def test_1b_regrade_grading_failure_writes_nothing_and_keeps_the_tal_chip(env, monkeypatch, caplog):
+    stub = _install_accounts(monkeypatch)
+    stale = {'grade': 'A', 'score': 9, 'confidence': 'High', 'hashtags': ['#Acquisitions', '#100EE']}
+    ev = dict(MA_EVENT, companies_data=[
+        {'name': 'Acme Bank', 'role': 'Acquirer', 'zi_subindustry': 'Banking', 'hq': 'Boston, MA',
+         'revenue': 'MM', 'size': '201-500', 'tal': dict(stale)},
+        {'name': 'Beta Trust Company', 'role': 'Target', 'zi_subindustry': 'Banking',
+         'hq': 'Providence, RI', 'revenue': 'LMM', 'size': '51-200'}], grade='A')
+    llm = LLMStub([], grade={})                       # the grader answers nothing
+    client = AccountsFakeClient([ev], TYPED_COLS)
+    monkeypatch.setattr(es, 'get_supabase', lambda: client)
+    monkeypatch.setattr(es, 'llm_json', llm)
+    with caplog.at_level(logging.INFO):
+        es.regrade_only_events()
+    assert llm.count('grade') == 1
+    assert client.updates == []                                     # nothing written …
+    assert stub.upserts == [] and stub.touches == []                # … and no account sync
+    assert client.events[0]['companies_data'][0]['tal'] == stale    # the chip survives
+    assert 'Grading returned nothing — nothing written' in caplog.text
+    assert re.search(r'Done — regraded: 1, deleted \(industry block\): 0', caplog.text)
+    # a grade that does come back is written and the account upserted (unchanged)
+    caplog.clear()
+    llm2 = LLMStub([], grade=GRADE_MA)
+    monkeypatch.setattr(es, 'llm_json', llm2)
+    es.regrade_only_events()
+    assert client.payload_for('ev1')['grade'] == 'B' and [r['account_key'] for r in stub.upserts] == ['acme bank']
+    assert stub.new_flags == [False]                                # a regrade is never a new event (2c)
+
+
+def test_2c_is_new_event_is_true_only_on_first_processing(env, monkeypatch):
+    stub = _install_accounts(monkeypatch)
+    _seed_cache(env, 'Zorblat Robotics Inc')
+    llm = LLMStub(COMPANIES, grade=GRADE_B)
+    _run(monkeypatch, AccountsFakeClient([_event()], TYPED_COLS), llm)
+    assert stub.new_flags == [True]                                 # first time: attempts 0, not --re-enrich
+    stub.new_flags.clear()
+    _run(monkeypatch, AccountsFakeClient([_event(enrich_attempts=1)], TYPED_COLS), llm)
+    assert stub.new_flags == [False]                                # a retry
+    stub.new_flags.clear()
+    _run(monkeypatch, AccountsFakeClient([_event()], TYPED_COLS), llm, re_enrich=True)
+    assert stub.new_flags == [False]                                # a re-enrich
+    # the facts-only (tombstone) path carries it too
+    stub.new_flags.clear()
+    _seed_cache(env, 'Zorblat Robotics Inc', hq='Austin, TX')
+    client = _run(monkeypatch, AccountsFakeClient([_event()], TYPED_COLS), llm)
+    assert client.payload_for('ev1')['verify_state'] == 'not_fit' and stub.new_flags == [True]
+    # an accounts module whose upsert_account has no is_new_event= is called without it
+    _seed_cache(env, 'Zorblat Robotics Inc', hq='Boston, MA')
+    plain = _install_accounts(monkeypatch)
+    plain.upsert_account = lambda client, row, *, present=None, now=None: plain.upserts.append(row) or True
+    assert not es._upsert_takes_is_new_event()
+    _run(monkeypatch, AccountsFakeClient([_event()], TYPED_COLS), llm)
+    assert len(plain.upserts) == 1
+    monkeypatch.setattr(es, '_accounts', stub, raising=False)
+    assert es._upsert_takes_is_new_event()
+
+
+def test_a_structured_verdict_is_the_pipeline_module_or_a_faithful_fallback():
+    try:
+        from src.pipeline import structured as _structured
+    except ImportError:
+        _structured = None
+    if _structured is not None:
+        assert es._structured_verdict is _structured.structured_verdict
+    sec = {'title': 'SEC 8-K Item 5.02 — Acme', 'source_url': 'https://www.sec.gov/Archives/x',
+           'description': 'SEC 8-K filing by Acme (DE) — Item 5.02. SIC: 6770 (Blank Checks).'}
+    assert es._structured_verdict(sec) == {'verdict': 'vehicle', 'reason': 'SIC 6770 (spac)', 'revenue_segment': ''}
+    formd = {'title': 'SEC Form D (Private Capital Raise) — Acme', 'source_url': 'https://www.sec.gov/Archives/y',
+             'description': 'Form D industry group: Pooled Investment Fund. Total offering: $5,000,000. '
+                            'Filing date: 2026-09-01.'}
+    assert es._structured_verdict(formd)['verdict'] == 'vehicle'
+    assert es._structured_verdict({'description': 'SIC: 6770', 'source_url': 'https://x.example'}) == \
+        {'verdict': 'unknown', 'reason': '', 'revenue_segment': ''}
+
+
+def test_b_entity_shape_tombstone_carries_the_company_names(env, monkeypatch):
+    ev = _event(title='Acme Growth Fund III, L.P. names Jane Doe CFO', company_name='Acme Growth Fund III, L.P.')
+    llm = LLMStub([{'name': 'Acme Growth Fund III, L.P.', 'role': 'Hiring Company',
+                    'descriptor': 'private equity fund'}], grade=GRADE_B)
+    client = _run(monkeypatch, FakeClient([ev], TYPED_COLS), llm)
+    pl = client.payload_for('ev1')
+    assert pl['blocked_reason'] == 'entity_shape:fund_vehicle' and pl['verify_state'] == 'not_fit'
+    # the golden-set exporter reproduces the kind from the FULL stored name
+    assert pl['companies_data'] == [{'name': 'Acme Growth Fund III, L.P.', 'role': 'Hiring Company',
+                                     'descriptor': 'private equity fund'}]
+    assert env.fc.calls == [] and llm.count('article') == 0 and llm.count('grade') == 0

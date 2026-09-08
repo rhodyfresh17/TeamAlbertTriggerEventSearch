@@ -913,11 +913,6 @@ territory:
       - "Oracle"
       - "Salesforce"
 
-    min_employees: 20
-    max_employees: 2000
-    min_revenue_millions: 5
-    max_revenue_millions: 500
-
     target_size_indicators:
       - "mid-market"
       - "middle market"
@@ -1271,15 +1266,6 @@ sources:
     enabled: true
     base_url: "https://news.google.com/rss/search?q="
 
-  finsmes:
-    enabled: false  # 403 permanently blocked
-    url: "https://www.finsmes.com/feed"
-
-  bing_news:
-    enabled: false
-    api_key: ""
-    endpoint: "https://api.bing.microsoft.com/v7.0/news/search"
-
 alerts:
   email:
     enabled: false
@@ -1393,72 +1379,3 @@ adzuna:
     - Head of Finance
     - Chief Accounting Officer
     - VP Accounting
-
-job_search:
-  enabled: true
-
-  titles:
-    - "CFO"
-    - "Chief Financial Officer"
-    - "VP Finance"
-    - "Vice President Finance"
-    - "Head of Finance"
-    - "Controller"
-    - "Finance Director"
-    - "Director of Finance"
-    - "Director of Accounting"
-    - "Accounting Director"
-    - "COO"
-    - "Chief Operating Officer"
-    - "Executive Director"
-    - "Accounting Manager"
-    - "Finance Manager"
-
-  locations:
-    # Northeast
-    - "New York, NY"
-    - "Boston, MA"
-    - "Philadelphia, PA"
-    - "New Jersey"
-    - "Connecticut"
-    - "Rhode Island"
-    - "Maine"
-    - "New Hampshire"
-    - "Vermont"
-    - "Delaware"
-    # Mid-Atlantic / DC
-    - "Maryland"
-    - "Virginia"
-    - "Washington DC"
-    - "West Virginia"
-    # Southeast
-    - "North Carolina"
-    - "South Carolina"
-    - "Georgia"
-    - "Alabama"
-    - "Florida"
-    - "Tennessee"
-    - "Kentucky"
-    # Midwest (territory)
-    - "Ohio"
-    - "Michigan"
-    - "Indiana"
-    # Canada
-    - "Toronto, ON"
-    - "Montreal, QC"
-    - "Ontario"
-    - "Quebec"
-    - "Nova Scotia"
-    - "New Brunswick"
-    - "Newfoundland"
-    - "Prince Edward Island"
-
-  boards:
-    # All sites except Google Jobs are bot-blocked and return 0 results.
-    # Adzuna (below) replaces them with a structured API source.
-    indeed: false       # blocked by Cloudflare anti-bot
-    ziprecruiter: false # blocked
-    simplyhired: false  # blocked
-    google_jobs: true   # ✓ still works
-    ladders: false      # requires login
-    cfo_com: false      # site changed, selectors broken

@@ -21,8 +21,8 @@ You are an AI agent (Scout, or any successor) inheriting this codebase. This doc
 ## ⚠️ READ THIS FIRST — two rules that prevent the most common mistakes
 
 **RULE 1 — ALWAYS activate the venv before running ANY Python script.**
-Every Python script in this repo (cleanup_legacy_events.py, enrichment_scout.py,
-monitor_health.py, supabase_sync.py, etc.) depends on packages installed in the
+Every Python script in this repo (enrichment_scout.py, monitor_health.py,
+supabase_sync.py, scripts/*.py, etc.) depends on packages installed in the
 project's virtual environment (`venv/`), NOT the system Python. The deps include
 `yaml` (pyyaml), `supabase`, `python-dotenv`, `requests`, `streamlit`, etc.
 
@@ -34,7 +34,7 @@ activate the venv first:
 ```bash
 cd ~/Shared/AI-BOTS/TeamAlbertTriggerEventSearch   # or /projects/TeamAlbertTriggerEventSearch in a container
 source venv/bin/activate
-python3 cleanup_legacy_events.py
+python3 enrichment_scout.py --dry-run --limit 2
 ```
 
 NEVER tell the user to `pip install` packages into their system Python — it
@@ -44,10 +44,11 @@ container, which has no venv and no Mac-side deps. See §4b for why Hermes agent
 read logs but don't execute these scripts.)
 
 **RULE 2 — `--apply` DELETES. It is never a "test".**
-`cleanup_legacy_events.py` with no flags is a DRY RUN (safe — shows what would be
-deleted, changes nothing). Adding `--apply` actually deletes from Supabase.
-`--limit 100 --apply` deletes up to 100 events — that is NOT a "test", it is a
-real deletion of up to 100 rows. The only safe "test" is the no-flag dry run.
+Every maintenance script (`scripts/migrate_v2.py`, `scripts/backfill_*.py`,
+`scripts/expire_triggers.py`, `scripts/ria_trigger.py`) with no flags is a DRY RUN (safe —
+shows what would change, writes nothing). Adding `--apply` actually writes to Supabase
+(tombstones, upserts, relabels). `--limit 100 --apply` changes up to 100 rows — that is NOT a
+"test", it is a real change. The only safe "test" is the no-flag dry run.
 Never label any `--apply` command as a test.
 
 ---
@@ -341,6 +342,66 @@ add `--no-state` so they never overwrite the Monday baselines.
 First reading 2026-09-08: finance-leader share 32%; verified 28d = FS 65% · Nonprofits 18% ·
 Consumer Services 18%; without-search 0% (provenance starts now).
 
+### Phase 4 (2026-09-08) — accounts as the primary object
+
+**`accounts` table** (`supabase/migrations/003_accounts.sql` — A.J. pastes it into the SQL
+Editor, then `venv/bin/python scripts/backfill_accounts.py` (dry-run) and `--apply`; RLS ON,
+zero policies, service role only): one row per `account_key` (`src/pipeline/gates.account_key`,
+the ONE normalizer — the dashboard delegates to it): canonical name, aliases, domain, HQ/state,
+vertical/subindustry, revenue segment, entity class, fit/verify state, firmographics, ONE grade
+(+ which event earned it), best trigger, event count, and the rep's disposition WITH a reason
+code. Module `src/pipeline/accounts.py` (fill-only merge: facts never downgraded, verified never
+demoted, grade replaced only when better / re-graded / expired; dispositions are rep-owned and
+never touched by enrichment). Until the table exists every reader/writer probes and degrades to
+the Phase 1-3 behaviour.
+
+**One grade per account** (plan, supersedes the 2026-07-17 per-company/headline rule): the
+event's grade belongs to the chosen account (fit.account_name); the secondary-company grading
+loop and "headline promoted to best account" are gone; other workable companies get a facts-only
+account row. **Enrich once per account**: a verified account row fresher than 90 days is used
+as-is (provenance `account`) — the new trigger is graded, nothing is re-researched.
+Rep verdicts come from `accounts.disposition` (legacy `account_dispositions` merged in);
+a Not-a-Fit account's next event never reaches search.
+
+**Hashtag guards** (`src/pipeline/hashtag_guards.py`, applied before the deterministic score;
+NEVER stricter than the TAL rubric — they strip tags the model invents without evidence):
+#NewCFO/#NewController need a finance-hire SUBJECT (`src/pipeline/hires.finance_hire_subject`:
+role within ~80 chars of a hire verb; never attribution, interim, former, board seats or awards)
+— except SEC 8-K 5.02 filings, whose summary names no person: the scraper's phrase-typed
+`cfo_hire`/`executive_hire` IS the evidence and the tag is kept; #Acquisitions needs the
+acquirer/primary role on an M&A event; #Funding needs a ≥$1M non-nonprofit raise on a funding
+event OR a ≥$1M raise within 18 months in the FUNDING SEARCH evidence (amount read next to the
+raise verb, never the largest figure in the text); #HoldCo = holding words OR the holding-co
+subindustry OR ≥2 subsidiaries (rubric OR); #100EE needs a size bucket whose low bound is ≥100 or
+a numeric ≥100; #Global ≥2 countries counting the account's own; #AssetManagerScale needs ≥$250M
+in text or the SEC adviser registry; #FormerUser/#PrevConvo are always stripped. Stripped tags
+are logged as `guard: -#Tag (why)` and kept exceptions as `guard: #Tag kept — …`.
+
+**Trigger expiry**: `scripts/expire_triggers.py` (dry-run default) runs `--apply` inside
+`run_reverify.sh` before the 06:30 re-verify pass (takes `state/enrichment.lock`) — expired
+triggers become `trigger_expired` tombstones (research kept; NOT `not_fit`) and the account's
+best trigger (priority, recency, enriched rows first) and best remaining GRADE are recomputed —
+never a NULL grade while a graded live event remains. Enrich-once freshness reads ONLY
+`firmographics.researched_at` (stamped on researched writes; never on `account`/article).
+
+**Golden set** (`tests/golden/accounts.json`, `tests/test_golden.py`, exporter
+`scripts/build_golden_set.py`): ~250 reason-coded rows (rep verdicts + machine-seeded samples per
+tombstone reason + verified accounts + hire titles) asserted in CI against the FREE functions
+only. Rule: never edit an expected value to make a test pass — fix the code, or mark the row
+`reviewed: true` with a reason. A.J. reviews/extends the file over time.
+
+**Deleted** (orphaned since v1): `src/enrichment.py`, `import_leads.py`, `sheets_sync.py`,
+`sync_db.py`, `cleanup_legacy_events.py`, `src/scrapers/bing_scraper.py`,
+`src/scrapers/finsmes_scraper.py`, and `src/scrapers/job_scraper.py` ("Google Jobs": 2 events in
+28 days, both rejected; Adzuna covers open finance seats). `job_search`/`bing_news`/`finsmes`
+config sections removed. `EventSource.SEC_IAPD` added. CI now runs the golden set + gate +
+config tests on every scrape.
+
+**Dashboard**: account cards show the trigger history (every live event for the account),
+dismissals require a reason code (wrong vertical · out of territory · too big · too small · not a
+real trigger · duplicate · already a customer · other), the Scorecard gets a "why events were
+removed" pivot (reason × source × subindustry), and `expansion` events render with their own card.
+
 ## 1. Architecture (data flow)
 
 ```
@@ -350,9 +411,7 @@ Consumer Services 18%; without-search 0% (provenance starts now).
 │  1. python -m src.main                                               │
 │     ├── RSSScraper        (PR Newswire, VC News Daily, etc.)        │
 │     ├── GoogleNewsScraper                                            │
-│     ├── JobScraper        (Google Jobs only — others bot-blocked)   │
-│     ├── BingNewsScraper   (disabled, no API key)                    │
-│     ├── FinSMEsScraper    (disabled, permanent 403)                 │
+│     │   (JobScraper / BingNews / FinSMEs deleted in Phase 4)        │
 │     ├── SECScraper        (EFTS API, 8-K Items 5.02 / 2.01 / 1.01) │
 │     ├── FormDScraper      (private raises, territory-filtered)      │
 │     └── AdzunaScraper     (title_only queries, 3 calls/day)         │
@@ -521,10 +580,7 @@ loosen without A.J.
   parsed from primary XML; HTTP budget capped (newest-first,
   `form_d.max_lookups`/run). Catches private in-territory companies that
   never hit the news wires → event_type=funding.
-- **`job_scraper.py`** — Google Jobs (other boards disabled — Indeed/ZipRecruiter/SimplyHired/Ladders/CFO.com all bot-blocked)
 - **`news_scraper.py`** — Google News
-- **`bing_scraper.py`** — Bing News (disabled — needs paid API key)
-- **`finsmes_scraper.py`** — FinSMEs (disabled — permanent 403)
 
 ### Pipeline orchestration
 - **`src/main.py`** — `TriggerEventMonitor` orchestrates the scrape cycle. Two-pass dedup (URL → recent title) lives here. Wires all scrapers.
@@ -543,10 +599,7 @@ loosen without A.J.
 - **`dashboard.py`** — Streamlit UI. ~1300 lines. Reads from Supabase, renders event cards by category tab, handles filtering + bulk actions. Filters live in an `st.popover` (NOT the sidebar — sidebar toggle was unreliable).
 
 ### Maintenance scripts
-- **`cleanup_legacy_events.py`** — retroactively apply current filter rules + dedup to existing Supabase events. Dry-run by default; `--apply` to delete.
-- **`import_leads.py`** — manual import of prospect lists (for `stable_target` event type)
-- **`sheets_sync.py`** — alternative Google Sheets sync (rarely used)
-- **`sync_db.py`** — S3 sync for SQLite (rarely used; GitHub Actions cache handles this normally)
+- **`scripts/`** — `migrate_v2.py` (queue re-gate), `backfill_typed_columns.py`, `backfill_accounts.py`, `refresh_oracles.py`, `ria_trigger.py`, `expire_triggers.py`, `build_golden_set.py`, `check_feeds.py` — all dry-run by default (`--apply` writes)
 - **`scripts/check_feeds.py`** — debug utility for feed health
 
 ---
@@ -562,12 +615,12 @@ loosen without A.J.
 | `SUPABASE_KEY` (anon) | `.env`, Streamlit secrets | **Dead since 2026-07-21 RLS lockdown** — kept only as the negative probe for RLS verification (should always see 0 rows). |
 
 **Supabase RLS posture (since 2026-07-21):** RLS is ENABLED on all `public` tables (`events`, `account_dispositions`, `source_status`) with **zero policies** — the anon key can neither read nor write anything; every component uses the service-role key. Two standing rules: (1) any NEW table must get `alter table public.<name> enable row level security;` right after creation or Supabase's security emails resume; (2) never create permissive policies (`for select using (true)` etc.) — the original setup had such policies dormant on `events`/`source_status`, and enabling RLS woke them up until we dropped all policies. Verify anytime with the anon-key probe (expect 0 rows/APIError on all tables).
-| `TAVILY_API_KEY` | `.env`, GitHub Secrets (optional) | Web search for company enrichment. Was leaked in git history (commit `ac17b5b`), rotated in commit `536b57d`. Never re-hardcode a fallback. |
+| `TAVILY_API_KEY` | `.env` ONLY (Mac side; removed from GitHub Secrets 2026-09-06) | Web search fallback for enrichment. Was leaked in git history (commit `ac17b5b`), rotated in commit `536b57d`. Never re-hardcode a fallback. |
 | *(no other search keys)* | — | ⛔ Brave = RESERVED for the Hermes fleet (never add here). Google CSE = closed to new customers (dead). SearXNG :8888 = fleet infra (severed). Only vetted future candidate if the scorecard shows sustained `throttled` starvation: SerpAPI free 100/mo — ask A.J. first. |
 | `ADZUNA_APP_ID` + `ADZUNA_APP_KEY` | `.env`, GitHub Secrets | Adzuna jobs API (free tier ~100-250 calls/month) |
-| `ANTHROPIC_API_KEY` | GitHub Secrets (optional) | Cloud-based LLM for enrichment fallback. If unset, enrichment uses the shared local llama.cpp (Qwen3.6, :8091). |
+| `ANTHROPIC_API_KEY` | not set anywhere (removed from GitHub Secrets 2026-09-06) | Optional cloud LLM pre-empt in enrichment_scout; the shared local llama.cpp (Qwen3.6, :8091) is the LLM. |
 | `DASHBOARD_PASSWORD` | Streamlit secrets | Dashboard login |
-| `EMAIL_PASSWORD` + `SENDER_EMAIL` | GitHub Secrets | Email alerts (legacy — currently unused) |
+| `EMAIL_PASSWORD` + `SENDER_EMAIL` + `ALERT_RECIPIENT` | GitHub Secrets | Email alerts from the scrape job (recipient = A.J. since 2026-09-07; the address is never committed) |
 
 ---
 
@@ -692,12 +745,13 @@ source venv/bin/activate
 | Re-verify hidden accounts (ranked, capped 50, honors retry_after) | `python enrichment_scout.py --re-enrich --reverify-unverified` |
 | Daily re-verify job (06:30 ET, `com.teamalbert.reverify.plist` → `run_reverify.sh`, posts to #scout-engine) | `tail -f logs/reverify.log` · pause with `touch state/PAUSE` |
 | Refresh the free oracle tables (SEC advisers + FDIC banks; monthly job does this) | `python scripts/refresh_oracles.py --source all` |
+| **Accounts table (one-time, A.J.)** | paste `supabase/migrations/003_accounts.sql` into Supabase → SQL Editor → Run; then `python scripts/backfill_accounts.py` (dry-run / `--preflight`) and `--apply` (takes `state/enrichment.lock`; `--since` is preview-only and refuses `--apply`; refuses if it cannot read the existing rows) |
+| Expire stale triggers (nightly job does this) | `python scripts/expire_triggers.py` (dry-run) / `--apply` |
+| Regenerate the golden set (then review the diff — never to make a test pass) | `python scripts/build_golden_set.py --out tests/golden/accounts.json` |
 | New-adviser trigger events (dry-run default) | `python scripts/ria_trigger.py` / `--apply` (monthly job: `run_oracles.sh`, log `logs/oracles.log`) |
 | Local scrape cycle with the new feeds (writes local SQLite + alerts/ only) | `python -m src.main` (one cycle; `--daemon` loops) |
 | Re-gate the queue with zero paid search | `python scripts/migrate_v2.py` (dry-run) / `--apply` |
 | Full re-enrich (hits Firecrawl by default; Tavily only on fallbacks ~3%) | `python enrichment_scout.py --re-enrich` |
-| Cleanup industry leaks + dupes (dry-run) | `python cleanup_legacy_events.py` |
-| Cleanup — actually delete | `python cleanup_legacy_events.py --apply` |
 | Run dashboard locally | `streamlit run dashboard.py` |
 | Check launchd job is loaded | `launchctl list \| grep teamalbert` |
 | Reload launchd job | `launchctl unload ~/Library/LaunchAgents/com.teamalbert.enrichment.plist && launchctl load ~/Library/LaunchAgents/com.teamalbert.enrichment.plist` |
@@ -826,7 +880,7 @@ will stop working on web search until updated.
 ### Other dead ends / things that don't work
 - **Hermes gateway is messaging-only** — port 8084 on `hermes-sales` container is for messaging, not an HTTP API. Use the shared llama.cpp server (localhost:8091, OpenAI /v1) for LLM calls, not the Hermes gateway.
 - **X/Twitter monitoring** is not viable on free tier. X killed the free API in 2023. Public Nitter/RSSHub instances are unreliable. If A.J. revisits, options are $200/mo X Basic API or Apify scrapers ($20-100/mo).
-- **Indeed/ZipRecruiter/SimplyHired/Ladders/CFO.com** are all bot-blocked. The scraper code is left in `job_scraper.py` for reference but disabled in config. Adzuna replaces them.
+- **Indeed/ZipRecruiter/SimplyHired/Ladders/CFO.com** are all bot-blocked; the Google Jobs scraper that replaced them was deleted in Phase 4 (0 verified accounts in 28 days) — Adzuna is the open-seat source. Adzuna replaces them.
 - **BusinessWire RSS** now requires a registered channel ID — the legacy URL returns 0 items. If A.J. wants BW back, he must sign up free at services.businesswire.com and add the generated URL to config.
 
 ### User preferences (from MEMORY.md)
@@ -885,7 +939,6 @@ Priority files (most-modified, highest blast radius):
 - src/scrapers/adzuna_scraper.py
 - src/main.py
 - src/database.py
-- cleanup_legacy_events.py
 - config.example.yaml
 - supabase_sync.py
 
@@ -969,21 +1022,27 @@ TeamAlbertTriggerEventSearch/
 ├── enrichment_scout.py                # enrichment + grading
 ├── monitor_health.py                  # end-to-end health check (Elon runs)
 ├── supabase_sync.py                   # SQLite → Supabase
-├── cleanup_legacy_events.py           # retroactive cleanup
-├── import_leads.py                    # manual lead import
-├── sheets_sync.py                     # alt Google Sheets sync (rarely used)
-├── sync_db.py                         # alt S3 SQLite sync (rarely used)
-├── run_enrichment.sh                  # launchd wrapper for enrichment
+├── run_enrichment.sh                  # launchd wrapper for enrichment (state/PAUSE skips)
 ├── run_health_check.sh                # launchd wrapper for monitor_health.py
-├── scripts/
+├── run_reverify.sh                    # 06:30 ET: expire_triggers --apply, then ranked re-verify
+├── run_oracles.sh                     # 2nd of month 05:00 ET: refresh_oracles + ria_trigger --apply
+├── scripts/                           # ALL dry-run by default; --apply writes
+│   ├── migrate_v2.py                  # queue re-gate (Phase 1)
+│   ├── backfill_typed_columns.py      # after migration 002
+│   ├── backfill_accounts.py           # after migration 003
+│   ├── refresh_oracles.py             # SEC IAPD + FDIC → state/oracles.db
+│   ├── ria_trigger.py                 # new SEC-registered advisers → expansion events
+│   ├── expire_triggers.py             # nightly trigger expiry
+│   ├── build_golden_set.py            # exports tests/golden/accounts.json
 │   └── check_feeds.py                 # feed health debug tool
+├── supabase/migrations/               # 001 RLS · 002 typed columns · 003 accounts (A.J. runs by hand)
 ├── src/
 │   ├── __init__.py
 │   ├── main.py                        # scrape orchestration
 │   ├── database.py                    # SQLite manager
 │   ├── models.py                      # TriggerEvent, EventType, EventSource
 │   ├── alerts.py                      # email/file alert handlers
-│   ├── enrichment.py                  # (legacy enrichment, unused now)
+│   ├── pipeline/                      # gates, typed, cache, oracles, domains, accounts, hires, hashtag_guards, sources, runlock
 │   ├── performance/                   # async, caching, rate-limiting helpers
 │   └── scrapers/
 │       ├── __init__.py
@@ -991,11 +1050,8 @@ TeamAlbertTriggerEventSearch/
 │       ├── rss_scraper.py
 │       ├── sec_scraper.py             # SEC EDGAR EFTS
 │       ├── adzuna_scraper.py          # Adzuna jobs API
-│       ├── job_scraper.py             # Google Jobs
-│       ├── news_scraper.py            # Google News
-│       ├── bing_scraper.py            # (disabled)
-│       └── finsmes_scraper.py         # (disabled)
-├── tests/                             # minimal — not the focus
+│       └── news_scraper.py            # Google News (region-grouped queries)
+├── tests/                             # ~1,600 tests; tests/golden/accounts.json = the reason-coded golden set
 ├── logs/                              # gitignored — enrichment.log etc.
 ├── alerts/                            # gitignored — text alert files
 └── venv/                              # gitignored

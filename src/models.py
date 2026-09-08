@@ -24,6 +24,7 @@ class EventSource(Enum):
     PR_NEWSWIRE = "pr_newswire"
     GLOBE_NEWSWIRE = "globe_newswire"
     SEC_EDGAR = "sec_edgar"
+    SEC_IAPD = "sec_iapd"  # new SEC-registered advisers — scripts/ria_trigger.py writes this string directly (Phase 3, 2026-09-08)
     GOOGLE_NEWS = "google_news"
     ADZUNA = "adzuna"
     LINKEDIN = "linkedin"

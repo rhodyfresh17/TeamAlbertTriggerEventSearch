@@ -269,6 +269,19 @@ _NOT_THE_SEAT_RES = (
     re.compile(r'(?<!\w)(?:top|best|leading|outstanding|rising|award-winning)\s+(?:\d+\s+)?'
                + _ANY_FINANCE_ROLE + r's?(?!\w)|(?<!\w)' + _ANY_FINANCE_ROLE
                + r'\s+of\s+the\s+(?:year|decade)(?!\w)', re.IGNORECASE),
+    # A SUPPORT role "to" the seat is not the seat (review 2026-09-08 (Phase
+    # 4)): "Names Jane Doe Executive Assistant to the CFO", "EA to CFO",
+    # "Assistant to the CFO Internship", "HR Coordinator and Admin Assistant
+    # to the CFO", "Senior Advisor to the CFO" all typed 'cfo' because the
+    # 'to <role>' clause of _HIRE_PHRASE_RE fired before anything blanked the
+    # phrase — seven Adzuna EA postings were pinned in the golden set as CFO
+    # hires. Blanked from the support noun through the role only, so
+    # "Promotes Jane Doe from Assistant to the CFO to Chief Financial Officer"
+    # still types on the seat that remains.
+    re.compile(r'(?<!\w)(?:assistants?|ea|pa|coordinators?|interns?|internships?|'
+               r'secretar(?:y|ies)|chief\s+of\s+staff|aides?|advis[eo]rs?|deputy|deputies|'
+               r'liaisons?|support)\s+(?:reporting\s+)?to\s+(?:the\s+)?(?:office\s+of\s+the\s+)?'
+               + _FILLER + _ANY_FINANCE_ROLE + r'(?!\w)', re.IGNORECASE),
 )
 # Device controllers blanked before the CONFIGURED keyword scan of the generic
 # executive-hire path, which substring-matches "Controller".

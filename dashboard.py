@@ -26,11 +26,12 @@ import streamlit as st
 # and names across scrapers, enrichment and this UI (src/pipeline/gates.py).
 # The app runs from the repo root on Streamlit Cloud, so `src.` resolves.
 from src.pipeline.gates import ALL_STATE_CODES, STATE_NAMES, TERRITORY_STATES
+from src.pipeline.gates import account_key as _gates_account_key   # the module-absent lookups (review 2026-09-08, Phase 4)
 # Phase 3 supply visibility (2026-09-08): the Weekly Scorecard buckets rows
 # exactly as monitor_health.py does (same source labels, same finance-leader
 # family), so the dashboard and the Monday health check never disagree.
 from src.pipeline.sources import OTHER as OTHER_SOURCE, finance_leader_family, source_label
-from src.pipeline.typed import parse_ts
+from src.pipeline.typed import parse_ts, verify_state_for
 # The FY27 vertical taxonomy (32 ZoomInfo subindustries → 3 verticals) is
 # defined ONCE, in the enrichment engine. The import is guarded because this
 # app must still render if that module ever fails to import on Streamlit
@@ -40,6 +41,19 @@ try:
     from enrichment_scout import ZI_SUBINDUSTRIES, NONPROFIT_VERTICAL
 except Exception:  # noqa: BLE001 — any import failure, not only ImportError
     ZI_SUBINDUSTRIES, NONPROFIT_VERTICAL = {}, 'Nonprofits & Organizations'
+# Phase 4 2026-09-08: accounts as the primary object. src/pipeline/accounts.py
+# owns the ONE account normalizer (= gates.account_key), the disposition
+# vocabulary (statuses + reason codes) and the accounts-table reads/writes.
+# It ships in the same push as this file but is written separately, and this
+# app must keep rendering exactly as before if it is missing or fails to
+# import on Streamlit Cloud — every use below checks `_accounts is None` and
+# takes the Phase 1-3 (legacy) path. Same guard shape as the taxonomy import
+# above: any failure, not only ImportError, or one bad line there would
+# take the whole dashboard down.
+try:
+    from src.pipeline import accounts as _accounts
+except Exception:  # noqa: BLE001
+    _accounts = None
 
 
 def get_logo_base64() -> str:
@@ -212,6 +226,7 @@ st.markdown("""
     .badge-stable  { background: #ffedd5; color: #9a3412; }
     .badge-exec    { background: #ede9fe; color: #5b21b6; }
     .badge-seat    { background: #ccfbf1; color: #115e59; }
+    .badge-expansion { background: #fce7f3; color: #9d174d; }
     .badge-other   { background: #f3f4f6; color: #374151; }
 
     .status-badge { padding: 0.25rem 0.6rem; border-radius: 50px; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; }
@@ -666,6 +681,21 @@ EVENT_TYPES = {
         "badge_class": "badge-exec",
         "bg_color": "#ede9fe"
     },
+    # Phase 4 2026-09-08: sec_iapd new-adviser registrations and plant /
+    # office openings (scripts/ria_trigger.py writes event_type='expansion').
+    # Without an entry every one of them rendered as a "📋 Other" card, and
+    # the New Leads tab maths (`_tabbed` in main) needs each real type listed
+    # here — a type in this map MUST also have a tab, or it renders nowhere.
+    # NOT a finance-leader type: FINANCE_LEADER_EVENT_TYPES is unchanged.
+    "expansion": {
+        "label": "Expansion",
+        "full_label": "Expansion / New registration",
+        "color": "#ec4899",
+        "gradient": "linear-gradient(135deg, #ec4899 0%, #db2777 100%)",
+        "icon": "🌱",
+        "badge_class": "badge-expansion",
+        "bg_color": "#fce7f3"
+    },
     "other": {
         "label": "Other",
         "full_label": "Other Events",
@@ -993,6 +1023,16 @@ def update_lead_status(event_id: str, status: str, notes: str = None):
         return False
 
 
+# TAL grade pill colours — one table for the event card and the account
+# strip under a Work Queue row (Phase 4 2026-09-08), so the two never drift.
+GRADE_COLORS = {
+    'A': '#10b981',  # emerald
+    'B': '#3b82f6',  # blue
+    'C': '#f59e0b',  # amber
+    'D': '#6b7280',  # slate
+}
+
+
 def _resolve_display_company(row) -> str:
     """Pick the best company name to show in the card header.
     1st choice: the fit-gate-chosen ACCOUNT (the workable company — may be
@@ -1064,12 +1104,7 @@ def render_event_card(row, event_config, key_prefix: str = ''):
     # C=amber, D=grey. White text on solid bg + drop shadow for visibility.
     grade_raw = row.get('grade')
     grade = str(grade_raw).strip().upper() if grade_raw else ''
-    grade_colors = {
-        'A': '#10b981',  # emerald
-        'B': '#3b82f6',  # blue
-        'C': '#f59e0b',  # amber
-        'D': '#6b7280',  # slate
-    }
+    grade_colors = GRADE_COLORS
     # V11 grade descriptions (point-based scoring)
     grade_descriptions = {
         'A': 'Grade A — Hot lead (score 8+ with high-intent trigger)',
@@ -1518,18 +1553,56 @@ def render_event_card(row, event_config, key_prefix: str = ''):
                         if (co_name and acct_dispos is not None
                                 and not (co_fit and co_fit.get('verdict') == 'fail')):
                             wkey = f"{key_prefix}acct_{row['id']}_{_co_idx}"
-                            cur = (acct_dispos.get(_account_key(co_name)) or {}).get('status')
+                            cur = _dispo_for(acct_dispos, co_name) or {}
+                            cur_status, cur_reason = cur.get('status'), cur.get('reason')
                             opts = ['—'] + ACCOUNT_STATUSES
-                            sel_cols = st.columns([1, 2])
+                            # Phase 4 2026-09-08: status + reason (required
+                            # for Not a Fit / Out of Alignment) + notes, all
+                            # auto-saving through one callback. The widget's
+                            # own state wins once it exists — a 'Not a Fit'
+                            # the callback REFUSED (no reason yet) must stay
+                            # selected so the rep can add the reason, not
+                            # snap back to the saved row.
+                            pending = st.session_state.get(
+                                wkey, cur_status if cur_status in opts else '—')
+                            needs_reason = pending in REASON_REQUIRED_STATUSES
+                            sel_cols = st.columns([1, 1.3, 1.3] if needs_reason else [1, 2])
                             with sel_cols[0]:
-                                st.caption(f"Account status — {co_name[:30]}")
+                                why = (f" · {reason_label(cur_reason)}"
+                                       if cur_reason and not needs_reason else '')
+                                st.caption(f"Account status — {co_name[:30]}{why}")
                             with sel_cols[1]:
                                 st.selectbox(
                                     f"acct status {co_name}",
                                     opts,
-                                    index=opts.index(cur) if cur in opts else 0,
+                                    index=opts.index(cur_status) if cur_status in opts else 0,
                                     key=wkey,
                                     label_visibility="collapsed",
+                                    on_change=_on_account_dispo_change,
+                                    args=(wkey, co_name),
+                                )
+                            if needs_reason:
+                                r_opts = [''] + list(DISPOSITION_REASONS)
+                                with sel_cols[2]:
+                                    st.selectbox(
+                                        f"acct reason {co_name}",
+                                        r_opts,
+                                        index=r_opts.index(cur_reason) if cur_reason in r_opts else 0,
+                                        format_func=lambda c: reason_label(c) if c else '— reason (required) —',
+                                        key=wkey + '_reason',
+                                        label_visibility="collapsed",
+                                        on_change=_on_account_dispo_change,
+                                        args=(wkey, co_name),
+                                    )
+                                if not (st.session_state.get(wkey + '_reason') or cur_reason):
+                                    st.caption("⚠️ Pick a reason — the status is not saved until you do.")
+                            if pending != '—':
+                                st.text_input(
+                                    f"acct notes {co_name}",
+                                    value=cur.get('notes') or '',
+                                    key=wkey + '_notes',
+                                    label_visibility="collapsed",
+                                    placeholder="Disposition notes (optional) — Enter to save",
                                     on_change=_on_account_dispo_change,
                                     args=(wkey, co_name),
                                 )
@@ -1744,8 +1817,36 @@ def get_stats(df) -> dict:
 # follows the company across every event it appears in. Any disposition
 # means "decided — get it out of my queue" (per A.J. 2026-07-17), so events
 # whose primary company is dispositioned disappear from the active views.
-ACCOUNT_STATUSES = ['Picked Up', 'On Rep TAL', 'NetSuite Customer',
-                    'Out of Alignment', 'Not a Fit']
+# Vocabulary (Phase 4 2026-09-08): src/pipeline/accounts.py owns it. The
+# literals here are the fallback while that module is absent and MUST stay
+# equal to accounts.ACCOUNT_STATUSES / DISPOSITION_REASONS — the tests
+# compare the two whenever the module is importable.
+_FALLBACK_ACCOUNT_STATUSES = ('Picked Up', 'On Rep TAL', 'NetSuite Customer',
+                              'Out of Alignment', 'Not a Fit')
+_FALLBACK_DISPOSITION_REASONS = ('wrong_vertical', 'out_of_territory', 'too_big', 'too_small',
+                                 'not_a_trigger', 'duplicate', 'existing_customer', 'other')
+ACCOUNT_STATUSES = list(getattr(_accounts, 'ACCOUNT_STATUSES', None) or _FALLBACK_ACCOUNT_STATUSES)
+DISPOSITION_REASONS = tuple(getattr(_accounts, 'DISPOSITION_REASONS', None)
+                            or _FALLBACK_DISPOSITION_REASONS)
+# Human labels for the reason codes (the code is what gets stored; the
+# pivot in the Scorecard and the golden set are built on it).
+_FALLBACK_DISPOSITION_REASON_LABELS = {
+    'wrong_vertical': 'Wrong vertical',
+    'out_of_territory': 'Out of territory',
+    'too_big': 'Too big',
+    'too_small': 'Too small',
+    'not_a_trigger': 'Not a real trigger',
+    'duplicate': 'Duplicate',
+    'existing_customer': 'Already a customer',
+    'other': 'Other',
+}
+DISPOSITION_REASON_LABELS = dict(getattr(_accounts, 'DISPOSITION_REASON_LABELS', None)
+                                 or _FALLBACK_DISPOSITION_REASON_LABELS)
+# A dismissal is a tuning signal only when it says WHY (A.J.: "dismissals
+# require a reason code") — these two statuses are refused without one.
+_FALLBACK_REASON_REQUIRED_STATUSES = frozenset({'Not a Fit', 'Out of Alignment'})
+REASON_REQUIRED_STATUSES = frozenset(getattr(_accounts, 'REASON_REQUIRED_STATUSES', None)
+                                     or _FALLBACK_REASON_REQUIRED_STATUSES)
 ACCOUNT_DISPO_MIGRATION_SQL = (
     "create table if not exists account_dispositions (\n"
     "  company_key text primary key,\n"
@@ -1757,8 +1858,38 @@ ACCOUNT_DISPO_MIGRATION_SQL = (
 )
 
 
-def _account_key(name) -> str:
-    """Normalize a company name into a stable disposition key."""
+def reason_label(code) -> str:
+    """Human label for a disposition reason code. An unknown code reads as
+    itself (a new code in the accounts module never blanks the UI)."""
+    c = str(code or '').strip()
+    if not c or c.lower() in ('none', 'nan'):
+        return ''
+    return DISPOSITION_REASON_LABELS.get(c) or c.replace('_', ' ').capitalize()
+
+
+def disposition_error(status, reason) -> Optional[str]:
+    """Why a (status, reason) pair can't be saved, or None when it can.
+    Pure — the receipt banner shows this text verbatim. Clearing (no
+    status / '—') is always allowed; an unknown status or reason code is
+    refused (typo-proof), and Not a Fit / Out of Alignment need a reason."""
+    s = str(status or '').strip()
+    if not s or s == '—':
+        return None
+    if s not in ACCOUNT_STATUSES:
+        return f"'{s}' is not an account status ({', '.join(ACCOUNT_STATUSES)})"
+    r = str(reason or '').strip()
+    if r and r not in DISPOSITION_REASONS:
+        return f"'{r}' is not a disposition reason ({', '.join(DISPOSITION_REASONS)})"
+    if s in REASON_REQUIRED_STATUSES and not r:
+        return (f"'{s}' needs a reason — pick one next to the status "
+                f"({', '.join(reason_label(c) for c in DISPOSITION_REASONS)})")
+    return None
+
+
+def _legacy_account_key(name) -> str:
+    """The v1 normalizer (2026-07-17), kept verbatim: every key in the
+    legacy account_dispositions table was written with it, so while the
+    accounts module is absent this is what keeps those rows matching."""
     s = str(name or '').strip().lower()
     # Strip common suffixes so "Acme Inc." and "Acme" collide intentionally
     for suf in (', inc.', ', inc', ' inc.', ' inc', ', llc', ' llc',
@@ -1767,6 +1898,20 @@ def _account_key(name) -> str:
             s = s[: -len(suf)]
             break
     return s.strip(' .,')
+
+
+def _account_key(name) -> str:
+    """Normalize a company name into a stable account key.
+
+    Phase 4 2026-09-08: delegates to accounts.account_key — which IS
+    src.pipeline.gates.account_key, the ONE normalizer enrichment, the
+    typed `account_key` column, the accounts table and its backfill all
+    use — so this file's lookups hit the keys the pipeline writes. The v1
+    normalizer is the fallback only while that module is absent (its keys
+    are what the legacy table holds); the two are never mixed in one run."""
+    if _accounts is not None:
+        return _accounts.account_key(name)
+    return _legacy_account_key(name)
 
 
 # Scorecard query (Phase 3 2026-09-08). ONE cheap paginated read feeds the
@@ -1956,8 +2101,8 @@ def _trigger_key(row) -> tuple:
 
 
 def _trigger_label(etype: str) -> str:
-    """Card vocabulary when the type has one; a new type (sec_iapd's
-    'expansion') reads as itself instead of vanishing into 'Other'."""
+    """Card vocabulary when the type has one; a type without an EVENT_TYPES
+    entry reads as itself instead of vanishing into 'Other'."""
     cfg = EVENT_TYPES.get(etype)
     return cfg['full_label'] if cfg else etype.replace('_', ' ').capitalize()
 
@@ -2237,6 +2382,158 @@ def scorecard_week_buckets(rows, now=None) -> dict:
     return out
 
 
+# ── "Why events were removed" (Phase 4 2026-09-08) ──────────────────────────
+# Every tombstone writer stamps blocked_reason with a machine prefix before
+# the first colon ('fit_gate: HQ out of territory', 'structured:sic_out: …',
+# 'rep:Not a Fit (Acme)', 'trigger_expired: 70d old cfo_hire' …). The two
+# rep dismissals this file writes ('dismissed by rep (NOT RELEVANT)' and the
+# bulk form) carry no colon, so they are mapped by hand. Labels are the
+# only table; the pivot and the "Noise removed" list both read it.
+TOMBSTONE_REASON_LABELS = {
+    'fit_gate': 'Failed fit gate (territory/revenue/vertical)',
+    'industry': 'Blocked industry',
+    'board_change_only': 'Board-of-directors change only',
+    'rep': 'Dismissed by a rep (event, or account not a fit)',
+    'entity_shape': 'Entity shape (fund / trust / SPAC / public body)',
+    'structured': 'Structured data (SIC / Form D fields)',
+    'no_workable_account': 'No workable account (advisor / investor only)',
+    'bad_company_name': 'No real company name',
+    'trigger_expired': 'Trigger expired (shelf life)',
+    'oracle_too_small': 'Too small (registry revenue estimate)',
+    'other': 'Other / unlabelled',
+}
+REMOVAL_TOP_SUBINDUSTRIES = 8
+REMOVAL_OTHER_SUBINDUSTRY = 'other'      # known subindustries outside the top N
+REMOVAL_UNKNOWN_SUBINDUSTRY = 'unknown'  # removed before classification (no zi_subindustry)
+
+
+def tombstone_reason_prefix(reason) -> str:
+    """blocked_reason → its machine prefix (lower-case, before the first
+    colon); the colon-less rep dismissals → 'rep'; blank → 'other'."""
+    s = _clean_str(reason)
+    if not s:
+        return 'other'
+    if 'by rep' in s:
+        return 'rep'
+    return s.split(':', 1)[0].strip() or 'other'
+
+
+def tombstone_reason_label(prefix: str) -> str:
+    return TOMBSTONE_REASON_LABELS.get(prefix) or prefix
+
+
+def removal_subindustry(zi) -> str:
+    """Pivot bucket for a row's zi_subindustry: the name itself, or
+    'unknown' for NULL / blank / the LLM's out-of-taxonomy 'OTHER' (which
+    says nothing about the account and would masquerade as a subindustry)."""
+    s = _clean_str(zi)
+    if not s or s in ('other', 'none', 'nan', 'null'):
+        return REMOVAL_UNKNOWN_SUBINDUSTRY
+    return str(zi).strip()
+
+
+def removal_pivot(rows, days=SCORECARD_WEEK_DAYS, now=None,
+                  discovery_days=NOISE_CARD_DISCOVERY_DAYS,
+                  top_subindustries=REMOVAL_TOP_SUBINDUSTRIES) -> dict:
+    """Tombstones of the last `days` by reason prefix × source label ×
+    ZoomInfo subindustry. The row set is the "Auto-removed as noise" card's
+    (tombstoned within `days`, discovered within `discovery_days`) so the
+    pivot's total is that card's number — one expander, one count (the
+    2026-09-08 review's rule). discovery_days=None lifts the discovery
+    clause (every removal in the window, re-verify sweeps included).
+    → {'days', 'total',
+       'subindustries': [top N by removals…, 'other'?, 'unknown'?],
+       'rows': [{'reason', 'source', 'cells': {bucket: n}, 'total': n}…]
+                (count desc, then reason, source),
+       'by_reason' / 'by_source' / 'by_subindustry': {label: n} (count desc)}.
+    Rows with no subindustry sit in their own 'unknown' column — most
+    entity_shape / bad_company_name tombstones die before classification
+    and would otherwise hide inside 'other'."""
+    now = _aware(now)
+    start = now - timedelta(days=days)
+    disc_start = (now - timedelta(days=discovery_days)) if discovery_days is not None else None
+    triples, reasons, sources, subs = Counter(), Counter(), Counter(), Counter()
+    for r in rows:
+        if not r.get('blocked_at'):
+            continue
+        tomb = parse_ts(r.get('blocked_at'))
+        if tomb is None or tomb < start:
+            continue
+        if disc_start is not None:
+            disc = parse_ts(r.get('discovered_at'))
+            if disc is None or disc < disc_start:
+                continue
+        key = (tombstone_reason_prefix(r.get('blocked_reason')), source_label(r),
+               removal_subindustry(r.get('zi_subindustry')))
+        triples[key] += 1
+        reasons[key[0]] += 1
+        sources[key[1]] += 1
+        subs[key[2]] += 1
+    known = sorted((s for s in subs if s != REMOVAL_UNKNOWN_SUBINDUSTRY),
+                   key=lambda s: (-subs[s], s))
+    columns = known[:top_subindustries]
+    if len(known) > top_subindustries:
+        columns.append(REMOVAL_OTHER_SUBINDUSTRY)
+    if subs[REMOVAL_UNKNOWN_SUBINDUSTRY]:
+        columns.append(REMOVAL_UNKNOWN_SUBINDUSTRY)
+    cells = {}
+    for (reason, src, sub), n in triples.items():
+        col = sub if sub in columns else REMOVAL_OTHER_SUBINDUSTRY
+        row = cells.setdefault((reason, src), {c: 0 for c in columns})
+        row[col] += n
+    out_rows = [{'reason': k[0], 'source': k[1], 'cells': c, 'total': sum(c.values())}
+                for k, c in cells.items()]
+    out_rows.sort(key=lambda r: (-r['total'], r['reason'], r['source']))
+    return {'days': days, 'total': sum(triples.values()), 'subindustries': columns,
+            'rows': out_rows,
+            'by_reason': dict(sorted(reasons.items(), key=lambda kv: (-kv[1], kv[0]))),
+            'by_source': dict(sorted(sources.items(), key=lambda kv: (-kv[1], kv[0]))),
+            'by_subindustry': dict(sorted(subs.items(), key=lambda kv: (-kv[1], kv[0])))}
+
+
+_REMOVAL_COLUMN_TITLES = {REMOVAL_OTHER_SUBINDUSTRY: 'Other subindustries',
+                          REMOVAL_UNKNOWN_SUBINDUSTRY: 'Unknown / not classified'}
+
+
+def removal_pivot_frame(pivot: dict) -> pd.DataFrame:
+    """One row per (reason, source), one column per subindustry bucket, a
+    Total column and an 'All reasons' total row."""
+    subs = list(pivot['subindustries'])
+    titles = [_REMOVAL_COLUMN_TITLES.get(s, s) for s in subs]
+    cols = ['Reason', 'Source'] + titles + ['Total']
+    data = []
+    for row in pivot['rows']:
+        rec = {'Reason': tombstone_reason_label(row['reason']), 'Source': row['source'],
+               'Total': row['total']}
+        for s, t in zip(subs, titles):
+            rec[t] = row['cells'].get(s, 0)
+        data.append(rec)
+    if data:
+        total = {'Reason': 'All reasons', 'Source': '', 'Total': pivot['total']}
+        for s, t in zip(subs, titles):
+            total[t] = sum(row['cells'].get(s, 0) for row in pivot['rows'])
+        data.append(total)
+    return pd.DataFrame(data, columns=cols)
+
+
+def render_removal_section(tomb_rows, now=None):
+    """The "Why events were removed" block of the Weekly Scorecard. `tomb_rows`
+    is the card's bucket (scorecard_week_buckets()['tomb_wk']) — already the
+    right rows, so the pivot is passed the discovery clause off."""
+    piv = removal_pivot(tomb_rows, now=now, discovery_days=None)
+    st.markdown("**Why events were removed (7d)**")
+    if not piv['total']:
+        st.caption("No events were removed in the last 7 days.")
+        return
+    st.caption(
+        f"{piv['total']} removed — the same rows as 'Auto-removed as noise' — by reason × source, "
+        f"split by ZoomInfo subindustry (top {REMOVAL_TOP_SUBINDUSTRIES}, the rest under "
+        f"'Other subindustries'; 'Unknown' = removed before the account was classified). "
+        f"A reason that dominates one source is a scraper to tune; one that dominates one "
+        f"subindustry is a gate to check.")
+    st.dataframe(removal_pivot_frame(piv), use_container_width=True, hide_index=True)
+
+
 def render_weekly_scorecard(df, acct_dispos):
     """Trailing 7 days vs the 7 before: what came in, what got removed and
     why, what the team picked up. Turns rep behavior into tuning signal."""
@@ -2289,16 +2586,11 @@ def render_weekly_scorecard(df, acct_dispos):
                 st.markdown("*none yet*")
         with colB:
             st.caption("Noise removed, by reason (7d)")
-            reason_c = {}
-            for r in tomb_wk:
-                key = (r.get('blocked_reason') or 'other').split(':')[0]
-                reason_c[key] = reason_c.get(key, 0) + 1
-            LABELS = {'fit_gate': 'Failed fit gate (territory/revenue/vertical)',
-                      'industry': 'Blocked industry',
-                      'board_change_only': 'Board-of-directors change only',
-                      'dismissed by rep (NOT RELEVANT)': 'Dismissed by a rep'}
-            for k, n in sorted(reason_c.items(), key=lambda kv: -kv[1])[:6]:
-                st.markdown(f"- **{LABELS.get(k, k)}** — {n}")
+            # Same prefix rule + label table as the removal pivot below
+            # (Phase 4 2026-09-08) — one vocabulary in this expander.
+            reason_c = Counter(tombstone_reason_prefix(r.get('blocked_reason')) for r in tomb_wk)
+            for k, n in sorted(reason_c.items(), key=lambda kv: (-kv[1], kv[0]))[:6]:
+                st.markdown(f"- **{tombstone_reason_label(k)}** — {n}")
             if not reason_c:
                 st.markdown("*none this week*")
 
@@ -2306,6 +2598,14 @@ def render_weekly_scorecard(df, acct_dispos):
             "Reading this: 'New events' is raw intake; 'noise removed' is the "
             "filter doing its job (high is GOOD); pickups are the ground truth "
             "— if a source never produces a pickup, tell Claude to tune it.")
+
+        # Phase 4 2026-09-08: why events were removed, by reason × source ×
+        # subindustry. Its own try, like the supply block: a pivot bug must
+        # never take the pickup numbers above down with it.
+        try:
+            render_removal_section(tomb_wk, now)
+        except Exception as _rm_err:
+            st.caption(f"(removal pivot unavailable: {_rm_err})")
 
         # Phase 3 supply visibility (2026-09-08) — its own try so a supply
         # bug can never take the pickup numbers above down with it.
@@ -2315,25 +2615,168 @@ def render_weekly_scorecard(df, acct_dispos):
             st.caption(f"(supply section unavailable: {_sup_err})")
 
 
+# The legacy account_dispositions table has no reason column: the code
+# rides in `notes` as 'reason=<code> | <notes>'. The encoding is OWNED by
+# accounts.encode_legacy_notes / decode_legacy_notes and this file uses
+# those whenever the module is importable — review 2026-09-08 (Phase 4):
+# this pair started here, used only on the module-absent path, while the
+# module's own legacy write stored notes alone, so every reason a rep
+# entered before migration 003 was lost. The copies below run ONLY while
+# the module is absent (the same Phase 4 encoding, so the two paths read
+# each other's rows).
+_LEGACY_REASON_PREFIX = 'reason='
+
+
+def _legacy_notes(reason, notes) -> Optional[str]:
+    """notes column value for the legacy table: 'reason=<code> | <notes>'."""
+    encode = getattr(_accounts, 'encode_legacy_notes', None)
+    if encode is not None:
+        return encode(reason, notes)
+    parts = []
+    if reason:
+        parts.append(f'{_LEGACY_REASON_PREFIX}{reason}')
+    if notes:
+        parts.append(str(notes).strip())
+    return ' | '.join(parts) or None
+
+
+def _split_legacy_notes(notes):
+    """→ (reason or None, notes or None) — the inverse of _legacy_notes.
+    Notes written before Phase 4 carry no prefix and come back untouched."""
+    decode = getattr(_accounts, 'decode_legacy_notes', None)
+    if decode is not None:
+        return decode(notes)
+    s = str(notes or '').strip()
+    if not s or (isinstance(notes, float) and notes != notes):
+        return None, None
+    if not s.startswith(_LEGACY_REASON_PREFIX):
+        return None, s
+    head, sep, rest = s[len(_LEGACY_REASON_PREFIX):].partition(' | ')
+    return (head.strip() or None), (rest.strip() or None)
+
+
+def _dispo_keys(name) -> list:
+    """The keys a company may sit under in the dispositions map: this
+    file's key first and — while the accounts module is absent — the
+    pipeline's key (gates.account_key) as well. accounts.set_disposition
+    writes the legacy row under THAT key, so a v1-keyed lookup alone would
+    hide every verdict the module recorded the moment this file fell back
+    (review 2026-09-08 (Phase 4)). With the module present the two keys are
+    the same function, so there is exactly one."""
+    keys = [_account_key(name)]
+    if _accounts is None:
+        try:
+            alt = _gates_account_key(name)
+        except Exception:  # noqa: BLE001 — a lookup helper never takes a card down
+            alt = ''
+        if alt and alt not in keys:
+            keys.append(alt)
+    return [k for k in keys if k]
+
+
+def _dispo_for(acct_dispos, name) -> Optional[dict]:
+    """The disposition record for a company name under any of its keys
+    (_dispo_keys), or None."""
+    if not acct_dispos or not name:
+        return None
+    for k in _dispo_keys(name):
+        rec = acct_dispos.get(k)
+        if rec:
+            return rec
+    return None
+
+
+def _dispo_record(key: str, rec) -> dict:
+    """accounts.load_dispositions value ({status, reason, notes, name, at})
+    → the dict shape the rest of this file reads: the legacy table's
+    company_key / company_name / status / notes / updated_at, plus 'reason'."""
+    rec = rec if isinstance(rec, dict) else {}
+    return {'company_key': key,
+            'company_name': rec.get('name') or rec.get('company_name') or key,
+            'status': rec.get('status'),
+            'reason': rec.get('reason') or None,
+            'notes': rec.get('notes') or None,
+            'updated_at': rec.get('at') or rec.get('updated_at')}
+
+
+def _load_legacy_dispositions(client) -> dict:
+    """The legacy table as-is, with the reason code split back out of notes."""
+    rows = client.table('account_dispositions').select('*').execute().data or []
+    out = {}
+    for r in rows:
+        reason, notes = _split_legacy_notes(r.get('notes'))
+        r = dict(r)
+        r['reason'], r['notes'] = reason, notes
+        out[r['company_key']] = r
+    return out
+
+
 def load_account_dispositions():
-    """Return {company_key: {status, company_name, updated_at}} or None when
-    the table hasn't been migrated yet."""
+    """Return {account_key: {company_key, company_name, status, reason,
+    notes, updated_at}} or None when the legacy table hasn't been migrated.
+
+    Phase 4 2026-09-08: accounts.load_dispositions (the accounts table
+    merged with the legacy account_dispositions) when that module is
+    importable, the legacy table alone otherwise — the same shape either
+    way, plus 'reason'. Keys are re-derived from the name with _account_key
+    so a legacy row written by the v1 normalizer still matches this file's
+    lookups (the module and this file normalize identically, so for rows
+    the module keyed itself this is a no-op). A module failure falls back
+    to the legacy read: the module may be ahead of the database."""
     client = get_supabase_client()
     if not client:
         return None
+    if _accounts is not None:
+        try:
+            out = {}
+            for key, rec in (_accounts.load_dispositions(client) or {}).items():
+                name = rec.get('name') if isinstance(rec, dict) else None
+                k = (_account_key(name) if name else '') or key
+                out[k] = _dispo_record(k, rec)
+            if out:
+                return out
+            # {} means "no verdicts yet" OR "neither table is readable" — the
+            # module swallows both. Only the legacy read below can tell, and
+            # the migration banner (None) depends on the difference (review
+            # 2026-09-08 (Phase 4): it never showed on the module path).
+        except Exception:
+            pass
     try:
-        rows = client.table('account_dispositions').select('*').execute().data or []
-        return {r['company_key']: r for r in rows}
+        return _load_legacy_dispositions(client)
     except Exception:
         return None  # table missing — feature dormant until migration
 
 
-def set_account_disposition(company_name: str, status):
+def _receipt_text(receipt, fallback: str) -> str:
+    """The banner line. accounts.set_disposition returns 'Saved: …' /
+    'Cleared …' on success and 'NOT saved — …' / 'Partly saved — …' (one
+    table written, the other failed) otherwise — it never raises for a
+    refused write — and main() colours the banner by the first character,
+    so the mark is added here. A blank receipt reads as success (the call
+    returned without raising)."""
+    text = str(receipt or '').strip()
+    if text[:1] in ('✅', '❌'):
+        return text
+    if not text:
+        return f'✅ {fallback}'
+    ok = text.lower().startswith(('saved', 'cleared'))
+    return f"{'✅' if ok else '❌'} {text}"
+
+
+def set_account_disposition(company_name: str, status, reason=None, notes=None):
     """Upsert (or clear, when status falsy/'—') a company's disposition.
 
-    Runs inside selectbox on_change callbacks, where st.error output can be
+    Runs inside widget on_change callbacks, where st.error output can be
     silently dropped — so the outcome (success OR failure) is stashed in
-    session_state and rendered as a banner on the next rerun instead."""
+    session_state and rendered as a banner on the next rerun instead.
+
+    Phase 4 2026-09-08: validates FIRST (disposition_error — a Not a Fit /
+    Out of Alignment without a reason is refused and the banner says why;
+    nothing is written), then writes through accounts.set_disposition,
+    which keeps the accounts table AND the legacy table in step, or the
+    legacy table alone while that module is absent (reason folded into
+    notes, see _legacy_notes). Clearing goes through the module too —
+    status None — so both tables forget the account together."""
     client = get_supabase_client()
     if not client or not company_name:
         st.session_state['_dispo_receipt'] = (
@@ -2344,26 +2787,57 @@ def set_account_disposition(company_name: str, status):
         st.session_state['_dispo_receipt'] = (
             f"❌ Account status NOT saved — couldn't derive a key from '{company_name}'")
         return
+    clearing = not status or status == '—'
+    err = disposition_error(status, reason)
+    if err:
+        st.session_state['_dispo_receipt'] = (
+            f"❌ Account status NOT saved for {company_name} — {err}")
+        return
+    reason = (str(reason).strip() or None) if (reason and not clearing) else None
+    notes = (str(notes).strip() or None) if (notes and not clearing) else None
     try:
-        if not status or status == '—':
-            client.table('account_dispositions').delete().eq('company_key', key).execute()
+        if _accounts is not None:
+            receipt = _accounts.set_disposition(client, company_name, None if clearing else status,
+                                                reason=reason, notes=notes)
+            fallback = (f"Cleared account status for {company_name}" if clearing
+                        else f"Saved: {company_name} → {status}")
+            st.session_state['_dispo_receipt'] = _receipt_text(receipt, fallback)
+            return
+        if clearing:
+            # every key this file may find the row under (_dispo_keys): a
+            # row the accounts module wrote sits under the pipeline's key
+            client.table('account_dispositions').delete().in_(
+                'company_key', sorted(set(_dispo_keys(company_name)))).execute()
             st.session_state['_dispo_receipt'] = f"✅ Cleared account status for {company_name}"
         else:
             client.table('account_dispositions').upsert({
                 'company_key': key,
                 'company_name': str(company_name)[:200],
                 'status': status,
+                'notes': _legacy_notes(reason, notes),
                 'updated_at': datetime.now().isoformat(),
             }, on_conflict='company_key').execute()
-            st.session_state['_dispo_receipt'] = f"✅ Saved: {company_name} → {status}"
+            why = f" ({reason_label(reason)})" if reason else ''
+            st.session_state['_dispo_receipt'] = f"✅ Saved: {company_name} → {status}{why}"
     except Exception as e:
         st.session_state['_dispo_receipt'] = (
             f"❌ Account status NOT saved — {type(e).__name__}: {str(e)[:300]}")
 
 
 def _on_account_dispo_change(widget_key: str, company_name: str):
-    """selectbox on_change callback — writes immediately, no save button."""
-    set_account_disposition(company_name, st.session_state.get(widget_key))
+    """on_change callback shared by the status, reason and notes widgets of
+    one account control — writes immediately, no save button. `widget_key`
+    is the status widget's key; the reason and notes widgets hang off it
+    (see render_event_card), so whichever fired, all three are read. The
+    reason picker only renders for REASON_REQUIRED_STATUSES, so a reason
+    arriving with any other status is the previous status's — stale — and
+    is dropped rather than stored against 'Picked Up'."""
+    status = st.session_state.get(widget_key)
+    reason = st.session_state.get(widget_key + '_reason')
+    if status not in REASON_REQUIRED_STATUSES:
+        reason = None
+    set_account_disposition(company_name, status, reason=reason,
+                            notes=st.session_state.get(widget_key + '_notes'))
 
 
 # Event types that ARE a finance-leader trigger on their own.
@@ -2440,9 +2914,254 @@ def work_queue_sort_key(r) -> tuple:
     return (_grade_rank(r.get('grade')), -_score_of(r), -ts)
 
 
-def render_work_queue(new_df: pd.DataFrame, top_n: int = 10):
+# ── Account cards (Phase 4 2026-09-08) ──────────────────────────────────────
+# The Work Queue row is the ACCOUNT: its best event is the card, and under
+# it sits the account strip — grade / verification / best trigger / event
+# count from the accounts table (migration 003) when it exists, from the
+# event otherwise — and the trigger history: every live event for the same
+# account_key in the loaded window. Pure helpers below; rendering is thin.
+ACCOUNTS_SELECT = ('account_key,canonical_name,grade,numeric_score,verify_state,'
+                   'best_trigger_type,best_trigger_at,best_trigger_event_id,event_count,'
+                   'last_event_at,disposition,disposition_reason,hashtags,zi_subindustry,'
+                   'revenue_segment,hq_state,active')
+ACCOUNTS_KEY_CHUNK = 100     # keys per in.(…) filter — keeps the request URL short
+HISTORY_MAX_ROWS = 6         # lines shown before "+k more"
+
+
+def _probe_accounts_table(client) -> bool:
+    """Does the accounts table exist? accounts.probe_accounts when the
+    module is importable, else one cheap select; any failure → False (the
+    event-derived summary, i.e. today's behaviour)."""
+    if client is None:
+        return False
+    if _accounts is not None:
+        try:
+            return bool(_accounts.probe_accounts(client))
+        except Exception:
+            return False
+    try:
+        client.table('accounts').select('account_key').limit(1).execute()
+        return True
+    except Exception:
+        return False
+
+
+# One probe an hour, like typed_columns_present: the table lands when A.J.
+# runs migration 003, and a stale False only costs the event-derived
+# summary until the TTL expires.
+@st.cache_data(ttl=3600)
+def accounts_table_present() -> bool:
+    try:
+        return _probe_accounts_table(get_supabase_client())
+    except Exception:
+        return False
+
+
+def _load_accounts_by_key(client, keys, chunk=ACCOUNTS_KEY_CHUNK) -> dict:
+    """{account_key: accounts row} for `keys` (deduped, blanks dropped),
+    `chunk` keys per request. Any failure → {} — the cards then read from
+    their events, never half from each."""
+    keys = list(dict.fromkeys(k for k in keys if k))
+    out = {}
+    for i in range(0, len(keys), chunk):
+        try:
+            resp = (client.table('accounts').select(ACCOUNTS_SELECT)
+                    .in_('account_key', keys[i:i + chunk]).execute())
+        except Exception:
+            return {}
+        for r in resp.data or []:
+            if isinstance(r, dict) and r.get('account_key'):
+                out[r['account_key']] = r
+    return out
+
+
+def load_accounts_for(keys) -> dict:
+    """Accounts rows for the keys on screen; {} until the table exists."""
+    if not keys or not accounts_table_present():
+        return {}
+    client = get_supabase_client()
+    if not client:
+        return {}
+    return _load_accounts_by_key(client, keys)
+
+
+def event_account_key(row) -> str:
+    """The account an event belongs to. The typed `account_key` column when
+    enrichment filled it AND the accounts module is present (both are
+    gates.account_key, so they agree); otherwise _account_key of the
+    display company — one normalizer per run, never two. '' for an unknown
+    company, so unknowns never merge or share a history."""
+    k = _clean_str(row.get('account_key'))
+    if k and _accounts is not None:
+        return k
+    name = _resolve_display_company(row)
+    if not name or name.strip().lower() in ('', 'unknown company'):
+        return ''
+    return _account_key(name)
+
+
+def annotate_account_keys(df: pd.DataFrame) -> pd.DataFrame:
+    """Add an `_account_key` column (event_account_key per row), computed
+    ONCE per frame: trigger_history is called per Work Queue row, and with
+    the category focus on that is up to 500 rows × a 10k-row window."""
+    df = df.copy()
+    if df.empty:
+        df['_account_key'] = pd.Series(dtype=object)
+    else:
+        df['_account_key'] = df.apply(event_account_key, axis=1)
+    return df
+
+
+def _is_tombstoned(row) -> bool:
+    return _clean_str(row.get('blocked_at')) not in ('', 'none', 'nat', 'null')
+
+
+def _event_when(row):
+    """(epoch, 'YYYY-MM-DD') of the event: published_date, else the
+    discovery timestamp — the Work Queue's freshness rule."""
+    for field in ('published_date', 'discovered_date', 'discovered_at'):
+        ts = _epoch(row.get(field))
+        if ts:
+            return ts, datetime.fromtimestamp(ts, tz=timezone.utc).strftime('%Y-%m-%d')
+    return 0.0, ''
+
+
+def trigger_history(df, account_key: str) -> list:
+    """Every live (not tombstoned) event in `df` for `account_key`, newest
+    first → [{'id', 'date', 'ts', 'event_type', 'label', 'icon', 'grade',
+    'lead_status', 'title'}]. Uses the `_account_key` column when the frame
+    was annotated (annotate_account_keys), deriving it otherwise. Empty for
+    a blank key: unknown companies have no shared history."""
+    if not account_key or df is None or len(df) == 0:
+        return []
+    if isinstance(df, pd.DataFrame):
+        keys = (df['_account_key'] if '_account_key' in df.columns
+                else df.apply(event_account_key, axis=1))
+        rows = df[keys == account_key].to_dict('records')
+    else:
+        rows = [r for r in df if event_account_key(r) == account_key]
+    out = []
+    for r in rows:
+        if _is_tombstoned(r):
+            continue
+        ts, date = _event_when(r)
+        cfg = event_config_for(r.get('event_type'))
+        g = r.get('grade')
+        out.append({'id': r.get('id'), 'date': date, 'ts': ts,
+                    'event_type': _clean_str(r.get('event_type')) or 'other',
+                    'label': cfg['label'], 'icon': cfg['icon'],
+                    'grade': str(g).strip().upper() if _clean_str(g) else '',
+                    'lead_status': str(r.get('lead_status') or 'NEW'),
+                    'title': str(r.get('title') or '')[:90]})
+    out.sort(key=lambda h: -h['ts'])
+    return out
+
+
+def _present(v) -> bool:
+    return v is not None and not (isinstance(v, float) and v != v) and str(v).strip() != ''
+
+
+def account_summary(row, accounts_row=None, history=None) -> dict:
+    """What the account strip shows. The accounts row (migration 003) wins
+    for grade / numeric_score / verify_state / best trigger / event_count
+    wherever it carries a value; the event — the Work Queue's top row for
+    the account — fills the rest, so the strip reads the same before the
+    table exists, from that one event's point of view. event_count falls
+    back to the history length (the live events in the window)."""
+    acc = accounts_row if isinstance(accounts_row, dict) else {}
+
+    def pick(field, event_value):
+        v = acc.get(field)
+        return v if _present(v) else event_value
+
+    name = acc.get('canonical_name') if _present(acc.get('canonical_name')) else _resolve_display_company(row)
+    ts, date = _event_when(row)
+    grade = pick('grade', row.get('grade'))
+    state = pick('verify_state',
+                 _clean_str(row.get('verify_state')) or verify_state_for(fit_verdict(row)) or 'staged')
+    best_type = pick('best_trigger_type', row.get('event_type'))
+    best_at = pick('best_trigger_at', date)
+    count = acc.get('event_count')
+    if not _present(count):
+        count = len(history) if history is not None else 1
+    try:
+        count = int(float(count))
+    except (TypeError, ValueError):
+        count = 0
+    hashtags = _parse_json_field(pick('hashtags', row.get('hashtags')), [])
+    return {'name': name,
+            'account_key': (_clean_str(acc.get('account_key')) or event_account_key(row)),
+            'grade': str(grade).strip().upper() if _present(grade) else '',
+            'numeric_score': _score_of({'numeric_score': pick('numeric_score', row.get('numeric_score'))}),
+            'verify_state': _clean_str(state) or 'staged',
+            'best_trigger_type': _clean_str(best_type) or 'other',
+            'best_trigger_label': _trigger_label(_clean_str(best_type) or 'other'),
+            'best_trigger_at': str(best_at)[:10] if _present(best_at) else '',
+            'event_count': count,
+            'hashtags': hashtags if isinstance(hashtags, list) else [],
+            'from_accounts_table': bool(acc)}
+
+
+_VERIFY_STATE_TEXT = {'verified': ('✓ verified', '#10b981'),
+                      'researched_ambiguous': ('⚠ verify fit', '#fbbf24'),
+                      'staged': ('🕒 not researched', '#d1d5db'),
+                      'decided': ('decided', '#9ca3af'),
+                      'not_fit': ('✗ not a fit', '#f87171')}
+
+
+def _grade_pill(grade: str, small: bool = True) -> str:
+    if grade not in GRADE_COLORS:
+        return ('<span style="font-size:0.66rem;color:rgba(255,255,255,0.45);">ungraded</span>'
+                if small else '')
+    return (f'<span style="background:{GRADE_COLORS[grade]};color:#fff;border-radius:4px;'
+            f'padding:0.05rem 0.4rem;font-size:0.66rem;font-weight:800;">{grade}</span>')
+
+
+def account_history_html(summary: dict, history: list, others_new: int = 0,
+                         max_rows: int = HISTORY_MAX_ROWS) -> str:
+    """The account strip as ONE continuous HTML string (an indented line
+    after a blank one renders as a code block — see render_event_card)."""
+    import html as _h
+    txt, clr = _VERIFY_STATE_TEXT.get(summary.get('verify_state'), (summary.get('verify_state') or '', '#9ca3af'))
+    facts = [f'<span style="font-weight:600;color:rgba(255,255,255,0.8);">🗂 {_h.escape(str(summary.get("name") or ""))}</span>',
+             _grade_pill(summary.get('grade') or ''),
+             f'<span style="color:{clr};">{_h.escape(txt)}</span>']
+    if summary.get('best_trigger_label'):
+        when = f' ({summary["best_trigger_at"]})' if summary.get('best_trigger_at') else ''
+        facts.append(f'best trigger: {_h.escape(summary["best_trigger_label"])}{when}')
+    n = summary.get('event_count') or 0
+    facts.append(f'{n} event{"s" if n != 1 else ""}' +
+                 (' (accounts table)' if summary.get('from_accounts_table') else ' in window'))
+    head = ' <span style="color:rgba(255,255,255,0.3);">·</span> '.join(facts)
+    lines = []
+    for h in history[:max_rows]:
+        lines.append(
+            f'<div style="margin:2px 0 0 1.2rem;">'
+            f'<span style="color:rgba(255,255,255,0.5);">{h["date"] or "no date"}</span> · '
+            f'{h["icon"]} {_h.escape(h["label"])} · {_grade_pill(h["grade"])} · '
+            f'<span style="color:rgba(255,255,255,0.65);">{_h.escape(h["title"])}</span>'
+            f'</div>')
+    extra = len(history) - max_rows
+    if extra > 0:
+        lines.append(f'<div style="margin:2px 0 0 1.2rem;color:rgba(255,255,255,0.45);">… +{extra} more</div>')
+    if others_new:
+        lines.append(f'<div style="margin:2px 0 0 1.2rem;color:rgba(255,255,255,0.45);">↳ +{others_new} more NEW '
+                     f'event{"s" if others_new != 1 else ""} for this account in the New Leads tabs below</div>')
+    return (f'<div style="font-size:0.74rem;color:rgba(255,255,255,0.7);margin:-0.3rem 0 0.9rem 0.4rem;">'
+            f'<div>{head}</div>{"".join(lines)}</div>')
+
+
+def render_account_history(summary: dict, history: list, others_new: int = 0):
+    st.markdown(account_history_html(summary, history, others_new), unsafe_allow_html=True)
+
+
+def render_work_queue(new_df: pd.DataFrame, top_n: int = 10, history_df=None):
     """The Monday-morning view: ONE ranked list across all event types,
-    rolled up per company. Ranking: grade → numeric score → freshness."""
+    rolled up per ACCOUNT. Ranking: grade → numeric score → freshness.
+    `history_df` (Phase 4 2026-09-08) is the whole loaded window — every
+    lead status, verification toggle applied — so an account's trigger
+    history shows the events a rep already classified too; it defaults to
+    `new_df`."""
     st.markdown("""
         <div class="section-header">
             <span style="font-size: 1.5rem;">🔥</span>
@@ -2461,18 +3180,25 @@ def render_work_queue(new_df: pd.DataFrame, top_n: int = 10):
     # (newest first). One sort, one key — see work_queue_sort_key.
     rows.sort(key=work_queue_sort_key)
 
-    # Roll up per company — the best-ranked event represents the account
+    # Roll up per account — the best-ranked event represents it. Keyed by
+    # event_account_key (Phase 4): the typed account_key / the ONE
+    # normalizer, so "Acme Inc." and "Acme" are one row, and the same key
+    # the trigger history and the accounts table use.
     by_company = {}
     order = []
     for r in rows:
-        key = _resolve_display_company(r).strip().lower()
-        if key in ('unknown company', ''):
+        key = event_account_key(r)
+        if not key:
             key = f"__solo_{r.get('id')}"  # don't merge unknowns together
         if key not in by_company:
             by_company[key] = {'top': r, 'others': 0}
             order.append(key)
         else:
             by_company[key]['others'] += 1
+
+    shown_keys = [k for k in order[:top_n] if not k.startswith('__solo_')]
+    accounts_rows = load_accounts_for(shown_keys)
+    hist = annotate_account_keys(history_df if history_df is not None else new_df)
 
     shown = 0
     for key in order:
@@ -2482,9 +3208,10 @@ def render_work_queue(new_df: pd.DataFrame, top_n: int = 10):
         r = entry['top']
         event_config = event_config_for(r.get('event_type'))
         render_event_card(r, event_config, key_prefix='wq_')
-        if entry['others']:
-            st.caption(f"    ↳ +{entry['others']} more event(s) for this "
-                       f"company in the New Leads tabs below")
+        acct_key = '' if key.startswith('__solo_') else key
+        history = trigger_history(hist, acct_key)
+        render_account_history(account_summary(r, accounts_rows.get(acct_key), history),
+                               history, others_new=entry['others'])
         shown += 1
 
     remaining = len(order) - shown
@@ -2852,7 +3579,6 @@ def main():
             f"```sql\n{ACCOUNT_DISPO_MIGRATION_SQL}\n```"
         )
     elif acct_dispos and not new_df.empty:
-        decided_keys = set(acct_dispos.keys())
 
         def _event_decided(r):
             # Hidden when the company the event is ABOUT is dispositioned —
@@ -2872,7 +3598,7 @@ def main():
                     if m:
                         names.add(m.get('name') or '')
                         break
-            return any(_account_key(n) in decided_keys for n in names if n)
+            return any(_dispo_for(acct_dispos, n) for n in names if n)
 
         decided_mask = new_df.apply(_event_decided, axis=1)
         hidden_n = int(decided_mask.sum())
@@ -2907,7 +3633,7 @@ def main():
     # account with 4 events is one row, not four cards.
     # When a category focus is active, show the WHOLE ranked list — the rep
     # is working through it, not previewing it.
-    render_work_queue(new_df, top_n=(500 if focus else 10))
+    render_work_queue(new_df, top_n=(500 if focus else 10), history_df=df)
 
     # ── New Leads Section ──
     new_count = len(new_df)
@@ -2928,17 +3654,23 @@ def main():
         new_funding = len(new_df[new_df['event_type'] == 'funding'])
         new_stable = len(new_df[new_df['event_type'] == 'stable_target'])
         new_exec = len(new_df[new_df['event_type'] == 'executive_hire'])
+        new_expansion = len(new_df[new_df['event_type'] == 'expansion'])
         # "Other" absorbs every type without a tab of its own (incl. unknown)
         _tabbed = [t for t in EVENT_TYPES if t != 'other']
         new_other = int((~new_df['event_type'].isin(_tabbed)).sum())
 
-        tab_ma, tab_cfo, tab_seat, tab_funding, tab_stable, tab_exec, tab_other = st.tabs([
+        # Phase 4 2026-09-08: an Expansion tab — 'expansion' joined
+        # EVENT_TYPES (so `_tabbed` counts it out of "Other"), and a type in
+        # that map without a tab renders nowhere.
+        (tab_ma, tab_cfo, tab_seat, tab_funding, tab_stable, tab_exec,
+         tab_expansion, tab_other) = st.tabs([
             f"🔵 M&A ({new_ma})",
             f"💼 CFO ({new_cfo})",
             f"🪑 Open Seat ({new_seat})",
             f"💰 Funding ({new_funding})",
             f"🎯 Stable ({new_stable})",
             f"👔 Exec ({new_exec})",
+            f"🌱 Expansion ({new_expansion})",
             f"📋 Other ({new_other})"
         ])
         with tab_ma:
@@ -2953,6 +3685,8 @@ def main():
             render_event_section(new_df, "stable_target", EVENT_TYPES["stable_target"], None)
         with tab_exec:
             render_event_section(new_df, "executive_hire", EVENT_TYPES["executive_hire"], None)
+        with tab_expansion:
+            render_event_section(new_df, "expansion", EVENT_TYPES["expansion"], None)
         with tab_other:
             render_event_section(new_df, "other", EVENT_TYPES["other"], None,
                                  include_unknown_types=True)
@@ -3014,8 +3748,12 @@ def main():
                 c1, c2, c3, c4 = st.columns([3, 2, 2, 1])
                 with c1:
                     st.markdown(f"**{r.get('company_name') or r['company_key']}**")
+                    if r.get('notes'):
+                        st.caption(str(r['notes'])[:120])
                 with c2:
-                    st.markdown(r.get('status') or '')
+                    # Phase 4 2026-09-08: the reason code next to the status
+                    why = f" · *{reason_label(r['reason'])}*" if r.get('reason') else ''
+                    st.markdown((r.get('status') or '') + why)
                 with c3:
                     st.caption((r.get('updated_at') or '')[:10])
                 with c4:

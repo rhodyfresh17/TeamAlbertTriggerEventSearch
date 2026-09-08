@@ -722,7 +722,7 @@ def test_supply_pivot_rows_columns_and_cells():
     assert [r['trigger'] for r in piv['rows']] == [
         d.FINANCE_LEADER_ROLLUP, '↳ CFO hire', '↳ Open finance seat',
         '↳ Controller hire (#NewController)', 'PE/VC Funding', 'Executive Hires',
-        'Expansion',                                                       # sec_iapd's type: not in EVENT_TYPES
+        'Expansion / New registration',                                    # sec_iapd's type: its own card since Phase 4
         d.ALL_SURVIVORS]
     assert by_key['finance_leader']['cells'] == {'Adzuna': (3, 2), 'SEC Form D': (0, 0), 'other': (2, 0)}
     assert by_key['finance_leader']['total'] == (5, 2)
@@ -1005,3 +1005,902 @@ def test_load_scorecard_rows_pages_past_1000():
 
     assert len(d._load_scorecard_rows(C(), {'source', 'verify_state'})) == 1005
     assert ranges == [(0, 999), (1000, 1999)]
+
+
+# ── Phase 4 (2026-09-08): accounts as the primary object ─────────────────────
+# The dashboard talks to src/pipeline/accounts.py through a guarded import
+# (`d._accounts`, None when the module is missing). Every test below pins
+# `d._accounts` to a stub with EXACTLY the Phase 4 API, or to None for the
+# legacy path, so it is deterministic whether or not the real module is
+# importable. Nothing touches Supabase: clients are fakes, session_state is
+# a dict.
+import inspect  # noqa: E402
+
+from src.pipeline.gates import account_key as gates_account_key  # noqa: E402
+
+
+class _StubAccounts:
+    """Stand-in for src.pipeline.accounts; every call is recorded."""
+    ACCOUNT_STATUSES = ('Picked Up', 'On Rep TAL', 'NetSuite Customer', 'Out of Alignment', 'Not a Fit')
+    DISPOSITION_REASONS = ('wrong_vertical', 'out_of_territory', 'too_big', 'too_small',
+                           'not_a_trigger', 'duplicate', 'existing_customer', 'other')
+    DISPOSITION_REASON_LABELS = dict(d._FALLBACK_DISPOSITION_REASON_LABELS)
+    REASON_REQUIRED_STATUSES = frozenset({'Not a Fit', 'Out of Alignment'})
+    REP_NOT_FIT = frozenset({'Not a Fit', 'Out of Alignment', 'NetSuite Customer'})
+    REP_DECIDED = frozenset({'Picked Up', 'On Rep TAL'})
+    TRIGGER_PRIORITY = ('cfo_hire', 'finance_seat_open', 'merger_acquisition', 'funding',
+                        'expansion', 'executive_hire', 'stable_target', 'other')
+
+    def __init__(self, present=True, dispositions=None, receipt=None, raise_on=None):
+        self.present, self.dispositions = present, dict(dispositions or {})
+        self.receipt, self.raise_on, self.calls = receipt, raise_on, []
+
+    @staticmethod
+    def account_key(name):
+        return gates_account_key(name)
+
+    def probe_accounts(self, client):
+        self.calls.append(('probe',))
+        if self.raise_on == 'probe':
+            raise RuntimeError('probe boom')
+        return self.present
+
+    def load_dispositions(self, client):
+        self.calls.append(('load',))
+        if self.raise_on == 'load':
+            raise RuntimeError('load boom')
+        return dict(self.dispositions)
+
+    def set_disposition(self, client, name, status, reason=None, notes=None, by=None, now=None):
+        self.calls.append(('set', name, status, reason, notes))
+        if self.raise_on == 'set':
+            raise RuntimeError('set boom')
+        if self.receipt is not None:
+            return self.receipt
+        if status is None:
+            return f'Cleared account status for {name}'
+        return f'Saved: {name} → {status}' + (f' ({reason})' if reason else '')
+
+    # review 2026-09-08 (Phase 4): the legacy-notes encoding is owned by the
+    # module; the dashboard delegates and keeps its copies for the absent path
+    def encode_legacy_notes(self, reason, notes):
+        self.calls.append(('encode', reason, notes))
+        parts = ([f'reason={reason}'] if reason else []) + ([str(notes).strip()] if notes else [])
+        return ' | '.join(parts) or None
+
+    def decode_legacy_notes(self, notes):
+        self.calls.append(('decode', notes))
+        s = str(notes or '').strip()
+        if not s or (isinstance(notes, float) and notes != notes):
+            return None, None
+        if not s.startswith('reason='):
+            return None, s
+        head, _sep, rest = s[len('reason='):].partition(' | ')
+        return (head.strip() or None), (rest.strip() or None)
+
+
+class _RowsClient:
+    """A client whose every query returns `rows` (or raises `error`)."""
+
+    def __init__(self, rows=(), error=None):
+        self.rows, self.error, self.calls = list(rows), error, []
+
+    def table(self, name):
+        self.calls.append(('table', (name,), {}))
+        client = self
+
+        class Q:
+            def __getattr__(q, attr):
+                def _f(*a, **kw):
+                    client.calls.append((attr, a, kw))
+                    return q
+                return _f
+
+            def execute(q):
+                client.calls.append(('execute', (), {}))
+                if client.error:
+                    raise client.error
+                return type('R', (), {'data': list(client.rows), 'count': None})()
+        return Q()
+
+
+@pytest.fixture
+def state(monkeypatch):
+    """A plain dict standing in for st.session_state (bare mode logs a
+    warning per access and the receipt is all the code under test stores)."""
+    store = {}
+    monkeypatch.setattr(d.st, 'session_state', store)
+    return store
+
+
+def _stub(monkeypatch, **kw):
+    stub = _StubAccounts(**kw)
+    monkeypatch.setattr(d, '_accounts', stub)
+    return stub
+
+
+# (1) one normalizer ----------------------------------------------------------
+
+KEY_NAMES = [
+    'Acme, Inc.', 'Acme Inc', 'ACME INC.', 'The Acme Company', 'Acme Corp.', 'Acme Corporation',
+    'Acme Co.', 'Acme LLC', 'Acme, L.L.C.', 'Acme Ltd.', 'Acme Limited', 'Acme Holdings, L.P.',
+    'Acme Partners LLP', 'Acme PLC', 'Acme Bank, N.A.', 'Acme Bank NA', 'Smith & Wesson',
+    'Agfa-Gevaert', "O'Reilly Auto Parts", "Ben & Jerry's Homemade, Inc.", 'A1 Storage',
+    'An Apple a Day, LLC', 'Acme®', 'Acme™ Robotics', 'SFA, LLC dba Acme', 'Acme  Double   Space',
+    '  Acme trailing  ', 'Café Olé S.A.', 'Zorblat GmbH', 'Acme (Boston) Inc.', 'Acme/Beta Co',
+    'Acme, Inc., Inc.', 'St. Mary\'s Hospital, Inc.', '', None,
+]
+
+
+def test_account_key_delegates_to_the_one_normalizer(monkeypatch):
+    """With the accounts module present, dashboard._account_key IS
+    gates.account_key — enrichment, the typed column, the accounts table
+    and this file must derive the same key from the same name."""
+    assert len(KEY_NAMES) >= 30
+    _stub(monkeypatch)
+    for name in KEY_NAMES:
+        assert d._account_key(name) == gates_account_key(name), name
+    # and through the real module, when it is importable
+    real = pytest.importorskip('src.pipeline.accounts')
+    monkeypatch.setattr(d, '_accounts', real)
+    for name in KEY_NAMES:
+        assert d._account_key(name) == gates_account_key(name) == real.account_key(name), name
+
+
+def test_account_key_fallback_is_the_v1_normalizer_when_module_absent(monkeypatch):
+    """Without the module the v1 normalizer runs — its keys are what the
+    legacy account_dispositions table holds — and it deliberately differs
+    from gates.account_key on hyphens, ampersands, articles and commas."""
+    monkeypatch.setattr(d, '_accounts', None)
+    for name in KEY_NAMES:
+        assert d._account_key(name) == d._legacy_account_key(name), name
+    assert d._account_key('Acme, Inc.') == 'acme'
+    assert d._account_key('The Acme Company') == 'the acme'          # article kept, one suffix stripped
+    assert d._account_key('Agfa-Gevaert') == 'agfa-gevaert'           # gates: 'agfa gevaert'
+    assert d._account_key('Smith & Wesson') == 'smith & wesson'       # gates: 'smith and wesson'
+    assert gates_account_key('Agfa-Gevaert') == 'agfa gevaert'
+    assert d._account_key(None) == '' and d._account_key('') == ''
+
+
+def test_fallback_vocabulary_matches_the_accounts_module():
+    """The literals this file falls back on MUST equal the module's, or the
+    two paths would offer reps different words."""
+    real = pytest.importorskip('src.pipeline.accounts')
+    assert d._FALLBACK_ACCOUNT_STATUSES == tuple(real.ACCOUNT_STATUSES)
+    assert d._FALLBACK_DISPOSITION_REASONS == tuple(real.DISPOSITION_REASONS)
+    assert d._FALLBACK_DISPOSITION_REASON_LABELS == dict(real.DISPOSITION_REASON_LABELS)
+    assert d._FALLBACK_REASON_REQUIRED_STATUSES == frozenset(real.REASON_REQUIRED_STATUSES)
+    assert list(d.ACCOUNT_STATUSES) == list(real.ACCOUNT_STATUSES)
+    assert d.REASON_REQUIRED_STATUSES <= set(d.ACCOUNT_STATUSES)
+    # every trigger the module ranks has a card config (incl. 'expansion')
+    assert set(real.TRIGGER_PRIORITY) <= set(d.EVENT_TYPES)
+
+
+def test_reason_label():
+    assert d.reason_label('wrong_vertical') == 'Wrong vertical'
+    assert d.reason_label('existing_customer') == 'Already a customer'
+    assert d.reason_label('brand_new_code') == 'Brand new code'         # never blank for an unknown code
+    assert d.reason_label('') == d.reason_label(None) == d.reason_label(NAN) == ''
+
+
+# (2) dispositions: validation, receipts, module / legacy paths ---------------
+
+@pytest.mark.parametrize('status,reason,expected', [
+    (None, None, None), ('', None, None), ('—', None, None),            # clearing is always fine
+    ('Picked Up', None, None), ('Picked Up', 'too_big', None),          # optional elsewhere
+    ('NetSuite Customer', 'existing_customer', None),
+    ('Not a Fit', 'wrong_vertical', None), ('Out of Alignment', 'other', None),
+    ('Not a Fit', None, "'Not a Fit' needs a reason"),
+    ('Not a Fit', '', "'Not a Fit' needs a reason"),
+    ('Out of Alignment', '  ', "'Out of Alignment' needs a reason"),
+    ('Bogus', None, "'Bogus' is not an account status"),
+    ('Not a Fit', 'bogus', "'bogus' is not a disposition reason"),
+])
+def test_disposition_error_rules(status, reason, expected):
+    err = d.disposition_error(status, reason)
+    if expected is None:
+        assert err is None
+    else:
+        assert err is not None and err.startswith(expected), err
+
+
+def test_set_disposition_refuses_without_reason_and_writes_nothing(monkeypatch, state):
+    stub = _stub(monkeypatch)
+    client = _FakeClient()
+    monkeypatch.setattr(d, 'get_supabase_client', lambda: client)
+    d.set_account_disposition('Acme Inc.', 'Not a Fit')
+    receipt = state['_dispo_receipt']
+    assert receipt.startswith('❌') and 'Acme Inc.' in receipt and "'Not a Fit' needs a reason" in receipt
+    assert 'Wrong vertical' in receipt                                    # the banner lists the choices
+    assert stub.calls == [] and client.calls == []                        # nothing written anywhere
+    d.set_account_disposition('Acme Inc.', 'Out of Alignment', reason='')
+    assert state['_dispo_receipt'].startswith('❌') and stub.calls == []
+    d.set_account_disposition('Acme Inc.', 'Not a Fit', reason='nonsense')
+    assert 'is not a disposition reason' in state['_dispo_receipt'] and stub.calls == []
+
+
+def test_set_disposition_writes_through_the_module_with_reason_and_notes(monkeypatch, state):
+    stub = _stub(monkeypatch)
+    client = _FakeClient()
+    monkeypatch.setattr(d, 'get_supabase_client', lambda: client)
+    d.set_account_disposition('Acme Inc.', 'Not a Fit', reason='wrong_vertical', notes='  call back  ')
+    assert stub.calls == [('set', 'Acme Inc.', 'Not a Fit', 'wrong_vertical', 'call back')]
+    assert state['_dispo_receipt'] == '✅ Saved: Acme Inc. → Not a Fit (wrong_vertical)'
+    assert client.calls == []                     # the module owns both tables; no direct legacy write
+    d.set_account_disposition('Acme Inc.', 'Picked Up')                 # no reason needed
+    assert stub.calls[-1] == ('set', 'Acme Inc.', 'Picked Up', None, None)
+    assert state['_dispo_receipt'] == '✅ Saved: Acme Inc. → Picked Up'
+
+
+def test_set_disposition_clears_through_the_module(monkeypatch, state):
+    stub = _stub(monkeypatch)
+    monkeypatch.setattr(d, 'get_supabase_client', lambda: _FakeClient())
+    for clear in ('—', None, ''):
+        d.set_account_disposition('Acme Inc.', clear, reason='too_big', notes='stale')
+        assert stub.calls[-1] == ('set', 'Acme Inc.', None, None, None)   # status None = clear; extras dropped
+        assert state['_dispo_receipt'] == '✅ Cleared account status for Acme Inc.'
+
+
+@pytest.mark.parametrize('receipt,expected', [
+    ('NOT saved — accounts: APIError: boom', '❌ NOT saved — accounts: APIError: boom'),
+    ('Partly saved — written to accounts, but account_dispositions: x', '❌ Partly saved — written to accounts, but account_dispositions: x'),
+    ("NOT saved — 'Not a Fit' needs a reason (Wrong vertical / …)", "❌ NOT saved — 'Not a Fit' needs a reason (Wrong vertical / …)"),
+    ('Saved: Acme Inc. → Picked Up', '✅ Saved: Acme Inc. → Picked Up'),
+    ('Cleared account status for Acme Inc.', '✅ Cleared account status for Acme Inc.'),
+    ('✅ already marked', '✅ already marked'),
+    ('', '✅ Saved: Acme Inc. → Picked Up'),                             # blank receipt = returned without raising
+])
+def test_set_disposition_colours_the_module_receipt_by_its_verdict(monkeypatch, state, receipt, expected):
+    """accounts.set_disposition never raises for a refused write — it
+    returns 'NOT saved — …' / 'Partly saved — …' — so the banner colour
+    must come from the text, not from the absence of an exception."""
+    _stub(monkeypatch, receipt=receipt)
+    monkeypatch.setattr(d, 'get_supabase_client', lambda: _FakeClient())
+    d.set_account_disposition('Acme Inc.', 'Picked Up')
+    assert state['_dispo_receipt'] == expected
+
+
+def test_set_disposition_module_exception_is_a_red_receipt(monkeypatch, state):
+    _stub(monkeypatch, raise_on='set')
+    monkeypatch.setattr(d, 'get_supabase_client', lambda: _FakeClient())
+    d.set_account_disposition('Acme Inc.', 'Picked Up')
+    assert state['_dispo_receipt'].startswith('❌') and 'RuntimeError' in state['_dispo_receipt']
+
+
+def test_set_disposition_no_client_or_name(monkeypatch, state):
+    _stub(monkeypatch)
+    monkeypatch.setattr(d, 'get_supabase_client', lambda: None)
+    d.set_account_disposition('Acme Inc.', 'Picked Up')
+    assert state['_dispo_receipt'] == '❌ Account status NOT saved — no database connection'
+    monkeypatch.setattr(d, 'get_supabase_client', lambda: _FakeClient())
+    d.set_account_disposition('', 'Picked Up')
+    assert state['_dispo_receipt'] == '❌ Account status NOT saved — no database connection'
+    d.set_account_disposition('®', 'Picked Up')                          # normalizes to nothing
+    assert "couldn't derive a key" in state['_dispo_receipt']
+
+
+def test_set_disposition_legacy_path_when_module_absent(monkeypatch, state):
+    """No module: the legacy table alone, under the v1 key, the reason
+    folded into notes (the table has no reason column) — and the reason
+    rule still applies."""
+    monkeypatch.setattr(d, '_accounts', None)
+    client = _FakeClient()
+    monkeypatch.setattr(d, 'get_supabase_client', lambda: client)
+    d.set_account_disposition('Acme, Inc.', 'Not a Fit')
+    assert state['_dispo_receipt'].startswith('❌') and client.calls == []
+    d.set_account_disposition('Acme, Inc.', 'Not a Fit', reason='wrong_vertical', notes='call back')
+    assert _call(client.calls, 'table')[1] == ('account_dispositions',)
+    (payload,), kw = _call(client.calls, 'upsert')[1:]
+    assert kw == {'on_conflict': 'company_key'}
+    assert payload['company_key'] == 'acme' == d._legacy_account_key('Acme, Inc.')
+    assert payload['company_name'] == 'Acme, Inc.' and payload['status'] == 'Not a Fit'
+    assert payload['notes'] == 'reason=wrong_vertical | call back'
+    assert state['_dispo_receipt'] == '✅ Saved: Acme, Inc. → Not a Fit (Wrong vertical)'
+    client.calls.clear()
+    d.set_account_disposition('Acme, Inc.', 'Picked Up')
+    (payload,), _ = _call(client.calls, 'upsert')[1:]
+    assert payload['notes'] is None
+    client.calls.clear()
+    d.set_account_disposition('Acme, Inc.', '—')
+    assert _names(client.calls)[:4] == ['table', 'delete', 'in_', 'execute']
+    assert _call(client.calls, 'in_')[1] == ('company_key', ['acme'])            # v1 key == pipeline key here
+    assert state['_dispo_receipt'] == '✅ Cleared account status for Acme, Inc.'
+    client.calls.clear()
+    d.set_account_disposition('Agfa-Gevaert', None)                              # the two keys differ: both go
+    assert _call(client.calls, 'in_')[1] == ('company_key', ['agfa gevaert', 'agfa-gevaert'])
+
+
+LEGACY_NOTES_CASES = [
+    ('too_big', 'call in Q4', 'reason=too_big | call in Q4', ('too_big', 'call in Q4')),
+    ('too_big', None, 'reason=too_big', ('too_big', None)),
+    ('too_big', 'a | b', 'reason=too_big | a | b', ('too_big', 'a | b')),          # ' | ' inside the notes survives
+    (None, 'plain note', 'plain note', (None, 'plain note')),
+    (None, 'plain | with pipe', 'plain | with pipe', (None, 'plain | with pipe')),   # no prefix: untouched
+    (None, None, None, (None, None)),
+]
+
+
+@pytest.mark.parametrize('reason,notes,encoded,decoded', LEGACY_NOTES_CASES)
+def test_legacy_notes_round_trip_fallback_copy(monkeypatch, reason, notes, encoded, decoded):
+    """The module-absent copies (the only path that runs them since review
+    2026-09-08 (Phase 4))."""
+    monkeypatch.setattr(d, '_accounts', None)
+    assert d._legacy_notes(reason, notes) == encoded
+    assert d._split_legacy_notes(encoded) == decoded
+    assert d._split_legacy_notes(NAN) == (None, None)
+
+
+@pytest.mark.parametrize('reason,notes,encoded,decoded', LEGACY_NOTES_CASES)
+def test_legacy_notes_delegate_to_the_module_when_present(monkeypatch, reason, notes, encoded, decoded):
+    stub = _stub(monkeypatch)
+    assert d._legacy_notes(reason, notes) == encoded
+    assert d._split_legacy_notes(encoded) == decoded
+    assert stub.calls == [('encode', reason, notes), ('decode', encoded)]
+    # and the REAL module reads what the fallback copy wrote, and vice versa
+    real = pytest.importorskip('src.pipeline.accounts')
+    monkeypatch.setattr(d, '_accounts', real)
+    assert d._legacy_notes(reason, notes) == encoded == real.encode_legacy_notes(reason, notes)
+    assert d._split_legacy_notes(encoded) == decoded == real.decode_legacy_notes(encoded)
+
+
+def test_stub_matches_the_real_accounts_module_signatures():
+    """_StubAccounts pins EXACTLY the Phase 4 API: every method the dashboard
+    calls must take the same parameters (name, kind, default) as the real
+    module's function, minus the stub's `self`."""
+    real = pytest.importorskip('src.pipeline.accounts')
+
+    def shape(fn, drop_self=False):
+        params = list(inspect.signature(fn).parameters.values())
+        if drop_self:
+            assert params and params[0].name == 'self'
+            params = params[1:]
+        return [(p.name, p.kind, p.default) for p in params]
+
+    for name in ('set_disposition', 'load_dispositions', 'probe_accounts',
+                 'encode_legacy_notes', 'decode_legacy_notes'):
+        assert shape(getattr(_StubAccounts, name), drop_self=True) == shape(getattr(real, name)), name
+    assert shape(_StubAccounts.account_key) == shape(real.account_key) == [('name', inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.empty)]
+    # the dashboard's own calls fit those signatures
+    src = inspect.getsource(d.set_account_disposition)
+    assert '_accounts.set_disposition(client, company_name, None if clearing else status,' in src
+    assert 'reason=reason, notes=notes)' in src
+
+
+def test_set_disposition_end_to_end_through_the_real_module(monkeypatch, state):
+    """dashboard.set_account_disposition → the REAL accounts module → a fake
+    Supabase client: the reason lands on the accounts row AND inside the
+    legacy row's notes, load_account_dispositions reads it back in this
+    file's shape, and a clear empties both tables."""
+    real = pytest.importorskip('src.pipeline.accounts')
+    from tests.test_accounts import client_with_accounts
+    real.reset_probe_cache()
+    client = client_with_accounts(legacy=[{'company_key': 'agfa-gevaert', 'company_name': 'Agfa-Gevaert',
+                                           'status': 'Picked Up', 'notes': None, 'updated_at': '2026-08-01'}])
+    monkeypatch.setattr(d, '_accounts', real)
+    monkeypatch.setattr(d, 'get_supabase_client', lambda: client)
+    try:
+        d.set_account_disposition('Agfa-Gevaert', 'Not a Fit', reason='wrong_vertical', notes='imaging')
+        assert state['_dispo_receipt'] == '✅ Saved: Agfa-Gevaert → Not a Fit (Wrong vertical)'
+        acct, = client.tables['accounts']
+        assert (acct['account_key'], acct['disposition'], acct['disposition_reason'], acct['disposition_notes']) == \
+            ('agfa gevaert', 'Not a Fit', 'wrong_vertical', 'imaging')
+        legacy, = client.tables['account_dispositions']                     # the v1-keyed row is gone
+        assert (legacy['company_key'], legacy['status'], legacy['notes']) == \
+            ('agfa gevaert', 'Not a Fit', 'reason=wrong_vertical | imaging')
+        out = d.load_account_dispositions()
+        assert out['agfa gevaert'] == {'company_key': 'agfa gevaert', 'company_name': 'Agfa-Gevaert',
+                                       'status': 'Not a Fit', 'reason': 'wrong_vertical', 'notes': 'imaging',
+                                       'updated_at': acct['disposition_at']}
+        assert d._dispo_for(out, 'Cleanaway') is None and d._dispo_for(out, 'Agfa-Gevaert')['reason'] == 'wrong_vertical'
+        # the module-absent fallback still SEES the module-written row (pipeline key)
+        monkeypatch.setattr(d, '_accounts', None)
+        fb = d.load_account_dispositions()
+        assert set(fb) == {'agfa gevaert'} and fb['agfa gevaert']['reason'] == 'wrong_vertical'
+        assert d._account_key('Agfa-Gevaert') == 'agfa-gevaert' and d._dispo_for(fb, 'Agfa-Gevaert') is fb['agfa gevaert']
+        monkeypatch.setattr(d, '_accounts', real)
+        d.set_account_disposition('Agfa-Gevaert', '—')
+        assert state['_dispo_receipt'] == '✅ Cleared account status for Agfa-Gevaert'
+        assert client.tables['account_dispositions'] == [] and acct['disposition'] is None
+        assert d.load_account_dispositions() == {}
+    finally:
+        real.reset_probe_cache()
+
+
+def test_load_account_dispositions_is_none_when_module_is_empty_and_legacy_table_missing(monkeypatch):
+    """review 2026-09-08 (Phase 4): the module returns {} both for "no
+    verdicts yet" and "neither table readable"; only the second must show
+    the migration banner (None)."""
+    _stub(monkeypatch, dispositions={})
+    monkeypatch.setattr(d, 'get_supabase_client', lambda: _RowsClient(error=RuntimeError('no table')))
+    assert d.load_account_dispositions() is None
+    monkeypatch.setattr(d, 'get_supabase_client', lambda: _RowsClient([]))
+    assert d.load_account_dispositions() == {}
+    rows = [{'company_key': 'acme', 'company_name': 'Acme Inc.', 'status': 'Picked Up', 'notes': None, 'updated_at': None}]
+    monkeypatch.setattr(d, 'get_supabase_client', lambda: _RowsClient(rows))
+    assert d.load_account_dispositions()['acme']['status'] == 'Picked Up'  # the legacy read fills what the module missed
+
+
+def test_fallback_lookups_use_both_the_v1_and_the_pipeline_key(monkeypatch):
+    """review 2026-09-08 (Phase 4): rows accounts.set_disposition wrote sit
+    under the pipeline key; a v1-keyed lookup alone hid them the moment the
+    dashboard fell back to the module-absent path."""
+    monkeypatch.setattr(d, '_accounts', None)
+    assert d._dispo_keys('Agfa-Gevaert') == ['agfa-gevaert', 'agfa gevaert']
+    assert d._dispo_keys('Acme, Inc.') == ['acme'] and d._dispo_keys('') == []
+    acct = {'agfa gevaert': {'company_key': 'agfa gevaert', 'status': 'Not a Fit'},
+            'smith & wesson': {'company_key': 'smith & wesson', 'status': 'Picked Up'}}
+    assert d._dispo_for(acct, 'Agfa-Gevaert')['status'] == 'Not a Fit'          # module-written (pipeline key)
+    assert d._dispo_for(acct, 'Smith & Wesson')['status'] == 'Picked Up'         # v1-written (v1 key)
+    assert d._dispo_for(acct, 'Cleanaway') is None and d._dispo_for({}, 'Agfa-Gevaert') is None
+    assert d._dispo_for(acct, None) is None
+    _stub(monkeypatch)
+    assert d._dispo_keys('Agfa-Gevaert') == ['agfa gevaert']                     # one normalizer: one key
+
+
+def test_on_account_dispo_change_reads_status_reason_and_notes(monkeypatch, state):
+    stub = _stub(monkeypatch)
+    monkeypatch.setattr(d, 'get_supabase_client', lambda: _FakeClient())
+    state.update({'wq_acct_e1_0': 'Not a Fit', 'wq_acct_e1_0_reason': 'too_big',
+                  'wq_acct_e1_0_notes': 'n'})
+    d._on_account_dispo_change('wq_acct_e1_0', 'Acme')
+    assert stub.calls == [('set', 'Acme', 'Not a Fit', 'too_big', 'n')]
+    state.clear()
+    state['k'] = 'Not a Fit'                                             # reason widget not rendered yet
+    d._on_account_dispo_change('k', 'Acme')
+    assert len(stub.calls) == 1                                          # refused before the module is reached
+    assert state['_dispo_receipt'].startswith('❌') and "'Not a Fit' needs a reason" in state['_dispo_receipt']
+    state['k_reason'] = 'wrong_vertical'                                 # the rep picks one → saved
+    d._on_account_dispo_change('k', 'Acme')
+    assert stub.calls[-1] == ('set', 'Acme', 'Not a Fit', 'wrong_vertical', None)
+    assert state['_dispo_receipt'].startswith('✅')
+    state['k'] = 'Picked Up'                                             # status moves on; the old reason is stale
+    d._on_account_dispo_change('k', 'Acme')
+    assert stub.calls[-1] == ('set', 'Acme', 'Picked Up', None, None)
+    state['k'] = '—'                                                     # clearing drops reason + notes too
+    state['k_notes'] = 'old'
+    d._on_account_dispo_change('k', 'Acme')
+    assert stub.calls[-1] == ('set', 'Acme', None, None, None)
+
+
+def test_load_account_dispositions_uses_the_module_and_keeps_the_legacy_shape(monkeypatch):
+    stub = _stub(monkeypatch, dispositions={
+        'acme': {'status': 'Not a Fit', 'reason': 'too_big', 'notes': 'x', 'name': 'Acme Inc.',
+                 'at': '2026-09-08T10:00:00', 'by': None, 'source': 'accounts'},
+        'stale-key': {'status': 'Picked Up', 'reason': None, 'notes': None, 'name': 'Old Key, Co.',
+                      'at': None},
+        'nameless': {'status': 'On Rep TAL'},
+    })
+    client = _FakeClient()
+    monkeypatch.setattr(d, 'get_supabase_client', lambda: client)
+    out = d.load_account_dispositions()
+    assert stub.calls == [('load',)] and client.calls == []             # the module reads, not this file
+    assert out['acme'] == {'company_key': 'acme', 'company_name': 'Acme Inc.', 'status': 'Not a Fit',
+                           'reason': 'too_big', 'notes': 'x', 'updated_at': '2026-09-08T10:00:00'}
+    # a row keyed by something other than the normalizer of its name is re-keyed from the name
+    assert 'stale-key' not in out and out['old key']['company_key'] == 'old key'
+    assert out['old key']['status'] == 'Picked Up' and out['old key']['reason'] is None
+    assert out['nameless'] == {'company_key': 'nameless', 'company_name': 'nameless',
+                               'status': 'On Rep TAL', 'reason': None, 'notes': None,
+                               'updated_at': None}
+    # the rest of the dashboard reads these keys: decided-account hiding + the 7d pickup metric
+    assert d._account_key('Acme Inc.') in set(out)
+    assert [r for r in out.values() if r.get('status') == 'Picked Up' and r.get('updated_at')] == []
+
+
+def test_load_account_dispositions_legacy_path(monkeypatch):
+    monkeypatch.setattr(d, '_accounts', None)
+    rows = [{'company_key': 'acme', 'company_name': 'Acme Inc.', 'status': 'Not a Fit',
+             'notes': 'reason=too_big | call back', 'updated_at': '2026-09-01'},
+            {'company_key': 'beta', 'company_name': 'Beta', 'status': 'Picked Up',
+             'notes': 'plain', 'updated_at': None}]
+    monkeypatch.setattr(d, 'get_supabase_client', lambda: _RowsClient(rows))
+    out = d.load_account_dispositions()
+    assert set(out) == {'acme', 'beta'}
+    assert (out['acme']['reason'], out['acme']['notes'], out['acme']['status']) == ('too_big', 'call back', 'Not a Fit')
+    assert (out['beta']['reason'], out['beta']['notes']) == (None, 'plain')
+    assert out['acme']['company_name'] == 'Acme Inc.' and out['acme']['updated_at'] == '2026-09-01'
+    monkeypatch.setattr(d, 'get_supabase_client', lambda: _RowsClient(error=RuntimeError('no table')))
+    assert d.load_account_dispositions() is None                         # migration warning path, as before
+    monkeypatch.setattr(d, 'get_supabase_client', lambda: None)
+    assert d.load_account_dispositions() is None
+
+
+def test_load_account_dispositions_falls_back_to_legacy_when_the_module_read_fails(monkeypatch):
+    _stub(monkeypatch, raise_on='load')
+    rows = [{'company_key': 'acme', 'company_name': 'Acme Inc.', 'status': 'Picked Up',
+             'notes': None, 'updated_at': None}]
+    monkeypatch.setattr(d, 'get_supabase_client', lambda: _RowsClient(rows))
+    assert d.load_account_dispositions()['acme']['status'] == 'Picked Up'
+
+
+# (3) account cards: trigger history + account summary ----------------------
+
+def _ev(id_, company, etype, grade, published, discovered=None, blocked=None, **extra):
+    r = {'id': id_, 'company_name': company, 'event_type': etype, 'grade': grade,
+         'published_date': published, 'discovered_date': discovered or published,
+         'title': f'{company} {etype}', 'lead_status': 'NEW', 'fit': None,
+         'companies_data': None, 'blocked_at': blocked}
+    r.update(extra)
+    return r
+
+
+def _history_frame():
+    return pd.DataFrame([
+        _ev('e1', 'Acme Inc.', 'cfo_hire', 'A', '2026-09-05'),
+        _ev('e2', 'Acme', 'funding', 'b', '2026-08-20', lead_status='REVIEWED - Picked Up'),
+        _ev('e3', 'Acme', 'expansion', None, None, '2026-09-07T10:00:00'),
+        _ev('e4', 'Acme', 'executive_hire', 'C', '2026-09-01', blocked='2026-09-02T00:00:00'),   # tombstoned
+        _ev('e5', 'Acme', 'stable_target', 'D', '2026-09-01', blocked=NAN),                      # NaN = live
+        _ev('e6', 'Zed Widgets', 'expansion', 'C', '2026-09-03'),
+        _ev('e7', None, 'funding', 'A', '2026-09-06'),                                           # unknown company
+    ])
+
+
+def test_event_account_key_prefers_the_typed_column_only_with_the_module(monkeypatch):
+    _stub(monkeypatch)
+    assert d.event_account_key({'account_key': 'typed co', 'company_name': 'Display Co'}) == 'typed co'
+    assert d.event_account_key({'account_key': NAN, 'company_name': 'Acme, Inc.'}) == 'acme'
+    assert d.event_account_key({'company_name': None, 'fit': None, 'companies_data': None}) == ''
+    assert d.event_account_key({'company_name': 'Unknown Company'}) == ''
+    monkeypatch.setattr(d, '_accounts', None)
+    # v1 normalizer for everything — the typed key (gates spelling) is ignored so one run never mixes two
+    assert d.event_account_key({'account_key': 'agfa gevaert', 'company_name': 'Agfa-Gevaert'}) == 'agfa-gevaert'
+
+
+def test_trigger_history_newest_first_without_tombstones_or_other_accounts(monkeypatch):
+    _stub(monkeypatch)
+    df = _history_frame()
+    hist = d.trigger_history(df, 'acme')
+    assert [h['id'] for h in hist] == ['e3', 'e1', 'e5', 'e2']            # discovered-date fallback ranks first
+    assert 'e4' not in {h['id'] for h in hist}                             # blocked_at set → out
+    assert [h['date'] for h in hist] == ['2026-09-07', '2026-09-05', '2026-09-01', '2026-08-20']
+    assert [h['label'] for h in hist] == ['Expansion', 'CFO', 'Stable', 'Funding']
+    assert hist[0]['icon'] == '🌱' and hist[0]['grade'] == '' and hist[3]['grade'] == 'B'
+    assert hist[3]['lead_status'] == 'REVIEWED - Picked Up'               # classified events stay in the history
+    assert hist[1]['title'] == 'Acme Inc. cfo_hire'
+    annotated = d.annotate_account_keys(df)
+    assert list(annotated['_account_key']) == ['acme', 'acme', 'acme', 'acme', 'acme', 'zed widgets', '']
+    assert [h['id'] for h in d.trigger_history(annotated, 'acme')] == [h['id'] for h in hist]
+    assert [h['id'] for h in d.trigger_history(df.to_dict('records'), 'zed widgets')] == ['e6']
+    assert d.trigger_history(df, '') == [] and d.trigger_history(pd.DataFrame(), 'acme') == []
+    assert d.trigger_history(None, 'acme') == []
+    empty = d.annotate_account_keys(pd.DataFrame())
+    assert '_account_key' in empty.columns and empty.empty
+
+
+def test_account_summary_accounts_row_beats_the_event(monkeypatch):
+    _stub(monkeypatch)
+    row = _ev('e1', 'Acme Inc.', 'cfo_hire', 'A', '2026-09-05', numeric_score=8,
+              fit={'verdict': 'pass'}, hashtags=['#NewCFO'])
+    hist = d.trigger_history(_history_frame(), 'acme')
+    ev = d.account_summary(row, None, hist)
+    assert ev == {'name': 'Acme Inc.', 'account_key': 'acme', 'grade': 'A', 'numeric_score': 8,
+                  'verify_state': 'verified', 'best_trigger_type': 'cfo_hire',
+                  'best_trigger_label': 'CFO Hires', 'best_trigger_at': '2026-09-05',
+                  'event_count': 4, 'hashtags': ['#NewCFO'], 'from_accounts_table': False}
+    acc = {'account_key': 'acme', 'canonical_name': 'Acme', 'grade': 'B', 'numeric_score': 6,
+           'verify_state': 'researched_ambiguous', 'best_trigger_type': 'funding',
+           'best_trigger_at': '2026-08-20T00:00:00+00:00', 'event_count': 7,
+           'hashtags': '["#Funding"]', 'disposition': None}
+    got = d.account_summary(row, acc, hist)
+    assert got == {'name': 'Acme', 'account_key': 'acme', 'grade': 'B', 'numeric_score': 6,
+                   'verify_state': 'researched_ambiguous', 'best_trigger_type': 'funding',
+                   'best_trigger_label': 'PE/VC Funding', 'best_trigger_at': '2026-08-20',
+                   'event_count': 7, 'hashtags': ['#Funding'], 'from_accounts_table': True}
+    # blank / NaN account fields fall back to the event, field by field
+    sparse = {'account_key': 'acme', 'grade': '', 'verify_state': NAN, 'best_trigger_type': None,
+              'best_trigger_at': None, 'event_count': None, 'canonical_name': ' '}
+    part = d.account_summary(row, sparse, hist)
+    assert (part['name'], part['grade'], part['verify_state'], part['best_trigger_type'],
+            part['best_trigger_at'], part['event_count'], part['from_accounts_table']) == (
+        'Acme Inc.', 'A', 'verified', 'cfo_hire', '2026-09-05', 4, True)
+
+
+def test_account_summary_event_fallbacks(monkeypatch):
+    _stub(monkeypatch)
+    row = _ev('e9', 'Zed Co', 'expansion', None, None, '2026-09-07T10:00:00', verify_state='verified')
+    s = d.account_summary(row, None)
+    assert (s['grade'], s['numeric_score'], s['verify_state'], s['event_count']) == ('', -1, 'verified', 1)
+    assert (s['best_trigger_label'], s['best_trigger_at']) == ('Expansion / New registration', '2026-09-07')
+    staged = d.account_summary(_ev('e9', 'Zed Co', 'bogus', 'A', '2026-09-07'), None, [])
+    assert (staged['verify_state'], staged['best_trigger_type'], staged['best_trigger_label'],
+            staged['event_count']) == ('staged', 'bogus', 'Bogus', 0)
+    assert d.account_summary(row, {'account_key': 'zed co', 'event_count': 7.0})['event_count'] == 7
+    assert d.account_summary(row, {'account_key': 'zed co', 'event_count': '3'})['event_count'] == 3
+    assert d.account_summary(row, {'account_key': 'zed co', 'event_count': 'x'})['event_count'] == 0
+    assert d.account_summary(pd.Series(row), {}, None)['from_accounts_table'] is False
+
+
+def test_account_history_html_is_one_continuous_string(monkeypatch):
+    _stub(monkeypatch)
+    hist = d.trigger_history(_history_frame(), 'acme')
+    s = d.account_summary(_ev('e1', 'Acme <Inc>', 'cfo_hire', 'A', '2026-09-05'), None, hist)
+    html = d.account_history_html(s, hist, others_new=2, max_rows=2)
+    assert '\n' not in html                                               # markdown code-block trap
+    assert 'Acme &lt;Inc&gt;' in html and '🗂' in html
+    assert html.count('margin:2px 0 0 1.2rem') == 4                       # 2 rows + "+2 more" + "+2 NEW"
+    assert '… +2 more' in html and '+2 more NEW events' in html and '4 events in window' in html
+    acc_html = d.account_history_html(dict(s, from_accounts_table=True, event_count=1), [], 0)
+    assert '1 event (accounts table)' in acc_html and 'margin:2px' not in acc_html
+
+
+# the accounts table: probe once, degrade to the events when absent ----------
+
+def test_probe_accounts_table_paths(monkeypatch):
+    stub = _stub(monkeypatch, present=True)
+    assert d._probe_accounts_table(_FakeClient()) is True and stub.calls == [('probe',)]
+    assert d._probe_accounts_table(None) is False
+    _stub(monkeypatch, present=False)
+    assert d._probe_accounts_table(_FakeClient()) is False
+    _stub(monkeypatch, raise_on='probe')
+    assert d._probe_accounts_table(_FakeClient()) is False
+    monkeypatch.setattr(d, '_accounts', None)
+    client = _FakeClient()
+    assert d._probe_accounts_table(client) is True
+    assert _names(client.calls) == ['table', 'select', 'limit', 'execute']
+    assert _call(client.calls, 'table')[1] == ('accounts',)
+    assert d._probe_accounts_table(_FakeClient(missing={'account_key'})) is False
+
+
+def test_load_accounts_by_key_chunks_dedupes_and_degrades():
+    rows = [{'account_key': 'acme', 'grade': 'A'}, {'account_key': '', 'grade': 'B'}, 'junk']
+    client = _RowsClient(rows)
+    out = d._load_accounts_by_key(client, ['acme', 'acme', '', None, 'beta'], chunk=1)
+    assert out == {'acme': {'account_key': 'acme', 'grade': 'A'}}
+    ins = [c for c in client.calls if c[0] == 'in_']
+    assert [c[1] for c in ins] == [('account_key', ['acme']), ('account_key', ['beta'])]
+    assert all(c[1] == (d.ACCOUNTS_SELECT,) for c in client.calls if c[0] == 'select')
+    assert d._load_accounts_by_key(_RowsClient(rows), []) == {}
+    assert d._load_accounts_by_key(_RowsClient(error=RuntimeError('x')), ['acme']) == {}
+    assert len([c for c in _RowsClient(rows).calls]) == 0
+
+
+def test_load_accounts_for_never_queries_without_the_table(monkeypatch):
+    class Boom:
+        def table(self, name):
+            raise AssertionError('must not query')
+    monkeypatch.setattr(d, 'accounts_table_present', lambda: False)
+    monkeypatch.setattr(d, 'get_supabase_client', lambda: Boom())
+    assert d.load_accounts_for(['acme']) == {}
+    monkeypatch.setattr(d, 'accounts_table_present', lambda: True)
+    assert d.load_accounts_for([]) == {}
+    monkeypatch.setattr(d, 'get_supabase_client', lambda: _RowsClient([{'account_key': 'acme', 'grade': 'B'}]))
+    assert d.load_accounts_for(['acme'])['acme']['grade'] == 'B'
+
+
+def _queue_run(monkeypatch, accounts_rows, top_n=10):
+    """render_work_queue in bare mode with the card + strip captured."""
+    cards, strips = [], []
+    monkeypatch.setattr(d, 'render_event_card', lambda r, cfg, key_prefix='': cards.append((r['id'], key_prefix)))
+    monkeypatch.setattr(d, 'render_account_history',
+                        lambda s, h, others_new=0: strips.append((s, [x['id'] for x in h], others_new)))
+    monkeypatch.setattr(d, 'load_accounts_for', lambda keys: {k: v for k, v in accounts_rows.items() if k in keys})
+    df = _history_frame()
+    live = df[df['blocked_at'].isna()]
+    new = live[live['lead_status'] == 'NEW']
+    d.render_work_queue(new, top_n=top_n, history_df=live)
+    return cards, strips
+
+
+def test_work_queue_rolls_up_per_account_key_and_shows_the_history(monkeypatch):
+    _stub(monkeypatch)
+    cards, strips = _queue_run(monkeypatch, {})
+    assert cards == [('e7', 'wq_'), ('e1', 'wq_'), ('e6', 'wq_')]          # A (newest) → A → C; one card per account
+    by = {s['account_key']: (s, ids, others) for s, ids, others in strips}
+    acme, ids, others = by['acme']
+    assert ids == ['e3', 'e1', 'e5', 'e2'] and others == 2                 # e3 + e5 are NEW too; e2 is classified
+    assert (acme['from_accounts_table'], acme['event_count'], acme['grade']) == (False, 4, 'A')
+    assert by['']  [1] == [] and by[''][2] == 0                            # the unknown company: no shared history
+    assert by['zed widgets'][1] == ['e6']
+
+
+def test_work_queue_uses_the_accounts_row_when_the_table_is_present(monkeypatch):
+    _stub(monkeypatch)
+    acc = {'acme': {'account_key': 'acme', 'canonical_name': 'Acme', 'grade': 'B',
+                    'verify_state': 'verified', 'best_trigger_type': 'funding',
+                    'best_trigger_at': '2026-08-20', 'event_count': 9}}
+    cards, strips = _queue_run(monkeypatch, acc)
+    acme = next(s for s, _, _ in strips if s['account_key'] == 'acme')
+    assert (acme['from_accounts_table'], acme['grade'], acme['verify_state'],
+            acme['best_trigger_label'], acme['event_count']) == (True, 'B', 'verified', 'PE/VC Funding', 9)
+    monkeypatch.setattr(d, '_accounts', None)                              # legacy path: same wiring
+    cards, strips = _queue_run(monkeypatch, {})
+    assert [c[0] for c in cards] == ['e7', 'e1', 'e6']
+    assert all(not s['from_accounts_table'] for s, _, _ in strips)
+    cards, strips = _queue_run(monkeypatch, {}, top_n=1)
+    assert [c[0] for c in cards] == ['e7'] and len(strips) == 1
+
+
+def test_work_queue_history_df_defaults_to_the_queue_frame(monkeypatch):
+    _stub(monkeypatch)
+    strips = []
+    monkeypatch.setattr(d, 'render_event_card', lambda r, cfg, key_prefix='': None)
+    monkeypatch.setattr(d, 'render_account_history', lambda s, h, others_new=0: strips.append([x['id'] for x in h]))
+    monkeypatch.setattr(d, 'load_accounts_for', lambda keys: {})
+    df = _history_frame()
+    new = df[df['blocked_at'].isna() & (df['lead_status'] == 'NEW')]
+    d.render_work_queue(new, top_n=2)
+    assert strips == [[], ['e3', 'e1', 'e5']]                              # e7 (unknown co) first; e2 (classified) is not in new_df
+    d.render_work_queue(pd.DataFrame(), top_n=1)                           # "queue clear" path still fine
+
+
+# (4) Scorecard: why events were removed --------------------------------------
+
+@pytest.mark.parametrize('reason,prefix', [
+    ('fit_gate: HQ out of territory (Austin, TX)', 'fit_gate'),
+    ('structured:sic_out: SIC 1311 crude petroleum', 'structured'),
+    ('entity_shape:fund', 'entity_shape'),
+    ('industry: Mining (matched "mining")', 'industry'),
+    ('no_workable_account: only advisor/investor roles', 'no_workable_account'),
+    ('bad_company_name: no real company name extracted', 'bad_company_name'),
+    ('board_change_only: director/board appointment', 'board_change_only'),
+    ('rep:Not a Fit (Acme Inc.)', 'rep'),
+    ('dismissed by rep (NOT RELEVANT)', 'rep'),
+    ('bulk-dismissed by rep (NOT RELEVANT)', 'rep'),
+    ('trigger_expired: 70d old cfo_hire', 'trigger_expired'),
+    ('oracle_too_small: fdic est $3.3M', 'oracle_too_small'),
+    ('Industry: Steel', 'industry'),
+    ('', 'other'), (None, 'other'), (NAN, 'other'), (':', 'other'),
+])
+def test_tombstone_reason_prefix(reason, prefix):
+    assert d.tombstone_reason_prefix(reason) == prefix
+    assert d.tombstone_reason_label(prefix) != ''
+
+
+def test_tombstone_reason_labels_cover_every_writer_prefix():
+    for p in ('entity_shape', 'structured', 'fit_gate', 'industry', 'no_workable_account',
+              'bad_company_name', 'board_change_only', 'rep', 'trigger_expired',
+              'oracle_too_small', 'other'):
+        assert p in d.TOMBSTONE_REASON_LABELS, p
+    assert d.tombstone_reason_label('fit_gate') == 'Failed fit gate (territory/revenue/vertical)'   # unchanged text
+    assert d.tombstone_reason_label('board_change_only') == 'Board-of-directors change only'
+    assert d.tombstone_reason_label('brand_new') == 'brand_new'            # never blank
+
+
+@pytest.mark.parametrize('zi,bucket', [
+    ('Banking', 'Banking'), ('  Banking ', 'Banking'), ('OTHER', 'unknown'), ('other', 'unknown'),
+    ('', 'unknown'), (None, 'unknown'), (NAN, 'unknown'), ('None', 'unknown'),
+])
+def test_removal_subindustry(zi, bucket):
+    assert d.removal_subindustry(zi) == bucket
+
+
+def _tomb(days_ago, reason, source, url, zi, discovered_days_ago=None, **extra):
+    r = _srow(discovered_days_ago if discovered_days_ago is not None else days_ago, source, url,
+              blocked=True, blocked_reason=reason, zi_subindustry=zi, **extra)
+    r['blocked_at'] = (SNOW - timedelta(days=days_ago)).isoformat()
+    return r
+
+
+def _removal_rows():
+    rows = [_tomb(1, 'fit_gate: HQ out of territory', 'adzuna', ADZ_URL, 'Banking') for _ in range(3)]
+    rows += [_tomb(2, 'fit_gate: revenue Enterprise', 'adzuna', ADZ_URL, 'Insurance') for _ in range(2)]
+    rows.append(_tomb(2, 'fit_gate: x', 'sec_edgar', SEC_URL, 'Banking', title='SEC 8-K Item 5.02 — Co'))
+    rows.append(_tomb(3, 'entity_shape:fund', 'sec_edgar', SEC_URL, None, title='SEC Form D (Private Capital Raise) — Co'))
+    rows.append(_tomb(3, 'bad_company_name: none', 'pr_newswire', PRN_URL, 'OTHER'))
+    rows.append(_tomb(4, 'dismissed by rep (NOT RELEVANT)', 'adzuna', ADZ_URL, 'Libraries'))
+    rows.append(_tomb(5, 'trigger_expired: 70d old', 'adzuna', ADZ_URL, 'Real Estate'))
+    rows.append(_tomb(6, 'structured:sic_out: x', 'sec_edgar', SEC_URL, 'Museums & Art Galleries',
+                      title='SEC 8-K Item 5.02 — Co'))
+    rows.append(_tomb(2, 'trigger_expired: 90d old', 'adzuna', ADZ_URL, 'Banking', discovered_days_ago=20))  # swept old row
+    rows.append(_tomb(9, 'fit_gate: y', 'adzuna', ADZ_URL, 'Banking'))                                    # last week
+    rows.append(_srow(1, 'adzuna', ADZ_URL))                                                              # survivor
+    return rows
+
+
+def test_removal_pivot_shapes_and_counts():
+    piv = d.removal_pivot(_removal_rows(), now=SNOW, top_subindustries=3)
+    assert piv['days'] == 7 and piv['total'] == 11                        # the swept 20d-old row and last week's are out
+    assert piv['subindustries'] == ['Banking', 'Insurance', 'Libraries', 'other', 'unknown']
+    assert list(piv['by_reason'].items()) == [('fit_gate', 6), ('bad_company_name', 1), ('entity_shape', 1),
+                                              ('rep', 1), ('structured', 1), ('trigger_expired', 1)]
+    assert piv['by_source'] == {'Adzuna': 7, 'SEC 8-K': 2, 'PR Newswire': 1, 'SEC Form D': 1}
+    assert piv['by_subindustry'] == {'Banking': 4, 'Insurance': 2, 'unknown': 2, 'Libraries': 1,
+                                     'Museums & Art Galleries': 1, 'Real Estate': 1}
+    first = piv['rows'][0]
+    assert (first['reason'], first['source'], first['total']) == ('fit_gate', 'Adzuna', 5)
+    assert first['cells'] == {'Banking': 3, 'Insurance': 2, 'Libraries': 0, 'other': 0, 'unknown': 0}
+    by = {(r['reason'], r['source']): r for r in piv['rows']}
+    assert by[('entity_shape', 'SEC Form D')]['cells']['unknown'] == 1     # NULL subindustry
+    assert by[('bad_company_name', 'PR Newswire')]['cells']['unknown'] == 1  # 'OTHER' is not a subindustry
+    assert by[('structured', 'SEC 8-K')]['cells']['other'] == 1           # outside the top 3 → folded
+    assert by[('trigger_expired', 'Adzuna')]['cells']['other'] == 1
+    assert by[('rep', 'Adzuna')]['cells']['Libraries'] == 1
+    assert sum(r['total'] for r in piv['rows']) == piv['total']
+    assert [r['total'] for r in piv['rows']] == sorted((r['total'] for r in piv['rows']), reverse=True)
+    for r in piv['rows']:
+        assert set(r['cells']) == set(piv['subindustries']) and sum(r['cells'].values()) == r['total']
+
+
+def test_removal_pivot_default_columns_and_discovery_clause():
+    rows = _removal_rows()
+    piv = d.removal_pivot(rows, now=SNOW)
+    assert piv['subindustries'] == ['Banking', 'Insurance', 'Libraries', 'Museums & Art Galleries',
+                                    'Real Estate', 'unknown']              # ≤ 8 known: no 'other' column
+    swept = d.removal_pivot(rows, now=SNOW, discovery_days=None)
+    assert swept['total'] == 12 and swept['by_reason']['trigger_expired'] == 2
+    # the noise card's bucket and the pivot agree by construction
+    tomb_wk = d.scorecard_week_buckets(rows, now=SNOW)['tomb_wk']
+    assert d.removal_pivot(tomb_wk, now=SNOW, discovery_days=None)['total'] == len(tomb_wk) == piv['total']
+    assert d.removal_pivot([], now=SNOW) == {'days': 7, 'total': 0, 'subindustries': [], 'rows': [],
+                                             'by_reason': {}, 'by_source': {}, 'by_subindustry': {}}
+    naive = d.removal_pivot(rows, now=SNOW.replace(tzinfo=None))
+    assert naive['total'] == piv['total']
+
+
+def test_removal_pivot_frame_layout():
+    frame = d.removal_pivot_frame(d.removal_pivot(_removal_rows(), now=SNOW, top_subindustries=3))
+    assert list(frame.columns) == ['Reason', 'Source', 'Banking', 'Insurance', 'Libraries',
+                                   'Other subindustries', 'Unknown / not classified', 'Total']
+    assert list(frame.iloc[0]) == ['Failed fit gate (territory/revenue/vertical)', 'Adzuna', 3, 2, 0, 0, 0, 5]
+    assert list(frame.iloc[-1]) == ['All reasons', '', 4, 2, 1, 2, 2, 11]
+    assert len(frame) == len(set((r['reason'], r['source']) for r in
+                                 d.removal_pivot(_removal_rows(), now=SNOW, top_subindustries=3)['rows'])) + 1
+    empty = d.removal_pivot_frame(d.removal_pivot([], now=SNOW))
+    assert list(empty.columns) == ['Reason', 'Source', 'Total'] and empty.empty
+
+
+def test_render_weekly_scorecard_feeds_the_removal_section_the_noise_bucket(monkeypatch):
+    rows = _removal_rows()
+    monkeypatch.setattr(d, 'load_scorecard_events', lambda: rows)
+    monkeypatch.setattr(d, 'render_supply_section', lambda r, now=None: None)
+    calls = []
+    monkeypatch.setattr(d, 'render_removal_section', lambda tomb, now=None: calls.append((tomb, now)))
+    d.render_weekly_scorecard(None, {})
+    assert len(calls) == 1
+    tomb, now = calls[0]
+    assert now.tzinfo is not None
+    assert tomb == d.scorecard_week_buckets(rows, now)['tomb_wk']
+    d.render_removal_section(rows, SNOW)                                   # bare mode smoke
+    d.render_removal_section([], SNOW)
+
+
+# (5) the 'expansion' event type ---------------------------------------------
+
+def test_expansion_is_configured_everywhere():
+    cfg = d.EVENT_TYPES['expansion']
+    assert cfg['icon'] == '🌱' and cfg['label'] == 'Expansion'
+    assert cfg['full_label'] == 'Expansion / New registration'
+    assert cfg['badge_class'] == 'badge-expansion'
+    for key in ('label', 'full_label', 'color', 'gradient', 'icon', 'badge_class', 'bg_color'):
+        assert cfg.get(key), key
+    assert d.event_config_for('expansion') is cfg
+    assert d._trigger_label('expansion') == 'Expansion / New registration'
+    assert 'expansion' in d._TRIGGER_ORDER
+    src = inspect.getsource(d)
+    assert '.badge-expansion {' in src                                     # the CSS class the badge uses
+    # every card type except the catch-all has a New Leads tab — a type in
+    # EVENT_TYPES without one renders nowhere (counted out of "Other")
+    main_src = inspect.getsource(d.main)
+    for etype in d.EVENT_TYPES:
+        if etype != 'other':
+            assert f'render_event_section(new_df, "{etype}"' in main_src, etype
+    assert 'tab_expansion' in main_src and '🌱 Expansion (' in main_src
+
+
+def test_expansion_leaves_the_finance_leader_family_alone():
+    assert d.FINANCE_LEADER_EVENT_TYPES == {'cfo_hire', 'finance_seat_open'}
+    df = pd.DataFrame({'event_type': ['expansion', 'expansion', 'cfo_hire'],
+                       'hashtags': [None, ['#NewController'], None]})
+    assert list(d._finance_leader_mask(df)) == [False, True, True]
+    assert d._trigger_key({'event_type': 'expansion'}) == ('', 'expansion')
+    assert d._trigger_key({'event_type': 'expansion', 'hashtags': ['#NewController']}) == ('fl', 'controller_tag')
+
+
+def test_other_tab_still_absorbs_unknown_types_but_not_expansion():
+    df = pd.DataFrame([{'id': 1, 'event_type': 'expansion', 'lead_status': 'NEW'},
+                       {'id': 2, 'event_type': 'mystery', 'lead_status': 'NEW'},
+                       {'id': 3, 'event_type': 'other', 'lead_status': 'NEW'}])
+    tabbed = [t for t in d.EVENT_TYPES if t != 'other']
+    assert 'expansion' in tabbed
+    assert int((~df['event_type'].isin(tabbed)).sum()) == 2                # mystery + other, not expansion
+    known_others = [t for t in d.EVENT_TYPES if t != 'other']
+    assert list(df[~df['event_type'].isin(known_others)]['id']) == [2, 3]   # the "Other" section's filter
+    assert list(df[df['event_type'] == 'expansion']['id']) == [1]
+
+
+def test_grade_colors_are_shared_by_card_and_strip():
+    assert set(d.GRADE_COLORS) == {'A', 'B', 'C', 'D'}
+    assert d._grade_pill('A').startswith('<span style="background:#10b981')
+    assert 'ungraded' in d._grade_pill('') and d._grade_pill('', small=False) == ''
+    assert 'grade_colors = GRADE_COLORS' in inspect.getsource(d.render_event_card)

@@ -50,6 +50,7 @@ import re
 import sys
 import copy
 import json
+import inspect
 import time
 import sqlite3
 import argparse
@@ -78,7 +79,7 @@ from src.pipeline.runlock import RunLock  # noqa: E402
 from src.pipeline.typed import (  # noqa: E402
     TYPED_EVENT_COLUMNS, probe_columns, verify_state_for, retry_after_for,
     llm_retry_after, typed_payload, not_fit_payload, MAX_ENRICH_ATTEMPTS,
-    LLM_RETRY_HOURS,
+    LLM_RETRY_HOURS, parse_ts,
 )
 # Phase 3 slice B2 (2026-09-08): free registries — SEC IAPD advisers, FDIC
 # banks, ProPublica nonprofits — settle territory / vertical / revenue / url
@@ -90,6 +91,21 @@ try:
     from src.pipeline.domains import resolve as _resolve_domain  # noqa: E402
 except ImportError:
     _resolve_domain = None
+# Phase 4 slice C2 (2026-09-08): the finance-leader hire SUBJECT detector
+# (replaces the substring checks the #NewCFO / #NewController guard and
+# _finance_role used) and the declarative hashtag guard table applied to
+# the grader's list before the score is computed.
+from src.pipeline.hires import finance_hire_subject, NEW_CFO_ROLES, NEW_CONTROLLER_ROLES  # noqa: E402
+from src.pipeline.hashtag_guards import apply_guards, parse_funding_amount, strip_count  # noqa: E402
+# Phase 4 slice C1 (another engineer's module, written concurrently): the
+# accounts table — one grade per account, enrich-once, rep verdicts.
+# Guarded import: every hook below is a no-op until the module lands, and
+# accounts.probe_accounts() answers False until A.J. runs
+# supabase/migrations/003_accounts.sql, so the events path never depends on it.
+try:
+    from src.pipeline import accounts as _accounts  # noqa: E402
+except ImportError:
+    _accounts = None
 
 # ── .env ─────────────────────────────────────────────────────────────────────
 try:
@@ -150,6 +166,15 @@ ORACLE_MIN_CONFIDENCE = _oracles.MATCH_THRESHOLD
 # alone; those fall through to Stage B. Structured SEC 'out' is unaffected.
 ARTICLE_OTHER_TOMBSTONE_MIN_CONFIDENCE = 'High'
 ARTICLE_TOMBSTONE_MIN_DESCRIPTION_CHARS = 150
+
+# Enrich ONCE per account (Phase 4 slice C2, 2026-09-08 — plan approved by
+# A.J. 2026-09-06). When the accounts table holds a VERIFIED row for the
+# chosen company whose firmographics were refreshed within this many days,
+# Stage A takes the row's facts (provenance 'account' — settled, like the
+# AccountCache) and Stage B / the probes spend nothing; only the NEW
+# trigger is graded. 90 days matches the AccountCache's revenue TTL, the
+# shortest-lived fit-relevant field.
+ACCOUNT_FRESH_DAYS = 90
 
 # Local-LLM availability (Phase 2). llama.cpp being DOWN is not the same as it
 # answering badly: a connection error or a 5xx flips 'unavailable' (a read
@@ -402,7 +427,32 @@ def _is_excluded_public_company(name: str) -> bool:
 
 
 def _load_rep_dispositions(client) -> dict:
-    """{account_key(company_name): status} from account_dispositions."""
+    """{account_key: status} of every rep verdict.
+
+    Phase 4 (2026-09-08): read through accounts.load_dispositions when the
+    module is present — it merges the accounts table's disposition column
+    with the legacy account_dispositions table, so a verdict recorded on
+    either side short-circuits the next event (the acceptance test: a "Not
+    a Fit" account's next event never reaches search). Each entry is keyed
+    both by the key the module chose and by gates.account_key(name), the
+    key _rep_verdict_for looks up with. The legacy read stays as the
+    fallback for a missing module or a failing call — never an empty
+    verdict set because of a code path."""
+    if _accounts is not None:
+        try:
+            raw = _accounts.load_dispositions(client) or {}
+            out = {}
+            for key, entry in raw.items():
+                status = entry.get('status') if isinstance(entry, dict) else entry
+                if not status:
+                    continue
+                out[key] = status
+                name = entry.get('name') if isinstance(entry, dict) else None
+                if name:
+                    out[_gates_account_key(str(name))] = status
+            return out
+        except Exception as e:      # noqa: BLE001 — fall back to the legacy table
+            log.warning(f'accounts.load_dispositions failed ({e}) — reading account_dispositions')
     try:
         rows = client.table('account_dispositions').select('company_name,status').execute().data or []
         return {_gates_account_key(r.get('company_name') or ''): r.get('status')
@@ -424,30 +474,39 @@ def _rep_verdict_for(companies: list, dispositions: dict):
     return None
 
 
-def _structured_verdict(event: dict) -> dict:
-    """Free, deterministic pre-search verdict from structured facts the
-    scrapers now embed in the description (SIC code; Form D industry group,
-    declared revenue range, offering amount, SPAC flag)."""
-    import re as _re
-    desc = event.get('description') or ''
-    out = {'verdict': 'unknown', 'reason': '', 'revenue_segment': ''}
-    if 'sec.gov' not in (event.get('source_url') or ''):
+# Review 2026-09-08 (Phase 4): the structured verdict is moving to
+# src/pipeline/structured.py (another engineer, a faithful copy of the
+# function below) so the golden-set exporter and the scrapers can read it
+# without importing this module. Re-exported from there when it has landed;
+# the local definition stays as the fallback so this file works before and
+# after — the two must stay behaviourally identical (tests pin a sample).
+try:
+    from src.pipeline.structured import structured_verdict as _structured_verdict  # noqa: E402
+except ImportError:
+    def _structured_verdict(event: dict) -> dict:
+        """Free, deterministic pre-search verdict from structured facts the
+        scrapers now embed in the description (SIC code; Form D industry group,
+        declared revenue range, offering amount, SPAC flag)."""
+        import re as _re
+        desc = event.get('description') or ''
+        out = {'verdict': 'unknown', 'reason': '', 'revenue_segment': ''}
+        if 'sec.gov' not in (event.get('source_url') or ''):
+            return out
+        m = _re.search(r'SIC:\s*(\d{4})', desc)
+        if m:
+            v, why = sic_to_verdict(m.group(1))
+            if v in ('out', 'vehicle'):
+                return {'verdict': v, 'reason': why, 'revenue_segment': ''}
+        if 'Form D' in (event.get('title') or ''):
+            grp = (_re.search(r'industry group: ([^.]+)\.', desc) or [None, ''])[1]
+            rr = (_re.search(r'Declared revenue: ([^.]+?)\.(?:\s|$)', desc) or [None, ''])[1]
+            amt = _re.search(r'Total offering: \$([\d,]+)', desc)
+            amount = float(amt.group(1).replace(',', '')) if amt else None
+            spac = 'SPAC: yes' in desc
+            v, seg, why = formd_to_verdict(grp.strip() if grp else None,
+                                           rr.strip() if rr else None, amount, spac)
+            return {'verdict': v, 'reason': why, 'revenue_segment': seg}
         return out
-    m = _re.search(r'SIC:\s*(\d{4})', desc)
-    if m:
-        v, why = sic_to_verdict(m.group(1))
-        if v in ('out', 'vehicle'):
-            return {'verdict': v, 'reason': why, 'revenue_segment': ''}
-    if 'Form D' in (event.get('title') or ''):
-        grp = (_re.search(r'industry group: ([^.]+)\.', desc) or [None, ''])[1]
-        rr = (_re.search(r'Declared revenue: ([^.]+?)\.(?:\s|$)', desc) or [None, ''])[1]
-        amt = _re.search(r'Total offering: \$([\d,]+)', desc)
-        amount = float(amt.group(1).replace(',', '')) if amt else None
-        spac = 'SPAC: yes' in desc
-        v, seg, why = formd_to_verdict(grp.strip() if grp else None,
-                                       rr.strip() if rr else None, amount, spac)
-        return {'verdict': v, 'reason': why, 'revenue_segment': seg}
-    return out
 
 
 
@@ -1201,11 +1260,13 @@ def _cache_set(company_name: str, industry_hint: str, results: dict) -> None:
 # error / non-2xx / success=false) — deferred, never a known empty.
 # 'negative_cache' = lookups answered "known empty" without a search.
 # 'oracle' = Stage A registry hits (Phase 3 B2) — facts that cost no search.
+# 'account' = Stage A served from a fresh VERIFIED accounts-table row (Phase
+# 4 enrich-once) — no LLM, no search, no probe.
 SEARCH_COUNTS: Dict[str, int] = {'lookups': 0, 'cache': 0, 'negative_cache': 0,
                                  'firecrawl': 0, 'firecrawl_attempts': 0,
                                  'tavily': 0, 'throttled': 0,
                                  'transport_failed': 0, 'budget_skipped': 0,
-                                 'oracle': 0}
+                                 'oracle': 0, 'account': 0}
 
 
 def reset_search_counts() -> None:
@@ -1294,27 +1355,11 @@ def _event_search_tier(event: dict) -> int:
     return 2
 
 
-def _parse_funding_amount(text: str):
-    """Largest dollar amount in the text, in dollars ('$6.8 Million',
-    '$37M', '$2,500,000', '$1.2B'). None if nothing parseable."""
-    import re as _re3
-    best = None
-    for m in _re3.finditer(
-            r'\$\s?([\d][\d,]*(?:\.\d+)?)\s*'
-            r'(billion|bn|million|mm|[bmk])?\b', text, _re3.I):
-        try:
-            val = float(m.group(1).replace(',', ''))
-        except ValueError:
-            continue
-        unit = (m.group(2) or '').lower()
-        if unit in ('billion', 'bn', 'b'):
-            val *= 1_000_000_000
-        elif unit in ('million', 'mm', 'm'):
-            val *= 1_000_000
-        elif unit == 'k':
-            val *= 1_000
-        best = max(best or 0, val)
-    return best
+# Largest dollar amount in a text ('$6.8 Million', '$37M', '$1.2B'). Phase 4
+# (2026-09-08): the parser lives in src/pipeline/hashtag_guards.py so the
+# #Funding guard and the search tier read ONE implementation; the old name
+# is kept for the callers and tests that use it.
+_parse_funding_amount = parse_funding_amount
 
 
 # ── IP-hygiene throttles (2026-08-09) ────────────────────────────────────────
@@ -2131,39 +2176,13 @@ def _build_companies_block(companies_data: list) -> str:
     return '\n'.join(lines)
 
 
-# Finance leadership roles that should always trigger a minimum Grade B per
-# user requirement: "new CFOs/Controllers/VPs of Finance are VERY high value
-# and probably more valuable than any other trigger".
-FINANCE_LEADERSHIP_PATTERNS = [
-    'cfo', 'chief financial officer', 'chief financial',
-    'controller', 'corporate controller',
-    'vp accounting', 'vp of accounting', 'vice president of accounting',
-    'vp finance', 'vp of finance', 'vice president finance',
-    'vice president of finance', 'head of finance',
-    'director of finance', 'finance director',
-    'chief accounting officer', 'chief accountant',
-]
-
-
-def _has_finance_leadership_trigger(event: dict) -> bool:
-    """True if the event title or description indicates hiring a finance
-    leadership role (CFO, Controller, VP Finance, etc.)."""
-    text = ' '.join([
-        (event.get('title') or ''),
-        (event.get('description') or ''),
-    ]).lower()
-    if not text.strip():
-        return False
-    if event.get('event_type') == 'cfo_hire':
-        return True
-    # Check for finance leadership keywords combined with hiring verbs
-    HIRE_VERBS = ('appoints', 'names', 'hires', 'welcomes', 'taps',
-                  'joins as', 'promoted to', 'elevated to', 'hiring')
-    has_hire = any(v in text for v in HIRE_VERBS) or 'hire' in text
-    has_role = any(p in text for p in FINANCE_LEADERSHIP_PATTERNS)
-    return has_hire and has_role
-
-
+# Finance leadership roles: "new CFOs/Controllers/VPs of Finance are VERY
+# high value and probably more valuable than any other trigger" (A.J.).
+# Phase 4 (2026-09-08): whether the event IS such a hire is decided by
+# src/pipeline/hires.finance_hire_subject (the role must be the subject of
+# a hire verb — attribution, interim/former seats, board seats and awards
+# never count); the substring lists below survive only for the board-only
+# gate, which asks the weaker question "is a finance role mentioned at all".
 _CONTROLLER_PATTERNS = ('controller', 'vp accounting', 'vp of accounting',
                         'vice president of accounting', 'corporate controller')
 _CFO_EQUIV_PATTERNS = ('cfo', 'chief financial officer', 'chief financial',
@@ -2196,29 +2215,27 @@ def _board_only_event(event: dict) -> bool:
 
 
 def _finance_role(event: dict):
-    """Distinguish the finance role being hired: 'cfo' | 'controller' | None.
+    """The finance seat this event HIRES into: 'cfo' | 'controller' | None.
 
     Why it matters: the rubric awards #NewCFO(+5) vs #NewController(+3).
     The old code relabeled Controller hires to event_type=cfo_hire, which
     then triggered #NewCFO on regrade — a +5/+3 double-count inflation loop
-    (audit 2026-07-16). Only true CFO-equivalents get relabeled now."""
-    if not _has_finance_leadership_trigger(event):
-        return None
-    text = ' '.join([(event.get('title') or ''),
-                     (event.get('description') or '')]).lower()
-    # Controller checked FIRST — "Controller" text must not fall through to
-    # cfo via the broader CFO-equivalent patterns.
-    if any(p in text for p in _CONTROLLER_PATTERNS):
-        # A release can mention both ("Controller promoted to CFO") — the
-        # destination role wins.
-        if any(p in text for p in ('as cfo', 'new cfo', 'to cfo',
-                                   'chief financial officer')):
-            return 'cfo'
+    (audit 2026-07-16). Only true CFO-equivalents get relabeled.
+
+    Phase 4 (2026-09-08): decided by hires.finance_hire_subject — the role
+    must be the SUBJECT of a hire verb, so an earnings release quoting the
+    CFO, a board seat or an award is None even when event_type says
+    cfo_hire (the scraper's label is an input, not evidence). The rubric's
+    split applies: CFO / VP Finance / Head or Director of Finance are
+    CFO-equivalents ('cfo'), Controller / VP Accounting / Chief Accounting
+    Officer are 'controller'; a Treasurer hire is a finance-leader event
+    but neither rubric seat, hence None (as before Phase 4)."""
+    subj = finance_hire_subject(event.get('title') or '', event.get('description') or '')
+    role = subj.get('role')
+    if role in NEW_CFO_ROLES:
+        return 'cfo'
+    if role in NEW_CONTROLLER_ROLES:
         return 'controller'
-    if event.get('event_type') == 'cfo_hire':
-        return 'cfo'
-    if any(p in text for p in _CFO_EQUIV_PATTERNS):
-        return 'cfo'
     return None
 
 
@@ -2233,12 +2250,27 @@ ASSET_MANAGER_SUBINDUSTRIES = {
 NONPROFIT_VERTICAL = 'Nonprofits & Organizations'
 
 
-def probe_funding_history(company_name: str) -> str:
+def _probe_search(company_name: str, hint: str, kind: str, cached_only: bool) -> dict:
+    """The probes' search call. `cached_only` (Phase 4 enrich-once): serve
+    the AccountCache's stored result for this (account, kind) and NEVER
+    enter the ladder — a known account's probes were run when it was
+    verified (aum / complexity live 180 days there); a miss is simply no
+    evidence, not a reason to search again."""
+    if not cached_only:
+        return tavily_search(company_name, hint, paid_ok=False, kind=kind)
+    key = _gates_account_key(company_name)
+    hit = _account_cache().get_search(key, kind) if key else None
+    if hit:
+        SEARCH_COUNTS['cache'] += 1
+    return hit or {}
+
+
+def probe_funding_history(company_name: str, cached_only: bool = False) -> str:
     """Search for funding events (rubric: #Funding = verified within last
     18 months). Returns a compact evidence block ('' if nothing)."""
     try:
-        res = tavily_search(company_name, 'funding round investment raised',
-                            paid_ok=False, kind='funding_history')
+        res = _probe_search(company_name, 'funding round investment raised',
+                            'funding_history', cached_only)
         hits = (res or {}).get('results') or []
         if not hits:
             return ''
@@ -2254,12 +2286,12 @@ def probe_funding_history(company_name: str) -> str:
         return ''
 
 
-def probe_aum(company_name: str) -> str:
+def probe_aum(company_name: str, cached_only: bool = False) -> str:
     """Search for AUM/AUA evidence for asset managers (rubric:
     #AssetManagerScale). Returns a compact evidence block ('' if nothing)."""
     try:
-        res = tavily_search(company_name, 'AUM assets under management funds',
-                            paid_ok=False, kind='aum')
+        res = _probe_search(company_name, 'AUM assets under management funds',
+                            'aum', cached_only)
         hits = (res or {}).get('results') or []
         if not hits:
             return ''
@@ -2275,7 +2307,7 @@ def probe_aum(company_name: str) -> str:
         return ''
 
 
-def probe_complexity(company_name: str) -> str:
+def probe_complexity(company_name: str, cached_only: bool = False) -> str:
     """Search for COMPLEXITY evidence: multiple locations, subsidiaries/
     brands, multi-country operations, franchising. These are the +2 rubric
     signals (#Locations #Entities #Global #Franchisor/#Franchisee) that
@@ -2285,8 +2317,8 @@ def probe_complexity(company_name: str) -> str:
     this ("has locations in the United States, Canada, ..."), as do the
     companies' own locations/franchise pages. Returns '' if nothing."""
     try:
-        res = tavily_search(company_name, 'locations offices subsidiaries franchise',
-                            paid_ok=False, kind='complexity')
+        res = _probe_search(company_name, 'locations offices subsidiaries franchise',
+                            'complexity', cached_only)
         hits = (res or {}).get('results') or []
         if not hits:
             return ''
@@ -2391,10 +2423,15 @@ def _propublica_990(company_name: str):
 
 
 def gather_extra_evidence(event: dict, companies_data: list,
-                          fit: dict) -> str:
+                          fit: dict, known_account: bool = False) -> str:
     """Run the rubric's research probes for the PRIMARY company, chosen by
     what the rubric needs for this kind of account. Skips redundant work
-    (funding events already carry funding evidence)."""
+    (funding events already carry funding evidence).
+
+    `known_account` (Phase 4 enrich-once): the account came from a fresh
+    verified accounts-table row, so the probes read the AccountCache only
+    (cached_only) and never search — the 990 API stays (free, not a
+    search, cached 365 days by probe_nonprofit_990 itself)."""
     account_name = (fit.get('account_name') or '').strip()
     primary = next((c for c in companies_data
                     if (c.get('name') or '').strip() == account_name), None) \
@@ -2418,12 +2455,12 @@ def gather_extra_evidence(event: dict, companies_data: list,
     et = (event.get('event_type') or '')
     if vertical != NONPROFIT_VERTICAL:
         if zi in ASSET_MANAGER_SUBINDUSTRIES:
-            b = probe_aum(name)
+            b = probe_aum(name, cached_only=known_account)
         elif (et in ('cfo_hire', 'finance_seat_open', 'merger_acquisition', 'funding')
               and fit.get('verdict') == 'pass'):
-            b = probe_complexity(name)
+            b = probe_complexity(name, cached_only=known_account)
         elif et != 'funding':
-            b = probe_funding_history(name)
+            b = probe_funding_history(name, cached_only=known_account)
         else:
             b = ''
         if b:
@@ -2433,7 +2470,8 @@ def gather_extra_evidence(event: dict, companies_data: list,
 
 
 def grade_event(event: dict, companies_data: list,
-                extra_evidence: str = '', account_name: str = '') -> dict:
+                extra_evidence: str = '', account_name: str = '',
+                fit: dict = None) -> dict:
     """Apply TAL grading rules (A.J.'s latest rubric, 2026-07-16). Returns
     dict with grade/hashtags/confidence/numeric_score/etc. On any failure
     returns an empty-graded record so the pipeline can still write the event.
@@ -2445,6 +2483,12 @@ def grade_event(event: dict, companies_data: list,
       has the evidence it was designed to consume.
     - No hashtag cap — rubric says "use as many as evidence supports"
       (17 valid hashtags exist; the closed-set filter below is the guard).
+    - Phase 4 (2026-09-08): the model's list then passes the declarative
+      guard table (src/pipeline/hashtag_guards.HASHTAG_GUARDS) BEFORE the
+      score is computed; every strip is logged once and kept in
+      'guard_notes'. `fit` (the event-level fit dict) feeds the guards that
+      need the account's subindustry; when absent the account record's
+      own zi_subindustry is used.
     """
     empty = {
         'grade': None,
@@ -2454,6 +2498,7 @@ def grade_event(event: dict, companies_data: list,
         'cfo_status': None,
         'grade_justification': None,
         'research_notes': [],
+        'guard_notes': [],
     }
     if not companies_data:
         return empty
@@ -2503,31 +2548,32 @@ def grade_event(event: dict, companies_data: list,
         and not (h in seen or seen.add(h))
     ]
 
-    # ── Evidence guard: finance-leader triggers need finance-leader text ──
-    # The LLM provably fabricates #NewCFO on non-CFO events despite the
-    # prompt rules (e.g. "+5 applied as highest-value single trigger for
-    # material definitive agreement events", CNL 2026-07-21). The research
-    # probes never return CFO facts, so the only legitimate evidence source
-    # for these two hashtags is the event itself: its type, title, or
-    # description must state the role, or the tag is stripped.
-    _evid_text = ' '.join([(event.get('title') or ''),
-                           (event.get('description') or '')]).lower()
+    # ── Evidence guards (Phase 4 slice C2, 2026-09-08) ───────────────────
+    # The LLM provably fabricates hashtags despite the prompt rules —
+    # #NewCFO on material-agreement 8-Ks ("+5 applied as highest-value
+    # single trigger", CNL 2026-07-21), #Funding on a $500K seed, #100EE
+    # from a '51-200' bucket, #FormerUser that no input could evidence. The
+    # substring test that guarded the two finance-leader tags is replaced
+    # by the declarative table: every mechanically checkable tag needs its
+    # evidence in the event text, the account record or the probe block,
+    # or it is stripped BEFORE the score is computed (the rubric's own
+    # "when in doubt, DROP the hashtag").
     _et = event.get('event_type')
-    if _et == 'finance_seat_open':
+    if _et == 'finance_seat_open' and '#NewController' not in hashtags:
         # An OPEN finance seat (job posting) is a +3 Controller-equivalent
-        # trigger (A.J. 2026-09-06), never a seated new CFO.
-        if '#NewCFO' in hashtags:
-            hashtags.remove('#NewCFO')
-        if '#NewController' not in hashtags:
-            hashtags.append('#NewController')
-    else:
-        if '#NewCFO' in hashtags and not (
-                _et == 'cfo_hire'
-                or any(p in _evid_text for p in _CFO_EQUIV_PATTERNS)):
-            hashtags.remove('#NewCFO')
-        if '#NewController' in hashtags and not any(
-                p in _evid_text for p in _CONTROLLER_PATTERNS):
-            hashtags.remove('#NewController')
+        # trigger by definition (A.J. 2026-09-06) — added here, not judged;
+        # the guard table strips #NewCFO for the same event type.
+        hashtags.append('#NewController')
+    _acct = (next((c for c in companies_data
+                   if (c.get('name') or '').strip() == (account_name or '').strip()), None)
+             or pick_primary(companies_data) or {})
+    _fit = dict(fit or {})
+    if not _fit.get('zi_subindustry'):
+        _fit['zi_subindustry'] = _acct.get('zi_subindustry')
+    hashtags, guard_notes = apply_guards(hashtags, event, _acct, _fit, extra_evidence,
+                                         companies_data=companies_data)
+    for _note in guard_notes:
+        log.info(f'  guard: {_note}')
 
     # ── DETERMINISTIC scoring + grade (overrides LLM math) ──────────────
     if llm_says_unable:
@@ -2567,6 +2613,7 @@ def grade_event(event: dict, companies_data: list,
         'cfo_status': cfo_status,
         'grade_justification': justification,
         'research_notes': notes,
+        'guard_notes': guard_notes,
     }
 
 
@@ -2851,7 +2898,7 @@ def _article_other_decision(firm: dict, structured_out: bool = False,
     zi = (firm.get('zi_subindustry') or '').strip()
     if zi.upper() != 'OTHER' and zi not in ZI_NOT_A_FIT:
         return firm, False
-    final = (structured_out or firm.get('classified_by') in ('cache', 'oracle')
+    final = (structured_out or firm.get('classified_by') in ('cache', 'oracle', 'account')
              or (_confidence_meets(firm.get('classification_confidence'),
                                    ARTICLE_OTHER_TOMBSTONE_MIN_CONFIDENCE)
                  and (article_chars or 0) > ARTICLE_TOMBSTONE_MIN_DESCRIPTION_CHARS))
@@ -2964,7 +3011,7 @@ def _stage_a_oracle(name: str, firm: dict, hint: dict, cache, second_chance: boo
 
 
 def _stage_a_company(event: dict, co: dict, structured: dict, article_ctx: str,
-                     cache, dry_run: bool = False) -> dict:
+                     cache, dry_run: bool = False, account_row: dict = None) -> dict:
     """STAGE A — free classification for one workable company:
     structured seeds → account firmographic cache → registry (Phase 3 B2:
     SEC IAPD / FDIC / ProPublica for adviser-, bank- and nonprofit-shaped
@@ -2980,21 +3027,44 @@ def _stage_a_company(event: dict, co: dict, structured: dict, article_ctx: str,
     what is empty or known from the article (_oracle_apply) — with the old
     order a fuzzy registry hit overwrote researched facts and re-stamped
     them 'oracle' for another year. A cached hq also anchors the lookup.
-    `dry_run` (M9): the registry stays on the local tables."""
+    `dry_run` (M9): the registry stays on the local tables.
+
+    `account_row` (Phase 4 enrich-once, 2026-09-08): a VERIFIED accounts-
+    table row for this company, fresh within ACCOUNT_FRESH_DAYS, selected
+    by the caller (_known_account). Its facts fill everything the seeds
+    left empty with provenance 'account' — settled, the way cache facts
+    are — and the company is marked no_search / account_known: no cache
+    read, no registry, no article LLM, no Stage B, no probe search. The
+    account was researched once; only the new trigger is graded."""
     name = co['name']
     key = _gates_account_key(name)
     firm = {f: None for f in _FIRM_FIELDS}
     seeds = _structured_seeds(event, name, structured)
     firm.update(seeds)
     # Per-field provenance (review 2026-09-07): 'seed' | 'oracle' | 'cache' |
-    # 'article' here, 'search' added by _merge_search. Decides what the
-    # pre-search gates may judge, what Stage B still needs and what the
-    # cache keeps.
+    # 'article' here, 'search' added by _merge_search; 'account' (Phase 4)
+    # for facts taken from the accounts table. Decides what the pre-search
+    # gates may judge, what Stage B still needs and what the cache keeps.
     firm['_sources'] = {f: 'seed' for f in seeds}
     if seeds.get('hq'):
         log.info(f'     hq seeded from SEC filing: {seeds["hq"]}')
     if seeds.get('revenue'):
         log.info(f'     revenue seeded from Form D declared range: {seeds["revenue"]}')
+
+    if account_row:
+        facts = _account_facts(account_row)
+        firm = _fill_missing(firm, facts, source='account')
+        if facts.get('domain') and not firm.get('domain'):
+            firm['domain'] = facts['domain']
+            firm['domain_method'] = 'account'
+        firm['classification_confidence'] = facts.get('classification_confidence') or 'High'
+        firm['classified_by'] = 'account'
+        firm['no_search'] = True
+        firm['account_known'] = True
+        firm['_seeds'] = seeds
+        SEARCH_COUNTS['account'] += 1
+        log.info(f'  → account known: {name} (verified {_account_verified_on(account_row)})')
+        return firm
 
     conf = by = None
     cached = cache.get_firmographics(key) if key else None
@@ -3281,6 +3351,282 @@ def _acquire_run_lock(path: str = None):
     return lock
 
 
+# ── Phase 4 slice C2 (2026-09-08): the accounts-table hooks ─────────────────
+# The accounts table (src/pipeline/accounts.py, slice C1, another engineer)
+# makes the ACCOUNT the primary object: one grade per account, research done
+# once, rep verdicts on the account. Everything here is a no-op when the
+# module is absent or its probe says the table is not live yet (A.J. runs
+# 003_accounts.sql later), and any failure inside is logged and swallowed —
+# the event write has already happened, and account bookkeeping must never
+# fail a run or a row.
+
+# "When were the firmographics last refreshed" = firmographics.researched_at,
+# and ONLY that. Review 2026-09-08 (Phase 4), 2a: the enrich-once check used
+# to fall through to accounts.updated_at, which EVERY write refreshes — the
+# enrich-once pass itself, a facts-only touch, the backfill — so a verified
+# account was never re-researched again. _sync_accounts stamps
+# researched_at when the chosen company's facts came from research this
+# run (seed / registry / structured / search / cache — never 'account',
+# the enrich-once provenance); a row without the stamp is NOT fresh.
+_ACCOUNT_FRESH_KEYS = ('researched_at',)
+# Provenance that counts as RESEARCHED for the enrich-once skip: the same
+# set _remember_firmographics lets into the AccountCache (never the article
+# pass, never a previous account-row read).
+_RESEARCHED_SOURCES = frozenset({'seed', 'structured', 'oracle', 'search', 'cache'})
+
+
+def _accounts_present(client) -> bool:
+    """True when the accounts module is importable AND its (memoized) probe
+    finds the table live."""
+    if _accounts is None:
+        return False
+    try:
+        return bool(_accounts.probe_accounts(client))
+    except Exception as e:      # noqa: BLE001 — the events path never depends on it
+        log.debug(f'accounts probe failed: {e}')
+        return False
+
+
+def _account_row(client, key: str):
+    """The accounts row for an account_key, or None. Uses accounts.load_account
+    when the module offers one, else ONE select on the primary key."""
+    if not key or _accounts is None:
+        return None
+    try:
+        loader = getattr(_accounts, 'load_account', None)
+        if loader is not None:
+            return loader(client, key) or None
+        rows = (client.table('accounts').select('*').eq('account_key', key)
+                .limit(1).execute().data or [])
+        return rows[0] if rows else None
+    except Exception as e:      # noqa: BLE001
+        log.debug(f'accounts read failed for {key!r}: {e}')
+        return None
+
+
+def _account_firmographics(row: dict) -> dict:
+    fm = (row or {}).get('firmographics')
+    if isinstance(fm, str):
+        try:
+            fm = json.loads(fm)
+        except ValueError:
+            fm = None
+    return fm if isinstance(fm, dict) else {}
+
+
+def _account_fresh_ts(row: dict):
+    """When the row's facts were last RESEARCHED (firmographics.researched_at),
+    or None — never updated_at (see _ACCOUNT_FRESH_KEYS)."""
+    fm = _account_firmographics(row)
+    for k in _ACCOUNT_FRESH_KEYS:
+        ts = parse_ts(fm.get(k)) if fm.get(k) else None
+        if ts:
+            return ts
+    return None
+
+
+def _account_verified_on(row: dict) -> str:
+    ts = _account_fresh_ts(row or {})
+    return ts.date().isoformat() if ts else '?'
+
+
+def _account_is_researched(row: dict) -> bool:
+    """Were the row's fit-relevant facts established by research (seed /
+    registry / search / cache), not by the article pass? A post-search fit
+    gate can verify on an article-only hq when the search found nothing;
+    the AccountCache never persists such a value and neither may the
+    enrich-once skip rely on it. Judged from firmographics.field_sources
+    and classified_by; a row with neither is not researched."""
+    fm = _account_firmographics(row)
+    srcs = fm.get('field_sources') if isinstance(fm.get('field_sources'), dict) else {}
+    by = str((row or {}).get('classified_by') or fm.get('classified_by') or '').strip().lower()
+    zi_src = str(srcs.get('zi_subindustry') or by).strip().lower()
+    hq_src = str(srcs.get('hq') or '').strip().lower()
+    if zi_src not in _RESEARCHED_SOURCES:
+        return False
+    return hq_src in _RESEARCHED_SOURCES or (not hq_src and by in _RESEARCHED_SOURCES and bool(row.get('hq_state')))
+
+
+def _known_account(client, name: str, now: datetime = None):
+    """The accounts row that lets Stage A skip research for `name`:
+    verify_state 'verified', no rep disposition, researched facts
+    (_account_is_researched), refreshed within ACCOUNT_FRESH_DAYS. None for
+    unknown / stale / unverified / dispositioned / article-only accounts —
+    those research as usual."""
+    row = _account_row(client, _gates_account_key(name))
+    if not row or str(row.get('verify_state') or '').strip().lower() != 'verified':
+        return None
+    if row.get('disposition'):
+        return None
+    if not _account_is_researched(row):
+        return None
+    ts = _account_fresh_ts(row)
+    if ts is None:
+        return None
+    now = now or datetime.now(timezone.utc)
+    if (now - ts).days > ACCOUNT_FRESH_DAYS:
+        return None
+    return row
+
+
+def _account_facts(row: dict) -> dict:
+    """Firmographic fields in the Stage A shape (_FIRM_FIELDS + domain +
+    classification_confidence) from an accounts row: the `firmographics`
+    JSON when the row carries one, then the typed columns (hq_state → hq —
+    a state code is exactly the territory fact the gates read;
+    revenue_segment → revenue; domain → url)."""
+    facts = {}
+    fm = _account_firmographics(row)
+    for f in _FIRM_FIELDS + ('domain', 'classification_confidence'):
+        if fm.get(f):
+            facts[f] = fm[f]
+    for f in _FIRM_FIELDS + ('domain', 'classification_confidence'):
+        if not facts.get(f) and row.get(f):
+            facts[f] = row[f]
+    if not facts.get('hq') and row.get('hq_state'):
+        facts['hq'] = str(row['hq_state'])
+    if not facts.get('revenue') and row.get('revenue_segment') in ('LMM', 'MM', 'Corp', 'Enterprise'):
+        facts['revenue'] = row['revenue_segment']
+    if not facts.get('size') and row.get('size_bucket'):
+        facts['size'] = str(row['size_bucket'])
+    if not facts.get('url') and facts.get('domain'):
+        facts['url'] = f"https://{facts['domain']}"
+    return facts
+
+
+def _company_is_researched(company: dict) -> bool:
+    """Did THIS run establish the company's fit facts by research — a
+    structured seed, a registry, a search, the AccountCache — rather than
+    the article pass or a previous accounts-row read ('account')? Judged
+    from the record's field_sources / classified_by, the same provenance
+    vocabulary _account_is_researched reads back from the row."""
+    company = company or {}
+    srcs = company.get('field_sources') if isinstance(company.get('field_sources'), dict) else {}
+    by = str(company.get('classified_by') or '').strip().lower()
+    zi_src = str(srcs.get('zi_subindustry') or by).strip().lower()
+    hq_src = str(srcs.get('hq') or '').strip().lower()
+    return zi_src in _RESEARCHED_SOURCES and hq_src in _RESEARCHED_SOURCES
+
+
+def _stamp_researched(row: dict, company: dict, now: datetime) -> dict:
+    """firmographics.researched_at = now on the account row when the chosen
+    company was researched this run (review 2026-09-08 (Phase 4), 2a) —
+    the stamp _known_account reads for enrich-once freshness. An
+    'account'-sourced company (enrich-once itself) or an article-only one
+    leaves the stamp alone, so a skip never refreshes it."""
+    if not _company_is_researched(company):
+        return row
+    fm = row.get('firmographics')
+    fm = dict(fm) if isinstance(fm, dict) else {}
+    fm['researched_at'] = now.isoformat()
+    row['firmographics'] = fm
+    return row
+
+
+def _upsert_takes_is_new_event() -> bool:
+    """Does accounts.upsert_account accept is_new_event= (C1 ≥ 2026-09-08)?"""
+    try:
+        return 'is_new_event' in inspect.signature(_accounts.upsert_account).parameters
+    except (TypeError, ValueError, AttributeError):
+        return False
+
+
+def _sync_accounts(client, event: dict, companies: list, fit: dict, grading: dict = None,
+                   tombstoned: bool = False, now: datetime = None,
+                   is_new_event: bool = None) -> tuple:
+    """Account bookkeeping after an event write → (upserted, touched).
+
+    `is_new_event` (review 2026-09-08 (Phase 4), 2c): whether this event
+    is being processed for the FIRST time (enrich_attempts was 0 and the
+    run is not --re-enrich) — passed through to accounts.upsert_account so
+    a re-processed event (a retry, a re-verify, a regrade) does not inflate
+    the account's event_count; None lets the module infer it from the ids
+    (the pre-2c behaviour) until the accounts owner's seen_event_ids lands.
+
+    ONE GRADE PER ACCOUNT (plan approved by A.J. 2026-09-06; supersedes the
+    2026-07-17 per-company / headline rule): the event's grade belongs to
+    the CHOSEN account — fit.account_name, picked by apply_fit_gates (pass >
+    unverified > staged, by role priority) — and is upserted there;
+    accounts.upsert_account replaces a stored grade only when the new one is
+    better, a re-grade of the same event, or the old one expired, and never
+    touches a rep disposition. Every OTHER workable company whose own fit is
+    not 'fail' is touched facts-only: it exists, it was not graded. A
+    tombstoned event (fit fail, industry block) touches its chosen company
+    facts-only too — the account exists even when this trigger was not
+    workable — and never grades it."""
+    if _accounts is None or not companies:
+        return 0, 0
+    now = now or datetime.now(timezone.utc)
+    fit = fit or {}
+    upserted = touched = 0
+    chosen = _account_company(companies, fit)
+    chosen_nm = (chosen.get('name') or '').strip()
+    _kw = {'now': now}
+    if is_new_event is not None and _upsert_takes_is_new_event():
+        _kw['is_new_event'] = is_new_event
+
+    def _facts_only(company, cfit):
+        # A tombstoned event: the account exists (name, facts, counts, seen
+        # dates) but this event is neither its trigger nor its grade —
+        # build_account_row(trigger_live=False). touch_secondary is not used
+        # here because it refuses a failed fit, and a failed fit IS the
+        # fact a tombstone establishes about the account.
+        try:
+            row = _accounts.build_account_row(event, company, cfit, grading=None, now=now,
+                                              trigger_live=False)
+        except TypeError:                   # an accounts module without trigger_live
+            row = _accounts.build_account_row(event, company, cfit, grading=None, now=now)
+        if company is chosen:
+            row = _stamp_researched(row, company, now)
+        return bool(_accounts.upsert_account(client, row, **_kw))
+
+    try:
+        if chosen_nm:
+            if tombstoned:
+                touched += _facts_only(chosen, chosen.get('fit') or fit)
+            else:
+                row = _accounts.build_account_row(event, chosen, fit, grading=grading, now=now)
+                row = _stamp_researched(row, chosen, now)
+                if _accounts.upsert_account(client, row, **_kw):
+                    upserted += 1
+        for c in companies:
+            nm = (c.get('name') or '').strip()
+            if not nm or nm == chosen_nm:
+                continue
+            if (c.get('role') or '').lower() not in WORKABLE_ROLES:
+                continue
+            if (c.get('fit') or {}).get('verdict') == 'fail':
+                continue
+            if tombstoned:
+                touched += _facts_only(c, c.get('fit') or {})
+            elif _accounts.touch_secondary(client, c, event, c.get('fit') or {}, now=now):
+                touched += 1
+    except Exception as e:      # noqa: BLE001 — bookkeeping never fails the row
+        log.warning(f'  accounts bookkeeping failed: {e}')
+    return upserted, touched
+
+
+def _tal_for(grading: dict) -> dict:
+    """The compact per-account grade stored on the chosen company record."""
+    return {'grade': grading.get('grade'),
+            'score': grading.get('numeric_score'),
+            'confidence': grading.get('confidence'),
+            'hashtags': grading.get('hashtags') or [],
+            'justification': grading.get('grade_justification')}
+
+
+def _attach_account_grade(companies: list, account_name: str, grading: dict) -> None:
+    """ONE GRADE PER ACCOUNT: `tal` on the chosen account only; a stale
+    secondary grade left by the pre-Phase-4 per-company loop is removed."""
+    nm = (account_name or '').strip()
+    for c in companies:
+        if not isinstance(c, dict):
+            continue
+        c.pop('tal', None)
+        if nm and (c.get('name') or '').strip() == nm and (grading or {}).get('grade'):
+            c['tal'] = _tal_for(grading)
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def enrich_events(
@@ -3435,6 +3781,14 @@ def enrich_events(
     dispositions = _load_rep_dispositions(client)
     if dispositions:
         log.info(f'Loaded {len(dispositions)} rep account verdict(s) — decided accounts skip research')
+    # Phase 4: the accounts table (one grade per account, enrich-once). Probed
+    # once per run; False until the module lands AND A.J. runs 003_accounts.sql.
+    _acct_on = _accounts_present(client)
+    if _acct_on:
+        log.info('accounts table present — one grade per account; verified accounts '
+                 f'fresh within {ACCOUNT_FRESH_DAYS}d skip research')
+    _acct_counts = {'upserted': 0, 'touched': 0}
+    _guards_stripped = 0
 
     _unavail_streak = False
     for idx, event in enumerate(events, 1):
@@ -3446,6 +3800,9 @@ def enrich_events(
             LLM_STATE['consecutive'] = 0
         _unavail_streak = False
         attempts_prev = _prev_attempts(event)
+        # First time this event is processed? (2c: re-processing must not
+        # inflate the account's event_count.)
+        _is_new = attempts_prev == 0 and not re_enrich
         _sv = _structured_verdict(event)   # free; also feeds the typed columns
 
         # ── 0. Board-only gate (free, before any LLM/search spend) ────────
@@ -3571,7 +3928,13 @@ def enrich_events(
             log.info(f'  🚫 Every workable company is a non-operating entity '
                      f'({", ".join(sorted(k for k in _kinds if k))}) — soft-deleting.')
             if not dry_run:
+                # Review 2026-09-08 (Phase 4): the names travel with the
+                # tombstone so the golden-set exporter can reproduce WHICH
+                # name produced the kind (the reason truncates names).
+                _mini = [{'name': c.get('name'), 'role': c.get('role'),
+                          'descriptor': c.get('descriptor') or ''} for c in companies]
                 _soft_delete(client, eid, 'entity_shape:' + ','.join(sorted(k for k in _kinds if k)),
+                             extra={'companies_data': _mini},
                              typed=_tombstone_typed(event, typed_cols, structured=_sv))
             ok += 1
             outcomes['not_fit'] += 1
@@ -3622,8 +3985,11 @@ def enrich_events(
                 log.info(f'  → Cached (this run): {name}')
                 firm = dict(firm_cache[run_key], no_search=True)
             else:
+                # Phase 4 enrich-once: a fresh VERIFIED accounts row settles
+                # the company with zero LLM / search / probe spend.
+                _known = _known_account(client, name) if _acct_on else None
                 firm = _stage_a_company(event, co, _sv, _article_ctx, acct_cache,
-                                        dry_run=dry_run)
+                                        dry_run=dry_run, account_row=_known)
             stage.append((co, firm))
         if LLM_STATE['unavailable']:
             outcomes['llm_unavailable'] += 1
@@ -3666,6 +4032,9 @@ def enrich_events(
                              typed=_tombstone_typed(event, typed_cols, fit=_early,
                                                     structured=_sv,
                                                     account=_account_company(_probe, _early)))
+                if _acct_on:        # the account exists; facts only, no grade
+                    _acct_counts['touched'] += _sync_accounts(
+                        client, event, _probe, _early, tombstoned=True, is_new_event=_is_new)[1]
             ok += 1
             outcomes['not_fit'] += 1
             continue
@@ -3718,6 +4087,9 @@ def enrich_events(
                              f'industry: {primary.get("industry")} (matched "{kw}")',
                              extra={'companies_data': enriched},
                              typed=_tombstone_typed(event, typed_cols, structured=_sv))
+                if _acct_on:
+                    _acct_counts['touched'] += _sync_accounts(
+                        client, event, enriched, {}, tombstoned=True, is_new_event=_is_new)[1]
             ok += 1  # count as processed (not failed)
             outcomes['not_fit'] += 1
             continue
@@ -3739,6 +4111,9 @@ def enrich_events(
                              typed=_tombstone_typed(event, typed_cols, fit=fit,
                                                     structured=_sv,
                                                     account=_account_company(enriched, fit)))
+                if _acct_on:
+                    _acct_counts['touched'] += _sync_accounts(
+                        client, event, enriched, fit, tombstoned=True, is_new_event=_is_new)[1]
             ok += 1
             outcomes['not_fit'] += 1
             continue
@@ -3782,6 +4157,11 @@ def enrich_events(
                                         attempts_prev, deferred=_event_deferred))
                 try:
                     client.table('events').update(_pl).eq('id', eid).execute()
+                    if _acct_on:    # the account exists (staged); no grade yet
+                        _u, _t = _sync_accounts(client, event, enriched, fit, grading=None,
+                                                is_new_event=_is_new)
+                        _acct_counts['upserted'] += _u
+                        _acct_counts['touched'] += _t
                 except Exception as _e:
                     log.warning(f'  write failed: {_e}')
             ok += 1
@@ -3792,10 +4172,15 @@ def enrich_events(
                      f'(grade capped at B)')
 
         # ── 5. Research probes + TAL grading (A.J. rubric) ────────────────
-        extra_evidence = '' if dry_run else gather_extra_evidence(event, enriched, fit)
+        # Phase 4 enrich-once: a company settled from the accounts table
+        # gets cache-only probes — the trigger is new, the research is not.
+        _known_names = {c['name'] for c, f in stage if f and f.get('account_known')}
+        _known_acct = (fit.get('account_name') or '') in _known_names
+        extra_evidence = '' if dry_run else gather_extra_evidence(
+            event, enriched, fit, known_account=_known_acct)
         log.info(f'  Grading via TAL rubric…')
         grading = grade_event(event, enriched, extra_evidence,
-                              account_name=fit.get('account_name') or '')
+                              account_name=fit.get('account_name') or '', fit=fit)
         if LLM_STATE['unavailable']:
             outcomes['llm_unavailable'] += 1
             _unavail_streak = True
@@ -3812,76 +4197,21 @@ def enrich_events(
                 + (grading.get('grade_justification') or '')
             )[:1000]
 
-        # ── Per-COMPANY grades (the grade belongs to the account, per A.J.
-        # 2026-07-17). The chosen account carries the event's headline grade;
-        # every OTHER workable, non-failed company gets its own grade too —
-        # a PE deal with two fitting investors yields a grade for each.
-        # Stored compactly on each company dict → companies_data JSONB.
+        # ── ONE GRADE PER ACCOUNT (Phase 4, plan approved by A.J. 2026-09-06;
+        # supersedes the 2026-07-17 per-company grading + headline promotion).
+        # The grade belongs to the CHOSEN account — fit.account_name, picked
+        # by apply_fit_gates (pass > unverified > staged, by role priority) —
+        # and is stored on that company record only; every other company
+        # keeps its 'fit' chip and nothing else. The secondary grade_event
+        # calls (one LLM pass per extra company) and the "best grade wins the
+        # headline" promotion are gone: they produced several grades for one
+        # event, let a target's grade relabel the account mid-write, and cost
+        # an LLM call per company. A company's grade now lives on the
+        # accounts table (_sync_accounts after the write), where the same
+        # account seen through many events keeps ONE grade.
         account_nm = (fit.get('account_name') or '').strip()
-        if not dry_run and grading.get('grade'):
-            for c in enriched:
-                cname = (c.get('name') or '').strip()
-                cfit = c.get('fit') or {}
-                if not cname:
-                    continue
-                if cname == account_nm:
-                    c['tal'] = {'grade': grading.get('grade'),
-                                'score': grading.get('numeric_score'),
-                                'confidence': grading.get('confidence'),
-                                'hashtags': grading.get('hashtags') or [],
-                                'justification': grading.get('grade_justification')}
-                    continue
-                if (str(c.get('role', '')).lower() in
-                        [r for r in WORKABLE_ROLES]
-                        and cfit.get('verdict') in ('pass', 'unverified')):
-                    g2 = grade_event(event, enriched, extra_evidence,
-                                     account_name=cname)
-                    if cfit.get('verdict') == 'unverified' and g2.get('grade') == 'A':
-                        g2['grade'] = 'B'
-                    if g2.get('grade'):
-                        c['tal'] = {'grade': g2.get('grade'),
-                                    'score': g2.get('numeric_score'),
-                                    'confidence': g2.get('confidence'),
-                                    'hashtags': g2.get('hashtags') or [],
-                                    'justification': g2.get('grade_justification')}
-                        log.info(f'    Secondary account {cname[:30]}: '
-                                 f'Grade={g2["grade"]} Score={g2.get("numeric_score")}')
-
-            # ── Headline = BEST-graded company (A.J. 2026-07-17: "the grade
-            # at the top should indicate the highest grade of the companies
-            # within that event"). Grade/score/hashtags/attribution all
-            # promote together so the pill and the account name agree.
-            _grank = {'A': 0, 'B': 1, 'C': 2, 'D': 3}
-            _best = None
-            for c in enriched:
-                _t = c.get('tal') or {}
-                if _t.get('grade') in _grank:
-                    _k = (_grank[_t['grade']], -(_t.get('score') or 0))
-                    if _best is None or _k < _best[0]:
-                        _best = (_k, c)
-            if _best is not None:
-                _bc = _best[1]
-                if (_bc.get('name') or '').strip() != account_nm:
-                    _bt = _bc['tal']
-                    log.info(f'    Headline promoted to best account: '
-                             f'{_bc.get("name")} (Grade {_bt["grade"]})')
-                    grading['grade'] = _bt['grade']
-                    grading['numeric_score'] = _bt.get('score')
-                    grading['confidence'] = _bt.get('confidence')
-                    if _bt.get('hashtags'):
-                        grading['hashtags'] = _bt['hashtags']
-                    if _bt.get('justification'):
-                        grading['grade_justification'] = _bt['justification']
-                    _bf = _bc.get('fit') or {}
-                    fit['account_name'] = _bc.get('name')
-                    fit['primary_name'] = _bc.get('name')
-                    fit['zi_subindustry'] = _bc.get('zi_subindustry')
-                    for _dim in ('territory', 'revenue', 'vertical'):
-                        if _bf.get(_dim):
-                            fit[_dim] = _bf[_dim]
-                    if _bf.get('verdict'):
-                        fit['verdict'] = _bf['verdict']
-                        fit['reasons'] = list(_bf.get('reasons') or [])
+        _guards_stripped += strip_count(grading.get('guard_notes'))
+        _attach_account_grade(enriched, account_nm, grading)
 
         if grading.get('grade'):
             log.info(
@@ -3891,7 +4221,7 @@ def enrich_events(
             )
 
         # ── 6. Write to Supabase ──────────────────────────────────────────
-        if LLM_STATE['unavailable']:      # died during the secondary grades
+        if LLM_STATE['unavailable']:      # the grading call itself found the LLM down
             outcomes['llm_unavailable'] += 1
             _unavail_streak = True
             if _llm_unavailable_event(client, eid, typed_cols, attempts_prev, dry_run):
@@ -3942,6 +4272,15 @@ def enrich_events(
         try:
             client.table('events').update(payload).eq('id', eid).execute()
             ok += 1
+            if _acct_on:
+                # Phase 4: the chosen account carries this event's grade;
+                # the other workable, non-failed companies are touched
+                # facts-only (they exist; they were not graded).
+                _u, _t = _sync_accounts(client, event, enriched, fit,
+                                        grading=grading if grading.get('grade') else None,
+                                        is_new_event=_is_new)
+                _acct_counts['upserted'] += _u
+                _acct_counts['touched'] += _t
         except Exception as e:
             if 'does not exist' in str(e):
                 # New grading columns may not be present yet — retry without them
@@ -3980,7 +4319,10 @@ def enrich_events(
         f'Served without a search: cache:{sc["cache"]} '
         f'negative_cache:{sc["negative_cache"]} '
         f'budget_skipped:{sc.get("budget_skipped", 0)} '
-        f'oracle:{sc.get("oracle", 0)}  ·  '
+        f'oracle:{sc.get("oracle", 0)} '
+        f'account:{sc.get("account", 0)}  ·  '
+        f'Accounts upserted:{_acct_counts["upserted"]} touched:{_acct_counts["touched"]}  ·  '
+        f'Guards stripped:{_guards_stripped}  ·  '
         f'Tavily month {_tavily_month_count()}/{TAVILY_MONTHLY_BUDGET}, '
         f'today {_tavily_day_count()}/{TAVILY_DAILY_RATION}'
     )
@@ -4003,6 +4345,9 @@ def regrade_only_events(limit: int = None, dry_run: bool = False,
     client = get_supabase()
     col_ok = check_columns(client)
     typed_cols = col_ok.get('typed') or set()
+    _acct_on = _accounts_present(client)        # Phase 4: one grade per account
+    _acct_counts = {'upserted': 0, 'touched': 0}
+    _guards_stripped = 0
 
     # Fetch events that already have firmographic data.
     # Oldest-first (same rationale as enrich_events): if a regrade run is
@@ -4097,75 +4442,32 @@ def regrade_only_events(limit: int = None, dry_run: bool = False,
                              extra={'companies_data': cd, 'fit': fit},
                              typed=_tombstone_typed(event, typed_cols, fit=fit,
                                                     account=_account_company(cd, fit)))
+                if _acct_on:
+                    _acct_counts['touched'] += _sync_accounts(
+                        client, event, cd, fit, tombstoned=True, is_new_event=False)[1]
             deleted += 1
             continue
 
         # ── TAL grading (local LLM, free — no search probes in this mode) ──
-        grading = grade_event(event, cd, account_name=fit.get('account_name') or '')
+        grading = grade_event(event, cd, account_name=fit.get('account_name') or '', fit=fit)
+        _guards_stripped += strip_count(grading.get('guard_notes'))
+        if grading.get('grade') is None:
+            # Review 2026-09-08 (Phase 4), 1b: a grading failure used to pop
+            # every `tal` chip and then write companies_data anyway, so the
+            # account chip lost its grade while the event kept its own.
+            # Nothing is written (the pre-Phase-4 behaviour): the event
+            # keeps its grade, the chips keep theirs, the next regrade pass
+            # redoes this row.
+            log.warning('  Grading returned nothing — nothing written (event and account '
+                        'chips keep their grade)')
+            ok += 1
+            continue
 
-        # Per-company grades for other workable, non-failed companies
-        # (mirrors enrich_events — the grade belongs to the account)
-        _acct_nm = (fit.get('account_name') or '').strip()
-        if not dry_run and grading.get('grade'):
-            for _c in cd:
-                _cn = (_c.get('name') or '').strip()
-                _cf = _c.get('fit') or {}
-                if not _cn:
-                    continue
-                if _cn == _acct_nm:
-                    _c['tal'] = {'grade': grading.get('grade'),
-                                 'score': grading.get('numeric_score'),
-                                 'confidence': grading.get('confidence')}
-                    continue
-                if (str(_c.get('role', '')).lower() in WORKABLE_ROLES
-                        and _cf.get('verdict') in ('pass', 'unverified')):
-                    _g2 = grade_event(event, cd, account_name=_cn)
-                    if _cf.get('verdict') == 'unverified' and _g2.get('grade') == 'A':
-                        _g2['grade'] = 'B'
-                    if _g2.get('grade'):
-                        _c['tal'] = {'grade': _g2.get('grade'),
-                                     'score': _g2.get('numeric_score'),
-                                     'confidence': _g2.get('confidence'),
-                                     'hashtags': _g2.get('hashtags') or [],
-                                     'justification': _g2.get('grade_justification')}
-            # store headline account's tal with promotion fields too
-            for _c in cd:
-                if (_c.get('name') or '').strip() == _acct_nm and grading.get('grade'):
-                    _c['tal'] = {'grade': grading.get('grade'),
-                                 'score': grading.get('numeric_score'),
-                                 'confidence': grading.get('confidence'),
-                                 'hashtags': grading.get('hashtags') or [],
-                                 'justification': grading.get('grade_justification')}
-            # Headline = best-graded company (mirrors enrich_events)
-            _grank = {'A': 0, 'B': 1, 'C': 2, 'D': 3}
-            _best = None
-            for _c in cd:
-                _t = _c.get('tal') or {}
-                if _t.get('grade') in _grank:
-                    _k = (_grank[_t['grade']], -(_t.get('score') or 0))
-                    if _best is None or _k < _best[0]:
-                        _best = (_k, _c)
-            if _best is not None:
-                _bc = _best[1]
-                if (_bc.get('name') or '').strip() != _acct_nm:
-                    _bt = _bc['tal']
-                    grading['grade'] = _bt['grade']
-                    grading['numeric_score'] = _bt.get('score')
-                    grading['confidence'] = _bt.get('confidence')
-                    if _bt.get('hashtags'):
-                        grading['hashtags'] = _bt['hashtags']
-                    if _bt.get('justification'):
-                        grading['grade_justification'] = _bt['justification']
-                    _bf = _bc.get('fit') or {}
-                    fit['account_name'] = _bc.get('name')
-                    fit['primary_name'] = _bc.get('name')
-                    fit['zi_subindustry'] = _bc.get('zi_subindustry')
-                    for _dim in ('territory', 'revenue', 'vertical'):
-                        if _bf.get(_dim):
-                            fit[_dim] = _bf[_dim]
-                    if _bf.get('verdict'):
-                        fit['verdict'] = _bf['verdict']
-                        fit['reasons'] = list(_bf.get('reasons') or [])
+        # ONE GRADE PER ACCOUNT (Phase 4, A.J. 2026-09-06 — mirrors
+        # enrich_events): the chosen account carries the grade; the
+        # per-company secondary grades and the headline promotion are gone,
+        # and a stale secondary `tal` from the old loop is dropped here.
+        _attach_account_grade(cd, fit.get('account_name') or '', grading)
 
         if fit['verdict'] == 'unverified' and grading.get('grade') == 'A':
             grading['grade'] = 'B'
@@ -4175,32 +4477,27 @@ def regrade_only_events(limit: int = None, dry_run: bool = False,
                 + (grading.get('grade_justification') or '')
             )[:1000]
 
-        if grading.get('grade'):
-            log.info(
-                f'  Grade={grading["grade"]}  '
-                f'Hashtags={" ".join(grading["hashtags"]) or "(none)"}'
-            )
+        log.info(
+            f'  Grade={grading["grade"]}  '
+            f'Hashtags={" ".join(grading["hashtags"]) or "(none)"}'
+        )
 
         if dry_run:
             ok += 1
             continue
 
         # ── Build payload. companies_data IS written now — per-company fit
-        # and per-company TAL grades were attached to the company dicts. ──
-        if grading.get('grade') is None:
-            log.warning('  Grading returned nothing — keeping existing grade')
-            payload = {'companies_data': cd}
-        else:
-            payload = {
-                'companies_data':      cd,
-                'grade':               grading.get('grade'),
-                'confidence_level':    grading.get('confidence'),
-                'numeric_score':       grading.get('numeric_score'),
-                'hashtags':            grading.get('hashtags') or [],
-                'grade_justification': grading.get('grade_justification'),
-                'cfo_status':          grading.get('cfo_status'),
-                'research_notes':      grading.get('research_notes') or [],
-            }
+        # and the chosen account's TAL grade were attached to the dicts. ──
+        payload = {
+            'companies_data':      cd,
+            'grade':               grading.get('grade'),
+            'confidence_level':    grading.get('confidence'),
+            'numeric_score':       grading.get('numeric_score'),
+            'hashtags':            grading.get('hashtags') or [],
+            'grade_justification': grading.get('grade_justification'),
+            'cfo_status':          grading.get('cfo_status'),
+            'research_notes':      grading.get('research_notes') or [],
+        }
         if col_ok.get('fit'):
             payload['fit'] = fit
         # Phase 2 typed mirror of the fit verdict. attempts/retry_after are
@@ -4222,13 +4519,14 @@ def regrade_only_events(limit: int = None, dry_run: bool = False,
             upgraded += 1
             log.info(f'  Reclassifying event_type {current_etype!r} → cfo_hire')
 
-        if not payload:
-            ok += 1  # nothing to write (grading failed, no reclass) — skip
-            continue
-
         try:
             client.table('events').update(payload).eq('id', eid).execute()
             ok += 1
+            if _acct_on:        # a regrade is never a new event for the account (2c)
+                _u, _t = _sync_accounts(client, event, cd, fit, grading=grading,
+                                        is_new_event=False)
+                _acct_counts['upserted'] += _u
+                _acct_counts['touched'] += _t
         except Exception as e:
             if 'does not exist' in str(e):
                 log.error(
@@ -4241,7 +4539,9 @@ def regrade_only_events(limit: int = None, dry_run: bool = False,
     print()
     log.info(
         f'Done — regraded: {ok}, deleted (industry block): {deleted}, '
-        f'event_type → cfo_hire: {upgraded}, failed: {fail}'
+        f'event_type → cfo_hire: {upgraded}, failed: {fail}  ·  '
+        f'Accounts upserted:{_acct_counts["upserted"]} touched:{_acct_counts["touched"]}  ·  '
+        f'Guards stripped:{_guards_stripped}'
     )
     log.info('Search API calls (Firecrawl/Tavily): 0  (regrade-only mode)')
 

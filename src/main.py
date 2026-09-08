@@ -26,10 +26,8 @@ from .models import TriggerEvent, EventSource
 from .database import DatabaseManager
 from .alerts import AlertManager
 from .scrapers import (
-    RSSScraper, GoogleNewsScraper, JobScraper, BingNewsScraper,
-    FinSMEsScraper, SECScraper, FormDScraper, AdzunaScraper,
+    RSSScraper, GoogleNewsScraper, SECScraper, FormDScraper, AdzunaScraper,
 )
-from .enrichment import CompanyEnricher
 from .pipeline.gates import account_key
 
 # NOTE: Supabase sync is NOT called from here. The GitHub Actions workflow's
@@ -75,25 +73,20 @@ class TriggerEventMonitor:
             self.config.get('scraper', {}).get('database', 'trigger_events.db')
         )
         self.alert_manager = AlertManager(self.config)
-        self.enricher = CompanyEnricher(self.config)
         self.running = True
 
-        # Initialize scrapers
+        # The live scrapers, and only these (Phase 4 slice C4, 2026-09-08).
+        # JobScraper (Google Jobs), BingNewsScraper and FinSMEsScraper were
+        # deleted — tests/test_no_orphans.py pins this list. Scrape-time
+        # company enrichment (src/enrichment.py, Apollo/ZoomInfo) is gone
+        # too: enrichment runs on the Mac via enrichment_scout.py.
         self.scrapers = [
             RSSScraper(self.config),
             GoogleNewsScraper(self.config),
-            JobScraper(self.config),
-            BingNewsScraper(self.config),
-            FinSMEsScraper(self.config),
             SECScraper(self.config),
             FormDScraper(self.config),
             AdzunaScraper(self.config, db=self.db),
         ]
-
-        if self.enricher.enabled:
-            print(f"Company enrichment enabled ({self.enricher.provider})")
-        else:
-            print("Company enrichment disabled (no API key)")
 
     def _load_config(self, config_path: str) -> dict:
         """Load configuration from YAML file."""

@@ -5,12 +5,50 @@ on:
     # Run every 4 hours
     - cron: '0 */4 * * *'
   workflow_dispatch:
+  # A push runs ONLY the `tests` job (the scrape job is guarded below), so the
+  # golden set is checked whenever code changes — never an extra scrape.
+  push:
+    branches: [main]
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  # Phase 4 (review 2026-09-08): the golden set + gate + config tests run in
+  # their OWN job, only when code changes (push / workflow_dispatch) — never
+  # on the 4-hourly schedule and never inside the scrape job. A golden-set
+  # flip means a decision changed with the code; it must never block or fail
+  # a scheduled scrape and its Supabase sync. No `needs` in either direction.
+  # tests/test_golden.py::test_ci_shape pins this layout.
+  tests:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - uses: actions/setup-python@v5.6.0
+        with:
+          python-version: '3.11'
+
+      - name: Install test dependencies
+        # Only stdlib + requests/PyYAML are needed by these test files;
+        # pytest is pinned to a major range so a new major cannot break CI.
+        run: |
+          pip install --upgrade pip
+          pip install "requests>=2.28.0" "PyYAML>=6.0" "pytest>=8,<10"
+
+      - name: Golden set + gate + config tests
+        # The free decision functions are asserted against tests/golden/accounts.json
+        # so a scraper/gate change can never silently flip a decision already made.
+        run: |
+          python -m pytest -q -p no:cacheprovider tests/test_golden.py tests/test_gates.py tests/test_config.py
+
   scrape:
+    # Unchanged from before Phase 4 except this guard: a push never scrapes
+    # (schedule + workflow_dispatch only, exactly the triggers it always had).
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     # Normal runs take ~7 min; slow SEC/Google days spike past 10 (the
     # 2026-08-06 17:44Z run was killed by the old 10-min cap → "All jobs

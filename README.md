@@ -7,14 +7,15 @@ Monitor news sources for sales trigger events (CFO hires, M&A, acquisitions, fun
 ## Features
 
 - **25+ news sources**: Industry publications, PR wires, funding news, and Google News
-- **6 job boards**: Indeed, ZipRecruiter, SimplyHired, Google Jobs, Ladders ($100K+), CFO.com
+- **Open finance seats**: Adzuna job-posting API (CFO / Controller / VP Finance postings with structured company names)
+- **SEC filings**: EDGAR 8-K executive changes and Form D private raises
 - **Interactive dashboard**: Streamlit dashboard for reviewing and managing leads
 - **Lead tracking**: Track leads through stages (new → reviewing → contacted → closed)
 - **PE-backed bypass**: Automatically includes PE-backed acquisitions regardless of territory
 - **Recency prioritized**: Most recent news first, shows "5 min ago" timestamps
 - **Territory filtering**: Filter by US states, Canadian provinces, and major cities
 - **Industry targeting**: Healthcare, Nonprofit, Hospitality, Restaurant/Franchise, Construction, Field Services, Energy, Oil & Gas, Insurance, Casino/Gaming, Transportation/Logistics, Travel/Hotels, Airlines/Aviation, Child Services, Medical Labs, Business Services, and more
-- **Smart filtering**: Skips public companies, verifies 20-2000 employees, $20M-$500M revenue
+- **Smart filtering**: Skips public companies (mega-cap blocklist + public-company indicators) and excluded industries at scrape time
 - **Multiple alert channels**: Email, Slack, File, Desktop notifications
 - **Automated runs**: GitHub Actions runs every 4 hours
 
@@ -72,20 +73,10 @@ python3 -m streamlit run dashboard.py
 
 ## How It Works
 
-1. **Scrapes** 25+ RSS feeds and 6 job boards for trigger events
+1. **Scrapes** 25+ RSS feeds, Google News, SEC EDGAR (8-K / Form D) and the Adzuna job API for trigger events
 2. **Filters** by date (last 7 days), territory, and industry
-3. **Verifies** companies via Apollo.io API:
-   - Skips public companies (NYSE/NASDAQ)
-   - Skips companies with >2,000 employees
-   - Skips companies with >$500M revenue
+3. **Dedups** by URL, syndicated headline and job-posting key (SQLite, persistent across runs)
 4. **Alerts** via email with most recent events first
-
-```
-Verifying companies via Apollo.io...
-  PASS: Regional Healthcare - Meets criteria
-  SKIP: Microsoft - Public company (MSFT)
-  SKIP: Big Corp - Too large (50,000 employees, max 2,000)
-```
 
 ## Output Example
 
@@ -96,9 +87,6 @@ EVENT SUMMARY (Most Recent First)
 1. [CFO_HIRE] Regional Healthcare Names New CFO...
    Published: 2026-02-05 14:30 (5 min ago)
    Company: Regional Healthcare Inc
-   Employees: 450
-   Revenue: $75M - $100M
-   Industry: Healthcare
    Source: Business Wire
    Relevance: 85%
 ```
@@ -125,29 +113,15 @@ territory:
 ```yaml
   company_filters:
     exclude_public_companies: true
-    min_employees: 20
-    max_employees: 2000
-    min_revenue_millions: 20
-    max_revenue_millions: 500
+    public_company_indicators: ["NYSE", "NASDAQ", "publicly traded"]   # ticker / listing markers
+    excluded_public_companies: ["GS Finance Corp", "Amazon", "Microsoft"]  # mega-cap blocklist (whole-word)
+    target_size_indicators: ["mid-market", "privately held"]
 ```
 
-### Job Board Settings
-```yaml
-job_search:
-  enabled: true
-  titles:
-    - "CFO"
-    - "Chief Financial Officer"
-    - "Controller"
-    - "Finance Director"
-  boards:
-    indeed: true
-    ziprecruiter: true
-    simplyhired: true
-    google_jobs: true
-    ladders: true        # Executive jobs ($100K+)
-    cfo_com: true        # CFO-specific news
-```
+### Job Postings (Adzuna)
+Open finance seats come from the Adzuna API — see the `adzuna:` section of
+`config.yaml`. Credentials are the `ADZUNA_APP_ID` / `ADZUNA_APP_KEY`
+environment variables (GitHub Secrets in CI, `.env` locally).
 
 ### Scraper Settings
 ```yaml
@@ -195,19 +169,22 @@ The scraper runs automatically every 4 hours. Set these secrets:
 |--------|-------------|
 | `SENDER_EMAIL` | Gmail address for sending alerts |
 | `EMAIL_PASSWORD` | Gmail app password |
-| `APOLLO_API_KEY` | Apollo.io API key for company verification |
+| `ALERT_RECIPIENT` | Alert recipient (injected at runtime — never committed) |
+| `ADZUNA_APP_ID` / `ADZUNA_APP_KEY` | Adzuna job API credentials |
+| `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` | Sync-step target (sync is skipped when unset) |
 
 ## Data Sources
 
-### Job Boards (6 sources)
+### Job Postings
 | Source | Description |
 |--------|-------------|
-| Indeed | General job board |
-| ZipRecruiter | Job aggregator |
-| SimplyHired | Job search engine |
-| Google Jobs | Job announcements via Google News |
-| Ladders | Executive jobs $100K+ |
-| CFO.com | CFO-specific hiring news |
+| Adzuna | Job-posting API — open CFO / Controller / VP Finance seats with structured company names |
+
+### SEC Filings
+| Source | Description |
+|--------|-------------|
+| EDGAR 8-K | Executive-change filings (Item 5.02) and M&A items |
+| EDGAR Form D | Private capital raises, territory-filtered |
 
 ### News & PR (25+ sources)
 | Category | Sources |
@@ -236,7 +213,6 @@ Events are scored 0-100 based on:
 - Territory match (up to 20pts)
 - Industry match (15pts)
 - Target company match (50pts bonus)
-- Ladders/CFO.com sources get +10 bonus
 
 ## Usage Examples
 
@@ -263,13 +239,12 @@ python -m src.main --stats
 - Check SMTP settings and firewall
 
 **Too many irrelevant results:**
-- Ensure Apollo API key is set for company verification
 - Add companies to exclusion list
 - Tighten territory matching
 
 **Still seeing public companies:**
-- Set `APOLLO_API_KEY` secret in GitHub Actions
-- Apollo verifies public/private status before alerting
+- Add the name to `territory.company_filters.excluded_public_companies` in `config.yaml`
+- Check `public_company_indicators` covers the wording used in the release
 
 ## License
 

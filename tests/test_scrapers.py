@@ -1728,3 +1728,61 @@ class TestFeedRetrySleep(unittest.TestCase):
         self.assertIn('Timeout', error)
         self.assertEqual(get.call_count, 2)                      # one retry, as before
         sleep.assert_called_once_with(15)
+
+
+class TestSupportRoleToTheSeatIsNotAHire(unittest.TestCase):
+    """review 2026-09-08 (Phase 4): the 'to <role>' clause of
+    base._HIRE_PHRASE_RE fired before anything blanked "assistant … to the
+    CFO", so Adzuna postings for an EA / intern / coordinator supporting the
+    CFO typed as cfo_hire — and seven of them were pinned in the golden set as
+    'cfo'. The support phrase is now blanked by _NOT_THE_SEAT_RES (title and
+    body head alike); a real promotion "to CFO" still types."""
+
+    SUPPORT_TITLES = (
+        'Acme Names Jane Doe Executive Assistant to the CFO',
+        'Six Nations hiring: 145-26-1 EA to CFO',
+        'Orange Bowl hiring: 2026-27 Assistant to the CFO Internship',
+        'Williston hiring: Human Resources Coordinator and Admin Assistant to the CFO',
+        'Laborie Medical Technologies Corp hiring: Executive Assistant to CFO & CPO',
+        'Acme Appoints Jane Doe Senior Advisor to the CFO',
+        'Acme Hires Jane Doe as Chief of Staff to the Chief Financial Officer',
+        'Acme Names Jane Doe Executive Assistant to the Corporate Controller',
+    )
+
+    def setUp(self):
+        self.scraper = RSSScraper(_phase3_config())
+        self.production = RSSScraper(_production_config())
+
+    def test_support_role_to_the_seat_is_not_the_seat(self):
+        for title in self.SUPPORT_TITLES:
+            self.assertIsNone(finance_leader_hire_kind(title), title)
+            # a body that names the seat the role supports does not rescue it
+            self.assertIsNone(finance_leader_hire_kind(
+                title, 'The role supports the Chief Financial Officer and the finance team.'), title)
+            for scraper in (self.scraper, self.production):
+                self.assertNotIn(scraper.detect_event_type(title, title=title),
+                                 (EventType.CFO_HIRE, EventType.EXECUTIVE_HIRE), title)
+
+    def test_support_role_in_the_body_head_is_not_a_hire_either(self):
+        title = 'Acme Announces Team Expansion'
+        body = ('BOSTON, Sept. 8, 2026 /PRNewswire/ -- Acme today announced it has hired '
+                'Jane Doe as Executive Assistant to the CFO, effective immediately.')
+        self.assertIsNone(finance_leader_hire_kind(title, body))
+        self.assertIsNone(self.scraper.detect_event_type(f'{title} {body}', title=title))
+
+    def test_real_promotions_and_appointments_still_type(self):
+        for title, want in (('Jane Doe promoted to CFO at Acme', 'cfo'),
+                            ('Acme Promotes Jane Doe to Chief Financial Officer', 'cfo'),
+                            # the support phrase is blanked, the seat that remains still types
+                            ('Acme Promotes Jane Doe from Executive Assistant to the CFO '
+                             'to Chief Financial Officer', 'cfo'),
+                            ('Acme Names Jane Doe Successor to CFO John Smith', 'cfo'),
+                            ('Acme Promotes Jane Doe to Corporate Controller', 'exec'),
+                            ('Acme Names Jane Doe Assistant Controller', 'exec')):
+            self.assertEqual(finance_leader_hire_kind(title), want, title)
+        self.assertEqual(self.scraper.detect_event_type('Jane Doe promoted to CFO at Acme',
+                                                        title='Jane Doe promoted to CFO at Acme'),
+                         EventType.CFO_HIRE)
+        self.assertEqual(self.production.detect_event_type(
+            'Acme Promotes Jane Doe to Corporate Controller',
+            title='Acme Promotes Jane Doe to Corporate Controller'), EventType.EXECUTIVE_HIRE)

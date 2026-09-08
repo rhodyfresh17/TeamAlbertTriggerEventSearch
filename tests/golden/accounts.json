@@ -1,0 +1,4646 @@
+[
+  {
+    "account_key": "",
+    "name": "",
+    "bucket": "finance_leader_title",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "Olema Pharmaceuticals Grants Inducement Stock Options to Newly Appointed CFO Jason V. O’Byrne",
+    "description_excerpt": "Olema Pharmaceuticals Grants Inducement Stock Options to Newly Appointed CFO Jason V. O’Byrne",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": "cfo"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "a2z cust2mate",
+    "name": "A2Z Cust2Mate",
+    "bucket": "finance_leader_title",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "A2Z Cust2Mate Names <b>New CFO</b> to Support Smart Cart Growth - The Globe and Mail",
+    "description_excerpt": "A2Z Cust2Mate Names New CFO to Support Smart Cart Growth. Tipranks ... The New York Times &middot; Globe Email Newsletters &middot; Gift Subscription. Business ...",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": "cfo"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "ab commercial real estate private debt fund",
+    "name": "AB Commercial Real Estate Private Debt Fund, LLC",
+    "bucket": "entity_shape",
+    "source": "sec_edgar",
+    "event_type": "merger_acquisition",
+    "title": "SEC 8-K Item 1.01 (Entry into a Material Definitive Agreement) — AB Commercial Real Estate Private Debt Fund, LLC",
+    "description_excerpt": "SEC 8-K filing by AB Commercial Real Estate Private Debt Fund, LLC (NY) — Item 1.01: Entry into a Material Definitive Agreement. Filing date: 2026-07-27.",
+    "hq": null,
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "fund_vehicle"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "acculynx",
+    "name": "AccuLynx",
+    "bucket": "hq_out_of_territory",
+    "source": "other",
+    "event_type": "merger_acquisition",
+    "title": "Delaware Judge Orders Verisk to Proceed With $2.35 Billion AccuLynx Deal",
+    "description_excerpt": "A Delaware judge ordered data analytics firm Verisk to try completing its planned $2.35 billion acquisition of roofing software maker AccuLynx, with the order coming more than seven months after Verisk said it pulled the plug on the deal. Here &#8230;",
+    "hq": "Beloit, WI",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "WI"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "acres commercial realty",
+    "name": "ACRES Commercial Realty Corp.",
+    "bucket": "verified",
+    "source": "sec_edgar",
+    "event_type": "merger_acquisition",
+    "title": "SEC 8-K Item 2.01 (Completion of Acquisition or Disposition) — ACRES Commercial Realty Corp.",
+    "description_excerpt": "SEC 8-K filing by ACRES Commercial Realty Corp. (NY) — Item 2.01: Completion of Acquisition or Disposition. Filing date: 2026-08-06.",
+    "hq": "Uniondale, NY",
+    "zi_subindustry": "Real Estate",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "NY",
+      "zi_subindustry": "Real Estate",
+      "vertical": "Consumer Services"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "adaly ai",
+    "name": "Adaly AI Inc.",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Adaly AI Inc.",
+    "description_excerpt": "SEC Form D filed by Adaly AI Inc. (DE) — private capital raise (Reg D exempt offering). Total offering: $11,000,000. Form D industry group: Other Technology. Filing date: 2026-08-13.",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2149783/000214978326000001/0002149783-26-000001-index.htm",
+    "expected": {
+      "verdict": "out",
+      "reason": "Form D industry group Other Technology (off-vertical)",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "ag1",
+    "name": "AG1",
+    "bucket": "hq_out_of_territory",
+    "source": "pr_newswire",
+    "event_type": "stable_target",
+    "title": "AG1 LAUNCHES AG1 PRO WITH CREATINE AND MORE FOR ADVANCED MUSCLE AND GUT SUPPORT",
+    "description_excerpt": "AG1 Pro's advanced formula builds on AG1's clinically-backed formula to include additional research-backed key ingredients, including creatine, that target muscle strength, metabolic resilience, and gut barrier function NEW YORK, June 8, 2026 /PRNewswire/ -- Today, AG1, a leading global...",
+    "hq": "Carson City, NV",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "NV"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "aga khan museum",
+    "name": "Aga Khan Museum",
+    "bucket": "finance_leader_title",
+    "source": "other",
+    "event_type": "executive_hire",
+    "title": "The Aga Khan Museum Welcomes Prince Aly Muhammad Aga Khan and Saira Bhojani to its Board of Directors",
+    "description_excerpt": "TORONTO &#8212; The Aga Khan Museum is pleased to announce the appointment of Prince Aly Muhammad Aga Khan and Saira Bhojani to its Board of Directors. Prince Aly brings a genuine passion for the arts&#8230; and the voice of a new generation&#8230; Saira&#8217;s exceptional expertise in governance a",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "agellus capital",
+    "name": "Agellus Capital",
+    "bucket": "hq_out_of_territory",
+    "source": "other",
+    "event_type": "merger_acquisition",
+    "title": "Agellus Capital-backed CompassMSP acquires managed IT and cybersecurity firm The Logic Group",
+    "description_excerpt": "Headquartered in West Hartford, Connecticut, CompassMSP provides IT and cybersecurity services. The post Agellus Capital-backed CompassMSP acquires managed IT and cybersecurity firm The Logic Group appeared first on PE Hub.",
+    "hq": "Clayton, MO",
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "MO"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "agfa gevaert",
+    "name": "Agfa-Gevaert",
+    "bucket": "rep_disposition",
+    "source": "other",
+    "event_type": "cfo_hire",
+    "title": "Agfa-Gevaert Names Veteran Financial Executive Declan Guerin as <b>New CFO</b>",
+    "description_excerpt": "Agfa-Gevaert Names Veteran Financial Executive Declan Guerin as New CFO ... The New York Times &middot; Globe Email Newsletters &middot; Gift Subscription. Business ...",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "rep_status": "Out of Alignment"
+    },
+    "provenance": "rep:Out of Alignment",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "aimbot media",
+    "name": "AimBot Media Inc.",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — AimBot Media Inc.",
+    "description_excerpt": "SEC Form D filed by AimBot Media Inc. (DE) — private capital raise (Reg D exempt offering). Total offering: $6,500,000. Form D industry group: Other Technology. Filing date: 2026-08-31.",
+    "hq": "DE",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2152547/000215254726000001/0002152547-26-000001-index.htm",
+    "expected": {
+      "verdict": "out",
+      "reason": "Form D industry group Other Technology (off-vertical)",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "allied properties",
+    "name": "Allied Properties",
+    "bucket": "finance_leader_title",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "Allied Properties selects <b>new CFO</b>, trio of appointments at Arcadis and more - RENX",
+    "description_excerpt": "Allied Properties selects new CFO, trio of ... Tania is now based in New Brunswick and joined the Squall team as RENX newsletter editor in 2024.",
+    "hq": "Toronto, ON",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": "cfo"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "alumni ventures group",
+    "name": "Alumni Ventures Group LLC",
+    "bucket": "tombstone_reason",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Alumni Ventures Group LLC",
+    "description_excerpt": "SEC Form D filed by Alumni Ventures Group LLC (NH) — private capital raise (Reg D exempt offering). Total offering: $36,000,000. Form D industry group: Investing. Filing date: 2026-08-28.",
+    "hq": "NH",
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "reason_prefix": "no_workable_account",
+      "roles": [
+        "Investor"
+      ],
+      "workable": false
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "amen health",
+    "name": "Amen Health Inc",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Amen Health Inc",
+    "description_excerpt": "SEC Form D filed by Amen Health Inc (DE) — private capital raise (Reg D exempt offering). Total offering: $500,000. Form D industry group: Other Health Care. Filing date: 2026-08-14.",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2148738/000214873826000001/0002148738-26-000001-index.htm",
+    "expected": {
+      "verdict": "out",
+      "reason": "Form D industry group Other Health Care (off-vertical)",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "american healthcare reit",
+    "name": "American Healthcare REIT",
+    "bucket": "finance_leader_title",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "American Healthcare REIT Names Aric Chang Chief Financial Officer",
+    "description_excerpt": "American Healthcare REIT Names Aric Chang Chief Financial Officer",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": "cfo"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "angie s list",
+    "name": "Angie's List",
+    "bucket": "hq_out_of_territory",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "Angie&#39;s List Names <b>New CFO</b> - AOL - Yahoo",
+    "description_excerpt": "Angie's List Names New CFO. AOL.com. Rich Smith, The Motley Fool ... 'People are literally swimming': New York City paralyzed by flash floods.",
+    "hq": "Denver, CO",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "CO"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "apollo debt solutions bdc",
+    "name": "Apollo Debt Solutions BDC",
+    "bucket": "entity_shape",
+    "source": "sec_edgar",
+    "event_type": "merger_acquisition",
+    "title": "SEC 8-K Item 1.01 (Entry into a Material Definitive Agreement) — Apollo Debt Solutions BDC",
+    "description_excerpt": "SEC 8-K filing by Apollo Debt Solutions BDC (NY) — Item 1.01: Entry into a Material Definitive Agreement. Filing date: 2026-08-18.",
+    "hq": "New York, NY",
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "fund_vehicle"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "aps bdc",
+    "name": "APS BDC, LLC",
+    "bucket": "entity_shape",
+    "source": "sec_edgar",
+    "event_type": "merger_acquisition",
+    "title": "SEC 8-K Item 1.01 (Entry into a Material Definitive Agreement) — APS BDC, LLC",
+    "description_excerpt": "SEC 8-K filing by APS BDC, LLC (NY) — Item 1.01: Entry into a Material Definitive Agreement. Filing date: 2026-08-28.",
+    "hq": "New York, NY",
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "fund_vehicle"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "arcadis",
+    "name": "Arcadis",
+    "bucket": "hq_out_of_territory",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "Allied Properties selects <b>new CFO</b>, trio of appointments at Arcadis and more - RENX",
+    "description_excerpt": "Allied Properties selects new CFO, trio of ... Tania is now based in New Brunswick and joined the Squall team as RENX newsletter editor in 2024.",
+    "hq": "Highlands Ranch, CO",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "CO"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "arlington capital partners",
+    "name": "Arlington Capital Partners",
+    "bucket": "tombstone_reason",
+    "source": "other",
+    "event_type": "funding",
+    "title": "5 reasons private equity is betting big on US Naval investments",
+    "description_excerpt": "The US Navy budget is over $300bn, a figure which is larger than the GDP of over 75% of the world’s countries and most economic sectors here in the US, according to Ben Ramundo, a managing director at Arlington Capital Partners. The post 5 reasons private equity is betting big on US Naval investment",
+    "hq": "Washington, DC",
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "reason_prefix": "no_workable_account",
+      "roles": [
+        "Investor"
+      ],
+      "workable": false
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "arthur ai",
+    "name": "Arthur AI, Inc.",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Arthur AI, Inc.",
+    "description_excerpt": "SEC Form D filed by Arthur AI, Inc. (DC) — private capital raise (Reg D exempt offering). Total offering: $5,999,999. Form D industry group: Other. Filing date: 2026-08-10.",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1832497/000123191926000847/0001231919-26-000847-index.htm",
+    "expected": {
+      "verdict": "too_small",
+      "reason": "Form D revenue undisclosed and raise $5,999,999 < $10,000,000",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "atlas us holdings",
+    "name": "Atlas US Holdings LP",
+    "bucket": "entity_shape",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Atlas US Holdings LP",
+    "description_excerpt": "SEC Form D filed by Atlas US Holdings LP (NY) — private capital raise (Reg D exempt offering). Total offering: Indefinite. Form D industry group: Other Banking and Financial Services. Filing date: 2026-08-26.",
+    "hq": "New York, NY",
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "fund_vehicle"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "axiom therapeutics",
+    "name": "Axiom Therapeutics Inc.",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Axiom Therapeutics Inc.",
+    "description_excerpt": "SEC Form D filed by Axiom Therapeutics Inc. (DE) — private capital raise (Reg D exempt offering). Total offering: $12,287,219. Form D industry group: Other Technology. Filing date: 2026-08-25.",
+    "hq": "DE",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2147556/000123191926001065/0001231919-26-001065-index.htm",
+    "expected": {
+      "verdict": "out",
+      "reason": "Form D industry group Other Technology (off-vertical)",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "b and r technology merger",
+    "name": "B&R Technology Merger Corp.",
+    "bucket": "hq_out_of_territory",
+    "source": "pr_newswire",
+    "event_type": "merger_acquisition",
+    "title": "B&amp;R Technology Merger Corp. Completes $325 Million Initial Public Offering",
+    "description_excerpt": "NEW YORK, July 22, 2026 /PRNewswire/ -- B&R Technology Merger Corp. (the \"Company\") announced today the closing of its initial public offering of 32,500,000 units. The offering was priced at $10.00 per unit, resulting in gross proceeds of $325,000,000. The Company's units began trading on...",
+    "hq": "Las Vegas, NV",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "NV"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "b2b cfo",
+    "name": "B2B CFO®",
+    "bucket": "hq_out_of_territory",
+    "source": "adzuna",
+    "event_type": "finance_seat_open",
+    "title": "B2B Cfo hiring: Fractional CFO",
+    "description_excerpt": "Want to be a Fractional CFO Consultant instead of a W2 CFO? Desire a Career Transition? Are you a driven and entrepreneurial CFO with experience in helping business owners improve their business? Would you like to guide business owners in selling or buying privately held companies? Would you like to",
+    "hq": "Chandler, AZ",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "AZ"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "bain capital private credit",
+    "name": "Bain Capital Private Credit",
+    "bucket": "entity_shape",
+    "source": "sec_edgar",
+    "event_type": "merger_acquisition",
+    "title": "SEC 8-K Item 1.01 (Entry into a Material Definitive Agreement) — Bain Capital Private Credit",
+    "description_excerpt": "SEC 8-K filing by Bain Capital Private Credit (MA) — Item 1.01: Entry into a Material Definitive Agreement. Filing date: 2026-07-17.",
+    "hq": null,
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "fund_vehicle"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "bally s",
+    "name": "Bally's",
+    "bucket": "finance_leader_title",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "Bally's appoints interim CFO after Mira Mircheva resigns",
+    "description_excerpt": "Bally's appoints interim CFO after Mira Mircheva resigns",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": "cfo"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "bayfirst financial",
+    "name": "BayFirst Financial Corp.",
+    "bucket": "verified",
+    "source": "sec_edgar",
+    "event_type": "cfo_hire",
+    "title": "SEC 8-K Item 5.02 (Departure/Election of Directors or Officers) — BayFirst Financial Corp.",
+    "description_excerpt": "SEC 8-K filing by BayFirst Financial Corp. (FL) — Item 5.02: Departure/Election of Directors or Officers. Filing date: 2026-08-27.",
+    "hq": "Clearwater, FL",
+    "zi_subindustry": "Banking",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "FL",
+      "zi_subindustry": "Banking",
+      "vertical": "Financial Services"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "bcc 1667 k street investor",
+    "name": "BCC 1667 K Street Investor LLC",
+    "bucket": "tombstone_reason",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — BCC 1667 K Street Investor LLC",
+    "description_excerpt": "SEC Form D filed by BCC 1667 K Street Investor LLC (VA) — private capital raise (Reg D exempt offering). Total offering: $17,250,000. Form D industry group: Investing. Filing date: 2026-08-11.",
+    "hq": null,
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "reason_prefix": "no_workable_account",
+      "roles": [
+        "Investor"
+      ],
+      "workable": false
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "bearingpoint",
+    "name": "BearingPoint",
+    "bucket": "finance_leader_title",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "Dirk Burshille <b>appointed CFO</b> of BearingPoint | Region | bdtonline.com",
+    "description_excerpt": "West Virginia/Virginia &middot; Nation/World &middot; Police Blotter, Warrants … Election ... Dirk Burshille appointed CFO of BearingPoint. Business Wire; Jul 14 ...",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": "cfo"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "bessemer venture partners",
+    "name": "Bessemer Venture Partners",
+    "bucket": "tombstone_reason",
+    "source": "pr_newswire",
+    "event_type": "funding",
+    "title": "UNRIVALED OVERSUBSCRIBES SERIES C FUNDRAISE LED BY TEN PILLARS SPORTS FUND, EXCEEDING $100 MILLION TARGET AT NEW LEAGUE VALUATION OF $650 MILLION",
+    "description_excerpt": "– Series C Fundraise Also Includes Investment from Jenny Just and Reinvestment from Carmelo Anthony, Geno Auriemma, the Berman Family, Bessemer Venture Partners, Ashton Kutcher, Alex Morgan and Trybe Ventures, Dan Rosensweig and Trae Young – – Core to the League's Mission, Players Remain...",
+    "hq": null,
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "reason_prefix": "no_workable_account",
+      "roles": [
+        "Lead Investor",
+        "Investor",
+        "Investor"
+      ],
+      "workable": false
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "bill umansky",
+    "name": "Bill Umansky",
+    "bucket": "finance_leader_title",
+    "source": "other",
+    "event_type": "executive_hire",
+    "title": "Bill Umansky appointed to the Board of The Maccabee Bar Association of Central Florida",
+    "description_excerpt": "Umansky joins nonprofit professional association focused on legal leadership, community service, education and professional standards",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "bitmine immersion technologies",
+    "name": "Bitmine Immersion Technologies",
+    "bucket": "hq_out_of_territory",
+    "source": "pr_newswire",
+    "event_type": "funding",
+    "title": "Bitmine Immersion Technologies (BMNR) kondigt aan dat het bezit aan ETH 5,74 miljoen tokens heeft bereikt en dat het totale bezit aan cryptovaluta en geldmiddelen 11,1 miljard dollar bedraagt",
+    "description_excerpt": "Bitmine bezit 4,8% van het totale ETH-aanbod van 120,7 miljoen ETH Bitmine heeft in slechts 12 maanden 95% van de weg naar de 'Alchemy of 5%' afgelegd Bitmine werd op 26 juni 2026 opgenomen in de Russell 1000 Large-cap Index De Series A Preferred Stock van Bitmine wordt op de New York...",
+    "hq": "Las Vegas, NV",
+    "zi_subindustry": "Holding Companies & Conglomerates",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "NV"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "bleichroeder acquisition corp ii",
+    "name": "Bleichroeder Acquisition Corp. II",
+    "bucket": "entity_shape",
+    "source": "sec_edgar",
+    "event_type": "merger_acquisition",
+    "title": "SEC 8-K Item 2.01 (Completion of Acquisition or Disposition) — Bleichroeder Acquisition Corp. II",
+    "description_excerpt": "SEC 8-K filing by Bleichroeder Acquisition Corp. II (NY) — Item 2.01: Completion of Acquisition or Disposition. Filing date: 2026-08-27.",
+    "hq": "New York, NY",
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "spac"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "boa acquisition corp ii",
+    "name": "BOA Acquisition Corp. II",
+    "bucket": "entity_shape",
+    "source": "pr_newswire",
+    "event_type": "merger_acquisition",
+    "title": "BOA Acquisition Corp. II Announces Pricing of $125 Million Initial Public Offering",
+    "description_excerpt": "WASHINGTON, Aug. 3, 2026 /PRNewswire/ -- BOA Acquisition Corp. II (the \"Company\"), a special purpose acquisition company, today announced the pricing of its initial public offering of 12,500,000 units at a price of $10.00 per unit. The units are expected to be listed for trading on the...",
+    "hq": "Washington, DC",
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "spac"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "brami",
+    "name": "BRAMI",
+    "bucket": "hq_out_of_territory",
+    "source": "other",
+    "event_type": "funding",
+    "title": "BRAMI Grabs $33M Series B Funding Round",
+    "description_excerpt": "NEW YORK, NY, BRAMI, the Italian food brand bringing protein pasta to American kitchens, announced today that it has raised $33 million in Series B funding.",
+    "hq": "Carlsbad, CA",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "CA"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "brand engagement network",
+    "name": "Brand Engagement Network Inc.",
+    "bucket": "hq_out_of_territory",
+    "source": "sec_edgar",
+    "event_type": "merger_acquisition",
+    "title": "SEC 8-K Item 1.01 (Entry into a Material Definitive Agreement) — Brand Engagement Network Inc.",
+    "description_excerpt": "SEC 8-K filing by Brand Engagement Network Inc. (DE) — Item 1.01: Entry into a Material Definitive Agreement. Filing date: 2026-06-05.",
+    "hq": "Jackson, WY",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "WY"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "brodie generational capital partners",
+    "name": "Brodie Generational Capital Partners",
+    "bucket": "verified",
+    "source": "pr_newswire",
+    "event_type": "merger_acquisition",
+    "title": "Sur-Seal Rebrands as Cohesive Components Following Acquisition by Brodie Generational Capital Partners",
+    "description_excerpt": "New name and identity signal a long-term commitment to building a world-class engineered materials converter — guided by deep technical expertise, speed, and seamless integration CHARLOTTE, N.C., Aug. 18, 2026 /PRNewswire/ -- Brodie Generational Capital Partners (BGCP), which acquired...",
+    "hq": "Charlotte, NC",
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "NC",
+      "zi_subindustry": "Venture Capital & Private Equity",
+      "vertical": "Financial Services"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "build north georgia ii",
+    "name": "Build North Georgia II LLC",
+    "bucket": "entity_shape",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Build North Georgia II LLC",
+    "description_excerpt": "SEC Form D filed by Build North Georgia II LLC (GA) — private capital raise (Reg D exempt offering). Total offering: $24,000,000. Form D industry group: Investing. Filing date: 2026-08-13.",
+    "hq": null,
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "fund_vehicle"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "capital farm credit",
+    "name": "Capital Farm Credit",
+    "bucket": "hq_out_of_territory",
+    "source": "other",
+    "event_type": "cfo_hire",
+    "title": "Capital Farm Credit announces Javier Lemus as <b>new CFO</b> - EIN News",
+    "description_excerpt": "... Connecticut (US) &middot; Costa Rica &middot; Croatia &middot; Cuba &middot; Cyprus &middot; Czech Republic &middot; Delaware ... new CFO &middot; View All Stories From This Source. PR Distribution.",
+    "hq": "College Station, TX",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "TX"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "carmody",
+    "name": "Carmody",
+    "bucket": "hq_out_of_territory",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "CT law firm Carmody hires <b>new CFO</b>, chief operating officer - Hartford Business Journal",
+    "description_excerpt": "Former West Virginia law firm executive joins Connecticut-based firm's leadership team ... CT law firm Carmody hires new CFO, chief operating officer.",
+    "hq": "Seattle, WA",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "WA"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "cartesian growth corporation ii",
+    "name": "Cartesian Growth Corporation II",
+    "bucket": "entity_shape",
+    "source": "pr_newswire",
+    "event_type": "merger_acquisition",
+    "title": "Greenberg Traurig Advises Cartesian Growth Corporation II on $1.2B Go-Public Merger with InoBat",
+    "description_excerpt": "NEW YORK, Aug. 3, 2026 /PRNewswire/ -- Global law firm Greenberg Traurig, LLP advised Cartesian Growth Corporation II, a special purpose acquisition company, on the signing of a definitive business combination agreement with InoBat AS (InoBat), a European battery energy storage systems...",
+    "hq": "New York, NY",
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "fund_vehicle"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "catholic charities of the archdiocese of newark",
+    "name": "Catholic Charities of the Archdiocese of Newark",
+    "bucket": "tombstone_reason",
+    "source": "adzuna",
+    "event_type": "finance_seat_open",
+    "title": "Catholic Charities of the Archdiocese of Newark hiring: Associate Controller",
+    "description_excerpt": "Job Description Job Description Catholic Charities of the Archdiocese of Newark is currently seeking a Full Time Associate Controller for its Finance Department located in Newark, New Jersey . JOB DESCRIPTION: Designs and maintains basic fiscal control, accounting and report procedures for the Agenc",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "reason_prefix": "bad_company_name",
+      "bad_company_name": true
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "cfs",
+    "name": "CFS",
+    "bucket": "hq_out_of_territory",
+    "source": "adzuna",
+    "event_type": "finance_seat_open",
+    "title": "CFS hiring: CFO",
+    "description_excerpt": "Chief Financial Officer (CFO) About the Opportunity Our client is seeking a strategic and hands-on Chief Financial Officer to lead the financial operations of a growing organization. This individual will partner closely with executive leadership to drive financial strategy, operational efficiency, a",
+    "hq": "Oklahoma City, OK",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "OK"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "cfs",
+    "name": "CFS",
+    "bucket": "verified",
+    "source": "adzuna",
+    "event_type": "finance_seat_open",
+    "title": "CFS hiring: CFO (Melbourne)",
+    "description_excerpt": "Location: Melbourne, FL Salary: $270,000-$300,000 Bonuses Why This Opportunity Stands Out Newly created CFO role due to company growth and expansion Direct partnership with the President & COO and executive leadership team Lead finance for a diversified real estate platform spanning land development",
+    "hq": "Melbourne, FL",
+    "zi_subindustry": "Real Estate",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "FL",
+      "zi_subindustry": "Real Estate",
+      "vertical": "Consumer Services"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "charter public school",
+    "name": "Charter Public School",
+    "bucket": "entity_shape",
+    "source": "adzuna",
+    "event_type": "finance_seat_open",
+    "title": "Institute of Management Accountants, Inc. hiring: Strategic CFO for Education Nonprofit (Northern)",
+    "description_excerpt": "Match Charter Public School in Boston, MA is seeking a Chief Financial Officer to lead the finances and administration for a high-performing PreK-12 nonprofit school. Reporting to the CEO, the CFO will manage finance, accounting, HR administration and compliance, with responsibility for a $40 millio",
+    "hq": "Boston, MA",
+    "zi_subindustry": "K-12 Schools",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "k12"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "cleanaway",
+    "name": "Cleanaway",
+    "bucket": "rep_disposition",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "Cleanaway names <b>new CFO</b> as it confirms FY26 earnings outlook - The Globe and Mail",
+    "description_excerpt": "Cleanaway names new CFO as it confirms FY26 earnings outlook ... The New York Times &middot; Globe Email Newsletters &middot; Gift Subscription. Business ...",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "rep_status": "Out of Alignment"
+    },
+    "provenance": "rep:Out of Alignment",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "cliftonlarsonallen",
+    "name": "CliftonLarsonAllen LLP",
+    "bucket": "hq_out_of_territory",
+    "source": "adzuna",
+    "event_type": "finance_seat_open",
+    "title": "CliftonLarsonAllen LLP hiring: CAAS- Assistant Controller- Healthcare",
+    "description_excerpt": "CLA is a top 10 national professional services firm where our purpose is to create opportunities every day, for our clients, our people, and our communities through industry-focused wealth advisory, digital, audit, tax, consulting, and outsourcing services. Even with more than 9,000 people, 120 U.S.",
+    "hq": "Minneapolis, MN",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "MN"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "clutch intelligence",
+    "name": "Clutch Intelligence Inc.",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Clutch Intelligence Inc.",
+    "description_excerpt": "SEC Form D filed by Clutch Intelligence Inc. (SC) — private capital raise (Reg D exempt offering). Total offering: $350,000. Form D industry group: Other. Filing date: 2026-09-03.",
+    "hq": "SC",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2151815/000215181526000001/0002151815-26-000001-index.htm",
+    "expected": {
+      "verdict": "too_small",
+      "reason": "Form D revenue undisclosed and raise $350,000 < $10,000,000",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "collective acquisition",
+    "name": "COLLECTIVE ACQUISITION CORP.",
+    "bucket": "entity_shape",
+    "source": "sec_edgar",
+    "event_type": "merger_acquisition",
+    "title": "SEC 8-K Item 1.01 (Entry into a Material Definitive Agreement) — COLLECTIVE ACQUISITION CORP.",
+    "description_excerpt": "SEC 8-K filing by COLLECTIVE ACQUISITION CORP. (FL) — Item 1.01: Entry into a Material Definitive Agreement. Filing date: 2026-07-20.",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "spac"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "command investigations",
+    "name": "Command Investigations",
+    "bucket": "verified",
+    "source": "other",
+    "event_type": "merger_acquisition",
+    "title": "Command Investigations Acquires CoventBridge Insurance Division",
+    "description_excerpt": "Two Florida-based heavyweights in insurance investigations have merged part of their operations, creating what they say is now the largest insurance fraud investigation firm in the country. Command Investigations, based in Lake Mary, Florida, with 900 investigators across all U.S. &#8230;",
+    "hq": "Lake Mary, FL",
+    "zi_subindustry": "Insurance",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "FL",
+      "zi_subindustry": "Insurance",
+      "vertical": "Financial Services"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "connecticut innovations",
+    "name": "Connecticut Innovations",
+    "bucket": "tombstone_reason",
+    "source": "pr_newswire",
+    "event_type": "merger_acquisition",
+    "title": "Connecticut Innovations Generates Record $66.5 Million in Proceeds in FY2026",
+    "description_excerpt": "Landmark exits, including the largest private biotech M&A deal on record, drove returns that CI will reinvest in Connecticut's innovation economy NEW HAVEN, Conn., July 22, 2026 /PRNewswire/ -- Connecticut Innovations (CI), the state's strategic venture capital arm, today announced a...",
+    "hq": "New Haven, CT",
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "reason_prefix": "no_workable_account",
+      "roles": [
+        "Investor"
+      ],
+      "workable": false
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "constitution capital horizon advisor",
+    "name": "CONSTITUTION CAPITAL HORIZON ADVISOR, LP",
+    "bucket": "verified",
+    "source": "sec_iapd",
+    "event_type": "expansion",
+    "title": "New SEC-registered investment adviser: CONSTITUTION CAPITAL HORIZON ADVISOR, LP (Andover, MA)",
+    "description_excerpt": "CONSTITUTION CAPITAL HORIZON ADVISOR, LP (MA) registered with the SEC as an investment adviser on August 27, 2026 (SEC file no. 801-137167; CRD 339512). Legal name: CONSTITUTION CAPITAL HORIZON ADVISOR, LP. Regulatory assets under management: $0. Employees: 68. Website: https://www.concp.com. Estima",
+    "hq": "MA",
+    "zi_subindustry": "Lending & Brokerage",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "MA",
+      "zi_subindustry": "Lending & Brokerage",
+      "vertical": "Financial Services"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "corrum capital management",
+    "name": "CORRUM CAPITAL MANAGEMENT LLC",
+    "bucket": "verified",
+    "source": "sec_iapd",
+    "event_type": "expansion",
+    "title": "New SEC-registered investment adviser: CORRUM CAPITAL MANAGEMENT LLC (Charlotte, NC)",
+    "description_excerpt": "CORRUM CAPITAL MANAGEMENT LLC (NC) registered with the SEC as an investment adviser on August 20, 2026 (SEC file no. 801-137120; CRD 338387). Legal name: CORRUM CAPITAL MANAGEMENT LLC. Regulatory assets under management: $1,391,528,366. Employees: 17. Website: http://www.corrumcapital.com. Estimated",
+    "hq": "NC",
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "NC",
+      "zi_subindustry": "Venture Capital & Private Equity",
+      "vertical": "Financial Services"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "cuadra riverside i jv",
+    "name": "Cuadra Riverside I JV, LLC",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Cuadra Riverside I JV, LLC",
+    "description_excerpt": "SEC Form D filed by Cuadra Riverside I JV, LLC (NC) — private capital raise (Reg D exempt offering). Total offering: $2,050,000. Form D industry group: Commercial. Filing date: 2026-09-03.",
+    "hq": "NC",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2152883/000215288326000001/0002152883-26-000001-index.htm",
+    "expected": {
+      "verdict": "too_small",
+      "reason": "Form D revenue undisclosed and raise $2,050,000 < $10,000,000",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "delirium ltd liability",
+    "name": "Delirium Ltd Liability Co",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Delirium Ltd Liability Co",
+    "description_excerpt": "SEC Form D filed by Delirium Ltd Liability Co (NY) — private capital raise (Reg D exempt offering). Total offering: $900,000. Form D industry group: Other. Filing date: 2026-08-25.",
+    "hq": "NY",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2146214/000149315226039930/0001493152-26-039930-index.htm",
+    "expected": {
+      "verdict": "too_small",
+      "reason": "Form D revenue undisclosed and raise $900,000 < $10,000,000",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "desantis",
+    "name": "DeSantis",
+    "bucket": "finance_leader_title",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "Despite Gov. DeSantis&#39; union crackdowns, AFSCME <b>Florida</b> keeps winning",
+    "description_excerpt": "The law in question (SB 256), sponsored by then-Spring Hill Republican Sen. Blaise Ingoglia — whom DeSantis appointed CFO last year — hiked ...",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": "cfo"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "detroit at work",
+    "name": "Detroit at Work",
+    "bucket": "finance_leader_title",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "Detroit at Work Hires Ira Thompson II as <b>New CFO</b> | The <b>Michigan</b> Chronicle",
+    "description_excerpt": "Detroit at Work Hires Ira Thompson II as New CFO. ... “It is great to return to Michigan to help strengthen the local economy ...",
+    "hq": "Detroit, MI",
+    "zi_subindustry": "Non-Profit & Charitable Organizations",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": "cfo"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "detroit at work",
+    "name": "Detroit at Work",
+    "bucket": "verified",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "Detroit at Work Hires Ira Thompson II as <b>New CFO</b> | The <b>Michigan</b> Chronicle",
+    "description_excerpt": "Detroit at Work Hires Ira Thompson II as New CFO. ... “It is great to return to Michigan to help strengthen the local economy ...",
+    "hq": "Detroit, MI",
+    "zi_subindustry": "Non-Profit & Charitable Organizations",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "MI",
+      "zi_subindustry": "Non-Profit & Charitable Organizations",
+      "vertical": "Nonprofits & Organizations"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "deutsche telekom",
+    "name": "Deutsche Telekom",
+    "bucket": "finance_leader_title",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "Deutsche Telekom names Mirchandani CFO in shake-up",
+    "description_excerpt": "Deutsche Telekom names Mirchandani CFO in shake-up",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": "cfo"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "dexter community schools",
+    "name": "Dexter Community Schools",
+    "bucket": "entity_shape",
+    "source": "other",
+    "event_type": "cfo_hire",
+    "title": "Dexter Community Schools Hires <b>New CFO</b> - The Sun Times News",
+    "description_excerpt": "DCS's New CFO. ... Dexter Community Schools (DCS) adjusted their Wireless Communication policy to align with Michigan Senate Bill 495 and House Bill ...",
+    "hq": "Dexter, MI",
+    "zi_subindustry": "K-12 Schools",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "k12"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "digital asset acquisition",
+    "name": "Digital Asset Acquisition Corp.",
+    "bucket": "entity_shape",
+    "source": "sec_edgar",
+    "event_type": "merger_acquisition",
+    "title": "SEC 8-K Item 1.01 (Entry into a Material Definitive Agreement) — Digital Asset Acquisition Corp.",
+    "description_excerpt": "SEC 8-K filing by Digital Asset Acquisition Corp. (NJ) — Item 1.01: Entry into a Material Definitive Agreement. Filing date: 2026-08-13.",
+    "hq": null,
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "spac"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "dmjc colossal",
+    "name": "DMJC COLOSSAL LLC",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — DMJC COLOSSAL LLC",
+    "description_excerpt": "SEC Form D filed by DMJC COLOSSAL LLC (DE) — private capital raise (Reg D exempt offering). Total offering: $1,650,000. Form D industry group: Other. Filing date: 2026-08-21.",
+    "hq": "DE",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2149129/000214912926000001/0002149129-26-000001-index.htm",
+    "expected": {
+      "verdict": "too_small",
+      "reason": "Form D revenue undisclosed and raise $1,650,000 < $10,000,000",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "dynamic capital",
+    "name": "Dynamic Capital",
+    "bucket": "verified",
+    "source": "other",
+    "event_type": "merger_acquisition",
+    "title": "Dynamic Capital Supports Acquisition, Returning Columbia Bitulithic Ltd. to Northern British Columbia Leadership",
+    "description_excerpt": "Dynamic Capital finances the acquisition of Columbia Bitulithic Ltd., supporting local ownership and infrastructure growth in Northern British Columbia.",
+    "hq": "Ponte Vedra Beach, FL",
+    "zi_subindustry": "Lending & Brokerage",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "FL",
+      "zi_subindustry": "Lending & Brokerage",
+      "vertical": "Financial Services"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "earth science tech",
+    "name": "Earth Science Tech, Inc.",
+    "bucket": "verified",
+    "source": "globe_newswire",
+    "event_type": "merger_acquisition",
+    "title": "Earth Science Tech, Inc. (ETST) Acquires Zoolzy LLC to Drive Margin Expansion and Strategic Entry into the Veterinary Market",
+    "description_excerpt": "MIAMI, Aug. 19, 2026 (GLOBE NEWSWIRE) -- Earth Science Tech, Inc. (OTC: ETST) (“ETST” or the “Company”), a strategic holding company focused on a diversified portfolio, today announced the acquisition of Zoolzy LLC, a Doral, Florida-based wholesale distributor of active pharmaceutical ingredients (A",
+    "hq": "Miami, FL",
+    "zi_subindustry": "Holding Companies & Conglomerates",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "FL",
+      "zi_subindustry": "Holding Companies & Conglomerates",
+      "vertical": "Financial Services"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "eb 5 charter school phase 57",
+    "name": "EB-5 Charter School Phase 57, LP",
+    "bucket": "entity_shape",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — EB-5 Charter School Phase 57, LP",
+    "description_excerpt": "SEC Form D filed by EB-5 Charter School Phase 57, LP (FL) — private capital raise (Reg D exempt offering). Total offering: $30,400,000. Form D industry group: Other. Filing date: 2026-08-24.",
+    "hq": "FL",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "k12"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "eb 5 charter school phase 58",
+    "name": "EB-5 Charter School Phase 58, LP",
+    "bucket": "entity_shape",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — EB-5 Charter School Phase 58, LP",
+    "description_excerpt": "SEC Form D filed by EB-5 Charter School Phase 58, LP (FL) — private capital raise (Reg D exempt offering). Total offering: $11,200,000. Form D industry group: Other. Filing date: 2026-08-24.",
+    "hq": "FL",
+    "zi_subindustry": "Non-Profit & Charitable Organizations",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "k12"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "egt 26",
+    "name": "EGT 26 LLC",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — EGT 26 LLC",
+    "description_excerpt": "SEC Form D filed by EGT 26 LLC (NY) — private capital raise (Reg D exempt offering). Total offering: $3,098,864. Form D industry group: Other Technology. Filing date: 2026-09-04.",
+    "hq": "New York, NY",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2148964/000214896426000001/0002148964-26-000001-index.htm",
+    "expected": {
+      "verdict": "out",
+      "reason": "Form D industry group Other Technology (off-vertical)",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "engage peo",
+    "name": "Engage PEO",
+    "bucket": "finance_leader_title",
+    "source": "other",
+    "event_type": "cfo_hire",
+    "title": "Andrew Reiben <b>named CFO</b> of Engage PEO - South <b>Florida</b> Business Journal",
+    "description_excerpt": "Andrew Reiben named CFO of Engage PEO - South Florida Business Journal. South Florida. Select a City. National &middot; Albany &middot; Albuquerque &middot; Atlanta ...",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": "cfo"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "eurofire 24 ltd liability",
+    "name": "Eurofire 24 Ltd Liability Co",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Eurofire 24 Ltd Liability Co",
+    "description_excerpt": "SEC Form D filed by Eurofire 24 Ltd Liability Co (NY) — private capital raise (Reg D exempt offering). Total offering: $4,000,000. Form D industry group: Other. Filing date: 2026-08-28.",
+    "hq": "NY",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2143662/000214366226000001/0002143662-26-000001-index.htm",
+    "expected": {
+      "verdict": "too_small",
+      "reason": "Form D revenue undisclosed and raise $4,000,000 < $10,000,000",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "evermind labs",
+    "name": "Evermind Labs, Inc.",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Evermind Labs, Inc.",
+    "description_excerpt": "SEC Form D filed by Evermind Labs, Inc. (DE) — private capital raise (Reg D exempt offering). Total offering: $50,000. Form D industry group: Other. Filing date: 2026-08-14.",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2149539/000214953926000001/0002149539-26-000001-index.htm",
+    "expected": {
+      "verdict": "too_small",
+      "reason": "Form D revenue undisclosed and raise $50,000 < $10,000,000",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "ewing outdoor supply",
+    "name": "Ewing Outdoor Supply",
+    "bucket": "hq_out_of_territory",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "Ewing Outdoor Supply Names <b>New CFO</b>, Sales &amp; Marketing Leader",
+    "description_excerpt": "... Maine, Adds Large Pennsylvania Facility &middot; June 5, 2026 &middot; Fasteners &middot; MDM ... New CFO, Sales & Marketing Leader &middot; June 5, 2026 &middot; MDM Blog &middot; MDM's May ...",
+    "hq": "Phoenix, AZ",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "AZ"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "excorde capital",
+    "name": "EXCORDE CAPITAL LLC",
+    "bucket": "verified",
+    "source": "sec_iapd",
+    "event_type": "expansion",
+    "title": "New SEC-registered investment adviser: EXCORDE CAPITAL LLC (Conshohocken, PA)",
+    "description_excerpt": "EXCORDE CAPITAL LLC (PA) registered with the SEC as an investment adviser on August 14, 2026 (SEC file no. 801-137094; CRD 337589). Legal name: EXCORDE CAPITAL LLC. Regulatory assets under management: not reported. Employees: 23. Website: https://www.excordecapital.com. Estimated revenue about $9.2M",
+    "hq": "PA",
+    "zi_subindustry": "Lending & Brokerage",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "PA",
+      "zi_subindustry": "Lending & Brokerage",
+      "vertical": "Financial Services"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "exmergo",
+    "name": "Exmergo, Inc.",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Exmergo, Inc.",
+    "description_excerpt": "SEC Form D filed by Exmergo, Inc. (DE) — private capital raise (Reg D exempt offering). Total offering: $250,000. Form D industry group: Computers. Filing date: 2026-08-12.",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2124333/000212433326000002/0002124333-26-000002-index.htm",
+    "expected": {
+      "verdict": "out",
+      "reason": "Form D industry group Computers (off-vertical)",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "federal home loan bank of boston",
+    "name": "Federal Home Loan Bank of Boston",
+    "bucket": "verified",
+    "source": "sec_edgar",
+    "event_type": "cfo_hire",
+    "title": "SEC 8-K Item 5.02 (Departure/Election of Directors or Officers) — Federal Home Loan Bank of Boston",
+    "description_excerpt": "SEC 8-K filing by Federal Home Loan Bank of Boston (MA) — Item 5.02: Departure/Election of Directors or Officers. Filing date: 2026-07-14.",
+    "hq": "Boston, MA",
+    "zi_subindustry": "Banking",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "MA",
+      "zi_subindustry": "Banking",
+      "vertical": "Financial Services"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "federated mutual insurance",
+    "name": "Federated Mutual Insurance Company",
+    "bucket": "hq_out_of_territory",
+    "source": "pr_newswire",
+    "event_type": "merger_acquisition",
+    "title": "High Definition Vehicle Insurance Acquired by Federated Mutual Insurance Company",
+    "description_excerpt": "HDVI to operate as an autonomous subsidiary of Federated Insurance GREENVILLE, S.C., Aug. 6, 2026 /PRNewswire/ -- High Definition Vehicle Insurance, Inc. (HDVI) has been acquired by Federated Mutual Insurance Company (Federated Insurance), a national leader in the commercial property and...",
+    "hq": "Owatonna, MN",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "MN"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "fintent",
+    "name": "Fintent Inc",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Fintent Inc",
+    "description_excerpt": "SEC Form D filed by Fintent Inc (NY) — private capital raise (Reg D exempt offering). Total offering: $135,000. Form D industry group: Other Technology. Filing date: 2026-08-17.",
+    "hq": "New York, NY",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1968731/000196873126000004/0001968731-26-000004-index.htm",
+    "expected": {
+      "verdict": "out",
+      "reason": "Form D industry group Other Technology (off-vertical)",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "fire departments across the state since he was",
+    "name": "Fire Departments across the state since he was",
+    "bucket": "finance_leader_title",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "Blaise Ingoglia distributes $1M in state funding to South <b>Florida</b> Fire Departments",
+    "description_excerpt": "Ingoglia has distributed about $30 million to various Fire Departments across the state since he was appointed CFO last year. ... Florida and Florida ...",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": "cfo"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "fire departments across the state since he was",
+    "name": "Fire Departments across the state since he was",
+    "bucket": "tombstone_reason",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "Blaise Ingoglia distributes $1M in state funding to South <b>Florida</b> Fire Departments",
+    "description_excerpt": "Ingoglia has distributed about $30 million to various Fire Departments across the state since he was appointed CFO last year. ... Florida and Florida ...",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "reason_prefix": "bad_company_name",
+      "bad_company_name": true
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "fluidra",
+    "name": "Fluidra",
+    "bucket": "finance_leader_title",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "Fluidra names veteran finance executive Juan Graham as <b>new CFO</b> - The Globe and Mail",
+    "description_excerpt": "Fluidra names veteran finance executive Juan Graham as new CFO ... The New York Times &middot; Globe Email Newsletters &middot; Gift Subscription. Business ...",
+    "hq": "Carlsbad, CA",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": "cfo"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "four pillars hospitality",
+    "name": "FOUR PILLARS HOSPITALITY LLC",
+    "bucket": "entity_shape",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — FOUR PILLARS HOSPITALITY LLC",
+    "description_excerpt": "SEC Form D filed by FOUR PILLARS HOSPITALITY LLC (VA) — private capital raise (Reg D exempt offering). Total offering: Indefinite. Form D industry group: Commercial. Filing date: 2026-08-06.",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "lodging"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "gateworks",
+    "name": "Gateworks",
+    "bucket": "hq_out_of_territory",
+    "source": "other",
+    "event_type": "merger_acquisition",
+    "title": "Audax-backed Ezurio acquires computer manufacturer Gateworks",
+    "description_excerpt": "Headquartered in Akron, Ohio, Ezurio is a provider of wireless connectivity and embedded compute solutions. The post Audax-backed Ezurio acquires computer manufacturer Gateworks appeared first on PE Hub.",
+    "hq": "San Luis Obispo, CA",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "CA"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "gbx group",
+    "name": "GBX Group",
+    "bucket": "verified",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "GBX hires <b>new CFO</b> away from Washington Prime - Crain&#39;s Cleveland Business",
+    "description_excerpt": "GBX hires new CFO away from Washington Prime ... Christa Vesy has been named chief financial officer of GBX Group, a Cleveland firm that specializes in ...",
+    "hq": "Cleveland, OH",
+    "zi_subindustry": "Real Estate",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "OH",
+      "zi_subindustry": "Real Estate",
+      "vertical": "Consumer Services"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "geico",
+    "name": "GEICO",
+    "bucket": "finance_leader_title",
+    "source": "other",
+    "event_type": "cfo_hire",
+    "title": "GEICO Names Foy Chief Financial Officer",
+    "description_excerpt": "GEICO announced that David Foy has been appointed chief financial officer, effective June 29. He will oversee all finance and real estate functions. Foy will be based at GEICO&#8217;s headquarters in Bethesda and will report to Nancy Pierce, GEICO&#8217;s chief executive officer. In his new role, Fo",
+    "hq": "Bethesda, MD",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": "cfo"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "glacial lakes energy",
+    "name": "Glacial Lakes Energy, LLC",
+    "bucket": "hq_out_of_territory",
+    "source": "adzuna",
+    "event_type": "finance_seat_open",
+    "title": "Glacial Lakes Energy, LLC hiring: Strategic CFO: Growth, Risk & Governance in Renewables (Northern)",
+    "description_excerpt": "Glacial Lakes Energy, LLC is seeking a Chief Financial Officer to guide the company’s financial strategy as part of the Executive Leadership Team. This on-site role in Watertown, SD requires a strategic, collaborative executive with deep experience in corporate finance, financial reporting, budgetin",
+    "hq": "Watertown, SD",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "SD"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "glouston capital partners",
+    "name": "Glouston Capital Partners",
+    "bucket": "verified",
+    "source": "pr_newswire",
+    "event_type": "merger_acquisition",
+    "title": "Flexstone Partners to Acquire Glouston Capital Partners to Form $15 Billion Private Equity Platform",
+    "description_excerpt": "The combined firm is a scaled, global private markets platform with full spectrum capabilities across Primary, Co-Investment, and Secondary strategies NEW YORK and BOSTON, June 17, 2026 /PRNewswire/ -- Flexstone Partners (Flexstone), a global private markets investment manager with $12...",
+    "hq": "Boston, MA",
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "MA",
+      "zi_subindustry": "Venture Capital & Private Equity",
+      "vertical": "Financial Services"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "grandview property partners",
+    "name": "Grandview Property Partners",
+    "bucket": "finance_leader_title",
+    "source": "globe_newswire",
+    "event_type": "executive_hire",
+    "title": "Grandview Property Partners Appoints Evan Abrams as Business Leader",
+    "description_excerpt": "GREENWICH, Conn., Sept. 08, 2026 (GLOBE NEWSWIRE) -- Grandview Property Partners (“Grandview”) today announced that Evan Abrams has joined as managing director and business leader. In this role, Mr. Abrams will be responsible for supporting the continued growth and capital formation of Grandview’s p",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "grey fox inn",
+    "name": "Grey Fox Inn LLC",
+    "bucket": "entity_shape",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Grey Fox Inn LLC",
+    "description_excerpt": "SEC Form D filed by Grey Fox Inn LLC (VT) — private capital raise (Reg D exempt offering). Total offering: $2,000,000. Form D industry group: Other Real Estate. Filing date: 2026-08-28.",
+    "hq": "VT",
+    "zi_subindustry": "Real Estate",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "lodging"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "griot capital group",
+    "name": "Griot Capital Group, LLC",
+    "bucket": "tombstone_reason",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Griot Capital Group, LLC",
+    "description_excerpt": "SEC Form D filed by Griot Capital Group, LLC (MD) — private capital raise (Reg D exempt offering). Total offering: $3,500,000. Form D industry group: Investing. Filing date: 2026-08-17.",
+    "hq": "MD",
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "reason_prefix": "no_workable_account",
+      "roles": [
+        "Investor"
+      ],
+      "workable": false
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "hca",
+    "name": "HCA",
+    "bucket": "finance_leader_title",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "Sargassum Seaweed &amp; Children&#39;s Health: What You Need to Know - South <b>Florida</b> Hospital News",
+    "description_excerpt": "Drew Hartmann named CFO at HCA ...",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": "cfo"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "hca florida sarasota doctors hospital",
+    "name": "HCA Florida Sarasota Doctors Hospital",
+    "bucket": "finance_leader_title",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "HCA <b>Florida</b> hospital taps <b>new CFO</b> - Becker&#39;s Hospital Review | Healthcare News &amp; Analysis",
+    "description_excerpt": "HCA Florida hospital taps new CFO ... Maria Caruso has been named CFO of HCA Florida Sarasota Doctors Hospital. The hospital is part of Nashville, Tenn.",
+    "hq": "Nashville, TN",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": "cfo"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "hca healthcare",
+    "name": "HCA Healthcare",
+    "bucket": "finance_leader_title",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "Jordan Fulkerson <b>named CFO</b> of HCA <b>Florida</b> Memorial Hospital | Jax Daily Record",
+    "description_excerpt": "Jordan Fulkerson named CFO of HCA Florida Memorial Hospital. His experience includes more than seven years at HCA Healthcare. By Daily Record Staff ...",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": "cfo"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "head of finance and fp and a church mutual insurance company has",
+    "name": "Head of Finance and FP&A Church Mutual Insurance Company has",
+    "bucket": "finance_leader_title",
+    "source": "other",
+    "event_type": "executive_hire",
+    "title": "People Moves: Church Mutual Names Parisi as VP – Head of Finance and FP&A",
+    "description_excerpt": "Church Mutual Insurance Company has named Ben Parisi vice president, head of finance operations and financial planning and analysis. Parisi will lead finance operations, expense management, procurement, payroll, financial planning and analysis, and management reporting. He will report to Daniel &#82",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": "exec"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "helion",
+    "name": "Helion",
+    "bucket": "hq_out_of_territory",
+    "source": "other",
+    "event_type": "funding",
+    "title": "Helion Raises $465 Million Series G Funding",
+    "description_excerpt": "EVERETT, WA, Helion, a Washington-based fusion energy company, announced a $465 million Series G investment round.",
+    "hq": "Everett, WA",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "WA"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "hershey",
+    "name": "Hershey Company",
+    "bucket": "finance_leader_title",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "Hershey Company names next Chief Financial Officer",
+    "description_excerpt": "Hershey Company names next Chief Financial Officer",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": "cfo"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "hickman williams and",
+    "name": "HICKMAN, WILLIAMS & CO",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — HICKMAN, WILLIAMS & CO",
+    "description_excerpt": "SEC Form D filed by HICKMAN, WILLIAMS & CO (OH) — private capital raise (Reg D exempt offering). Total offering: $249,980. Form D industry group: Other. Filing date: 2026-08-10.",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/707467/000070746726000001/0000707467-26-000001-index.htm",
+    "expected": {
+      "verdict": "too_small",
+      "reason": "Form D revenue undisclosed and raise $249,980 < $10,000,000",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "hilco global",
+    "name": "Hilco Global",
+    "bucket": "tombstone_reason",
+    "source": "pr_newswire",
+    "event_type": "merger_acquisition",
+    "title": "Hilco Global Seeks Offers to Acquire Multimedia IP Portfolio of Bestselling Children's Author Joy Berry",
+    "description_excerpt": "Indications of Interest Due September 22, 2026 NEW YORK, Aug. 3, 2026 /PRNewswire/ -- Hilco Global (www.hilcoglobal.com) has been retained to manage the sale and licensing process for the Joy Berry® multimedia intellectual property portfolio. The portfolio comprises the only existing...",
+    "hq": "New York, NY",
+    "zi_subindustry": "Lending & Brokerage",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "reason_prefix": "no_workable_account",
+      "roles": [
+        "Advisor"
+      ],
+      "workable": false
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "hilco global capital solutions",
+    "name": "Hilco Global Capital Solutions",
+    "bucket": "tombstone_reason",
+    "source": "pr_newswire",
+    "event_type": "merger_acquisition",
+    "title": "Hilco Global Provides $65 Million FILO Loan to a National Specialty Retailer",
+    "description_excerpt": "NEW YORK, July 23, 2026 /PRNewswire/ -- Hilco Global Capital Solutions (\"HGCS\"), a division of Hilco Global and a leading provider of flexible asset-based lending solutions, provided a $65 million first-in, last-out secured term loan (\"FILO loan\") to support the acquisition of a leading...",
+    "hq": "New York, NY",
+    "zi_subindustry": "Lending & Brokerage",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "reason_prefix": "no_workable_account",
+      "roles": [
+        "Lead Investor",
+        "Partner"
+      ],
+      "workable": false
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "hoosier housing 2026",
+    "name": "Hoosier Housing 2026 LP",
+    "bucket": "entity_shape",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Hoosier Housing 2026 LP",
+    "description_excerpt": "SEC Form D filed by Hoosier Housing 2026 LP (IN) — private capital raise (Reg D exempt offering). Total offering: $1,400,000. Form D industry group: Residential. Filing date: 2026-08-17.",
+    "hq": "IN",
+    "zi_subindustry": "Real Estate",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "fund_vehicle"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "hospital review maria caruso was",
+    "name": "Hospital Review Maria Caruso was",
+    "bucket": "finance_leader_title",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "For-profit operators: 176 executive moves in 2026 - Becker&#39;s Hospital Review",
+    "description_excerpt": "Maria Caruso was named CFO of HCA Florida Sarasota Doctors Hospital. 26 ... Zane Evans was appointed CFO of HCA Florida Poinciana Hospital.",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": "cfo"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "hrtoday in",
+    "name": "hrtoday.in",
+    "bucket": "finance_leader_title",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "Soraya Benchikh Appointed Chief Financial Officer of Coty - hrtoday.in",
+    "description_excerpt": "",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": "cfo"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "hyku biosciences",
+    "name": "HYKU BIOSCIENCES INC.",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — HYKU BIOSCIENCES INC.",
+    "description_excerpt": "SEC Form D filed by HYKU BIOSCIENCES INC. (MA) — private capital raise (Reg D exempt offering). Total offering: $8,612,446. Form D industry group: Other. Filing date: 2026-08-13.",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1980518/000198051826000004/0001980518-26-000004-index.htm",
+    "expected": {
+      "verdict": "too_small",
+      "reason": "Form D revenue undisclosed and raise $8,612,446 < $10,000,000",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "hylaine",
+    "name": "Hylaine",
+    "bucket": "finance_leader_title",
+    "source": "globe_newswire",
+    "event_type": "executive_hire",
+    "title": "Hylaine Appoints Cara Schroll as Vice President of Finance",
+    "description_excerpt": "Hylaine appoints Cara Schroll as VP of Finance, bringing RSM and NTT DATA experience to strengthen financial leadership and support continued growth plans.",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": "exec"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "hypercharge networks",
+    "name": "Hypercharge Networks Corp.",
+    "bucket": "hq_out_of_territory",
+    "source": "globe_newswire",
+    "event_type": "executive_hire",
+    "title": "Hypercharge Announces Issuance of Option Grants",
+    "description_excerpt": "VANCOUVER, British Columbia, July 03, 2026 (GLOBE NEWSWIRE) -- Hypercharge Networks Corp. (TSXV: HC; OTC: HCNWF; FSE: PB7) (the “Company” or “Hypercharge”), a leading EV charging operator, is announcing it has granted 1,000,000 stock options (“Options”) to David Bibby, CEO and President of the Compa",
+    "hq": "Vancouver, BC",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "BC"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "icarus ventures",
+    "name": "Icarus Ventures LLC",
+    "bucket": "tombstone_reason",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Icarus Ventures LLC",
+    "description_excerpt": "SEC Form D filed by Icarus Ventures LLC (NY) — private capital raise (Reg D exempt offering). Total offering: Indefinite. Form D industry group: Business Services. Filing date: 2026-08-17.",
+    "hq": "New York, NY",
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "reason_prefix": "no_workable_account",
+      "roles": [
+        "Investor"
+      ],
+      "workable": false
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "ingoglia has stepped up criminal investigations since he was",
+    "name": "Ingoglia has stepped up criminal investigations since he was",
+    "bucket": "finance_leader_title",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "Undocumented migrant charged in insurance fraud case in South <b>Florida</b>",
+    "description_excerpt": "Ingoglia has stepped up criminal investigations since he was appointed CFO by Gov. ... Florida and Florida State College at Jacksonville. You can ...",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": "cfo"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "ingoglia has stepped up criminal investigations since he was",
+    "name": "Ingoglia has stepped up criminal investigations since he was",
+    "bucket": "tombstone_reason",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "Undocumented migrant charged in insurance fraud case in South <b>Florida</b>",
+    "description_excerpt": "Ingoglia has stepped up criminal investigations since he was appointed CFO by Gov. ... Florida and Florida State College at Jacksonville. You can ...",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "reason_prefix": "bad_company_name",
+      "bad_company_name": true
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "international business brokers association",
+    "name": "International Business Brokers Association",
+    "bucket": "verified",
+    "source": "pr_newswire",
+    "event_type": "merger_acquisition",
+    "title": "The Market Pulse Survey Q2 2026 Reports the Latest Trends in Business Sales up to $50M",
+    "description_excerpt": "INDEPENDENCE, Ohio, Aug. 25, 2026 /PRNewswire/ -- The International Business Brokers Association® and M&A Source® present the Market Pulse Survey Q2 2026 results, reporting high-value insights on businesses being sold — up to $50M. This quarter, buyer competition remained strong and...",
+    "hq": "Independence, OH",
+    "zi_subindustry": "Membership Organizations",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "OH",
+      "zi_subindustry": "Membership Organizations",
+      "vertical": "Nonprofits & Organizations"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "invictos",
+    "name": "Invictos LLC",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Invictos LLC",
+    "description_excerpt": "SEC Form D filed by Invictos LLC (MA) — private capital raise (Reg D exempt offering). Total offering: $2,250,000. Form D industry group: Other. Filing date: 2026-08-10.",
+    "hq": "MA",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2149595/000214959526000001/0002149595-26-000001-index.htm",
+    "expected": {
+      "verdict": "too_small",
+      "reason": "Form D revenue undisclosed and raise $2,250,000 < $10,000,000",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "iridium credit",
+    "name": "Iridium Credit, Inc.",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Iridium Credit, Inc.",
+    "description_excerpt": "SEC Form D filed by Iridium Credit, Inc. (DE) — private capital raise (Reg D exempt offering). Total offering: $3,470,250. Form D industry group: Other. Filing date: 2026-08-06.",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2149034/000214903426000001/0002149034-26-000001-index.htm",
+    "expected": {
+      "verdict": "too_small",
+      "reason": "Form D revenue undisclosed and raise $3,470,250 < $10,000,000",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "jobsohio ventures",
+    "name": "JobsOhio Ventures",
+    "bucket": "tombstone_reason",
+    "source": "other",
+    "event_type": "funding",
+    "title": "Tatyana Hower: JobsOhio Ventures",
+    "description_excerpt": "In our Meet a VC series, we sit down with NVCA members to share the people, perspectives, and convictions behind the venture capital industry. This spotlight features Tatyana Hower, Managing &#8230; The post Tatyana Hower: JobsOhio Ventures first appeared on National Venture Capital Association - NV",
+    "hq": "Columbus, OH",
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "reason_prefix": "no_workable_account",
+      "roles": [
+        "Investor",
+        "Mentioned"
+      ],
+      "workable": false
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "jones technologies",
+    "name": "Jones Technologies, Inc.",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Jones Technologies, Inc.",
+    "description_excerpt": "SEC Form D filed by Jones Technologies, Inc. (PA) — private capital raise (Reg D exempt offering). Total offering: $3,500,000. Form D industry group: Computers. Filing date: 2026-08-25.",
+    "hq": "PA",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2150716/000215071626000001/0002150716-26-000001-index.htm",
+    "expected": {
+      "verdict": "out",
+      "reason": "Form D industry group Computers (off-vertical)",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "junior achievement of the heartland",
+    "name": "Junior Achievement of the Heartland",
+    "bucket": "hq_out_of_territory",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "Junior Achievement of the Heartland names <b>new CFO</b>/COO - AOL.com",
+    "description_excerpt": "New York, NY. Local News &middot; Subscriptions &middot; Animals &middot; Entertainment. Finance ... Junior Achievement of the Heartland names new CFO/COO. WHBF Davenport.",
+    "hq": "Moline, IL",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "IL"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "k health",
+    "name": "K Health, Inc.",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — K Health, Inc.",
+    "description_excerpt": "SEC Form D filed by K Health, Inc. (NY) — private capital raise (Reg D exempt offering). Total offering: $68,949,885. Form D industry group: Other Technology. Filing date: 2026-08-19.",
+    "hq": "NY",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1689694/000168969426000002/0001689694-26-000002-index.htm",
+    "expected": {
+      "verdict": "out",
+      "reason": "Form D industry group Other Technology (off-vertical)",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "kraft heinz",
+    "name": "Kraft Heinz Co",
+    "bucket": "hq_out_of_territory",
+    "source": "sec_edgar",
+    "event_type": "executive_hire",
+    "title": "SEC 8-K Item 5.02 (Departure/Election of Directors or Officers) — Kraft Heinz Co",
+    "description_excerpt": "SEC 8-K filing by Kraft Heinz Co (PA) — Item 5.02: Departure/Election of Directors or Officers. Filing date: 2026-06-18.",
+    "hq": "Chicago, IL",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "IL"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "la prada buligo",
+    "name": "La Prada Buligo LP",
+    "bucket": "entity_shape",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — La Prada Buligo LP",
+    "description_excerpt": "SEC Form D filed by La Prada Buligo LP (DE) — private capital raise (Reg D exempt offering). Total offering: Indefinite. Form D industry group: Commercial. Filing date: 2026-08-19.",
+    "hq": "DE",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "fund_vehicle"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "lancaster school district",
+    "name": "Lancaster School District",
+    "bucket": "finance_leader_title",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "Lancaster School District hires <b>new CFO</b> to address budget struggles - Yahoo",
+    "description_excerpt": "Lancaster School District hires new CFO to address budget struggles. ... Maine ICE shooting &middot; Reflecting Pool drained again &middot; Who is Darline Graham ...",
+    "hq": "Lancaster, PA",
+    "zi_subindustry": "K-12 Schools",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": "cfo"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "leerink aggregator",
+    "name": "Leerink Aggregator LP",
+    "bucket": "entity_shape",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Leerink Aggregator LP",
+    "description_excerpt": "SEC Form D filed by Leerink Aggregator LP (MA) — private capital raise (Reg D exempt offering). Total offering: $196,515. Form D industry group: Investment Banking. Filing date: 2026-09-01.",
+    "hq": "MA",
+    "zi_subindustry": "Investment Banking",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "fund_vehicle"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "long island select healthcare",
+    "name": "Long Island Select Healthcare Inc.",
+    "bucket": "rep_disposition",
+    "source": "adzuna",
+    "event_type": "finance_seat_open",
+    "title": "Long Island Select Healthcare Inc. hiring: CFO",
+    "description_excerpt": "Job Description Job Description Co-CFO Job Description General Purpose of the Job Provides executive financial leadership to the organization including planning, organizing, coordinating and directing all aspects of the Finance department. Leads FQHC financial strategy including PPS optimization, wr",
+    "hq": "New York, NY",
+    "zi_subindustry": "Non-Profit & Charitable Organizations",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "rep_status": "Out of Alignment"
+    },
+    "provenance": "rep:Out of Alignment",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "lucid",
+    "name": "Lucid",
+    "bucket": "finance_leader_title",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "Lucid names <b>new CFO</b> in latest executive shakeup, misses quarterly delivery estimates",
+    "description_excerpt": "... A Lucid logo on a car during the New York International Auto Show in New York City, U.S., April 1, 2026.",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": "cfo"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "manojo mezcal",
+    "name": "Manojo Mezcal",
+    "bucket": "hq_out_of_territory",
+    "source": "pr_newswire",
+    "event_type": "executive_hire",
+    "title": "Manojo Mezcal Appoints Southern Glazer's Wine &amp; Spirits as New York Distribution Partner",
+    "description_excerpt": "The partnership marks a major milestone for the award-winning artisanal mezcal brand, expanding market access and positioning Manojo for long-term national growth NEW YORK, Aug. 19, 2026 /PRNewswire/ -- Manojo Mezcal is proud to announce that it has appointed Southern Glazer's Wine &...",
+    "hq": "Mexico City, DF",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "maria caruso was",
+    "name": "Maria Caruso was",
+    "bucket": "finance_leader_title",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "47 recent hospital, health system executive moves",
+    "description_excerpt": "Maria Caruso was named CFO of HCA Florida Sarasota Doctors Hospital. 14. Cassandra Davis, MS, was appointed COO of Erie County Medical Center in ...",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": "cfo"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "marvell",
+    "name": "Marvell",
+    "bucket": "hq_out_of_territory",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "Marvell&#39;s <b>new CFO</b> reduces holdings, former CFO files to sell shares | Bitget News",
+    "description_excerpt": "Marvell's new CFO Daniel Durn reduced his holdings by 2250 shares of ... New York Fed President Williams (who holds a permanent FOMC voting ...",
+    "hq": "Santa Clara, CA",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "CA"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "match charter public school",
+    "name": "Match Charter Public School",
+    "bucket": "entity_shape",
+    "source": "adzuna",
+    "event_type": "finance_seat_open",
+    "title": "Match Charter Public School hiring: CFO, Education Nonprofit Driving Student Success (Boston)",
+    "description_excerpt": "Match Charter Public School in Boston seeks a Chief Financial Officer to lead finances and administration, reporting to the CEO and collaborating with senior leadership to advance the school’s mission. The CFO will oversee accounting, payroll, audits and grant compliance, guiding a multi-million dol",
+    "hq": "Boston, MA",
+    "zi_subindustry": "K-12 Schools",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "k12"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "maxima grup uab",
+    "name": "MAXIMA GRUPĖ, UAB",
+    "bucket": "finance_leader_title",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "Petras Jašinskas <b>Appointed CFO</b> of MAXIMA GRUPĖ, UAB, Company&#39;s Board Composition Updated",
+    "description_excerpt": "Petras Jašinskas Appointed CFO of MAXIMA GRUPĖ, UAB, Company's Board Composition Updated ... Kate Spade New York &middot; Lowes &middot; Macy's &middot; Nordstrom &middot; Sephora ...",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": "cfo"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "medic 1 ambulance",
+    "name": "Medic 1 Ambulance",
+    "bucket": "rep_disposition",
+    "source": "adzuna",
+    "event_type": "finance_seat_open",
+    "title": "Medic 1 Ambulance hiring: Fractional Chief Financial Officer (CFO)",
+    "description_excerpt": "The Fractional CFO provides part-time executive financial leadership for a municipal non-profit ambulance organization. This role is responsible for ensuring financial sustainability, regulatory compliance, and strategic alignment with the organization's mission to deliver high-quality emergency med",
+    "hq": null,
+    "zi_subindustry": "Non-Profit & Charitable Organizations",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "rep_status": "Out of Alignment"
+    },
+    "provenance": "rep:Out of Alignment",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "medieval tech",
+    "name": "Medieval Tech Inc.",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Medieval Tech Inc.",
+    "description_excerpt": "SEC Form D filed by Medieval Tech Inc. (DE) — private capital raise (Reg D exempt offering). Total offering: $300,000. Form D industry group: Other Technology. Filing date: 2026-08-20.",
+    "hq": "DE",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2151116/000215111626000001/0002151116-26-000001-index.htm",
+    "expected": {
+      "verdict": "out",
+      "reason": "Form D industry group Other Technology (off-vertical)",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "microvision",
+    "name": "MicroVision",
+    "bucket": "hq_out_of_territory",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "MicroVision Names Christine Chambers as <b>New CFO</b> - The Globe and Mail",
+    "description_excerpt": "MicroVision Names Christine Chambers as New CFO. Tipranks - Tipranks ... NEW YORK, NEW YORK - AUGUST 05: Traders work on the floor of the.",
+    "hq": "Redmond, WA",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "WA"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "ming yang smart energy group",
+    "name": "Ming Yang Smart Energy Group Limited",
+    "bucket": "hq_out_of_territory",
+    "source": "globe_newswire",
+    "event_type": "stable_target",
+    "title": "Ming Yang and Oceanic Wind Announce Signing of Memorandum of Understanding",
+    "description_excerpt": "VANCOUVER, British Columbia, May 28, 2026 (GLOBE NEWSWIRE) -- Ming Yang Smart Energy Group Limited (“Ming Yang”)( (MYSE.L) and Oceanic Wind Energy Inc. (“Oceanic Wind”)(NKW.H) are pleased to announce the signing of a Memorandum of Understanding (“MOU”), a strategic investment partnership for the dev",
+    "hq": "Beijing, China",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "mirai global",
+    "name": "Mirai Global Inc",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Mirai Global Inc",
+    "description_excerpt": "SEC Form D filed by Mirai Global Inc (FL) — private capital raise (Reg D exempt offering). Total offering: $5,000. Form D industry group: Computers. Filing date: 2026-08-31.",
+    "hq": "FL",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2151620/000215162026000001/0002151620-26-000001-index.htm",
+    "expected": {
+      "verdict": "out",
+      "reason": "Form D industry group Computers (off-vertical)",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "monique burr foundation for children",
+    "name": "Monique Burr Foundation for Children",
+    "bucket": "verified",
+    "source": "pr_newswire",
+    "event_type": "executive_hire",
+    "title": "Monique Burr Foundation promotes Ashley Garrett to CEO",
+    "description_excerpt": "Innovative leader appointed to advance MBF's mission, core values and growth JACKSONVILLE, Fla., July 22, 2026 /PRNewswire/ -- The Monique Burr Foundation for Children (MBF) proudly announces the selection of Ashley Garrett to serve as the Chief Executive Officer. Garrett has spent nearly...",
+    "hq": "Jacksonville, FL",
+    "zi_subindustry": "Non-Profit & Charitable Organizations",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "FL",
+      "zi_subindustry": "Non-Profit & Charitable Organizations",
+      "vertical": "Nonprofits & Organizations"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "mudrick capital management",
+    "name": "Mudrick Capital Management",
+    "bucket": "finance_leader_title",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "Mudrick Capital Management Names Scot Pasquale Chief Financial Officer",
+    "description_excerpt": "Mudrick Capital Management Names Scot Pasquale Chief Financial Officer",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": "cfo"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "my code",
+    "name": "My Code",
+    "bucket": "finance_leader_title",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "My Code Names New CRO, CFO, and COO as It Pushes Deeper Into Video",
+    "description_excerpt": "My Code Names New CRO, CFO, and COO as It Pushes Deeper Into Video",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": "cfo"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "new holland capital",
+    "name": "New Holland Capital, LLC",
+    "bucket": "verified",
+    "source": "globe_newswire",
+    "event_type": "stable_target",
+    "title": "AGF Reports May 2026 Assets Under Management and Fee-Earning Assets",
+    "description_excerpt": "TORONTO, June 04, 2026 (GLOBE NEWSWIRE) -- AGF Management Limited (TSX:AGF.B) reported total assets under management (AUM) and fee-earning assets of $74.7 billion as at May 31, 2026. AGF Capital Partners assets under management (AUM) increased during the period, primarily due to the investment in Ne",
+    "hq": "New York, NY",
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "NY",
+      "zi_subindustry": "Venture Capital & Private Equity",
+      "vertical": "Financial Services"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "new hope services",
+    "name": "New Hope Services",
+    "bucket": "verified",
+    "source": "adzuna",
+    "event_type": "finance_seat_open",
+    "title": "New Hope Services Inc hiring: Controller",
+    "description_excerpt": "Overview New Hope Services (NHS) is proudly celebrating 65 years of service to Southern Indiana and our extended service area. NHS has built the capacity to provide a full continuum of human services from child and family support through ability services. Our unique expertise in developing affordabl",
+    "hq": "Jeffersonville, IN",
+    "zi_subindustry": "Non-Profit & Charitable Organizations",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "IN",
+      "zi_subindustry": "Non-Profit & Charitable Organizations",
+      "vertical": "Nonprofits & Organizations"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "new jersey state league of municipalities",
+    "name": "New Jersey State League of Municipalities",
+    "bucket": "entity_shape",
+    "source": "adzuna",
+    "event_type": "finance_seat_open",
+    "title": "New Jersey State League of Municipalities hiring: Strategic Municipal CFO & Financial Leader (Northern)",
+    "description_excerpt": "Princeton seeks an experienced Chief Financial Officer to lead the municipality's finance operations, reporting to the Administrator. The CFO will oversee budgeting, financial planning, debt management, cash handling, and audit coordination, guiding the Finance Department and collaborating with offi",
+    "hq": null,
+    "zi_subindustry": "Membership Organizations",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "government"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "new providence acquisition corp iii cayman",
+    "name": "New Providence Acquisition Corp. III/Cayman",
+    "bucket": "entity_shape",
+    "source": "sec_edgar",
+    "event_type": "merger_acquisition",
+    "title": "SEC 8-K Item 1.01 (Entry into a Material Definitive Agreement) — New Providence Acquisition Corp. III/Cayman",
+    "description_excerpt": "SEC 8-K filing by New Providence Acquisition Corp. III/Cayman (FL) — Item 1.01: Entry into a Material Definitive Agreement. Filing date: 2026-06-08.",
+    "hq": "Palm Beach, FL",
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "spac"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "newlake capital partners",
+    "name": "NewLake Capital Partners, Inc.",
+    "bucket": "verified",
+    "source": "sec_edgar",
+    "event_type": "cfo_hire",
+    "title": "SEC 8-K Item 5.02 (Departure/Election of Directors or Officers) — NewLake Capital Partners, Inc.",
+    "description_excerpt": "SEC 8-K filing by NewLake Capital Partners, Inc. (CT) — Item 5.02: Departure/Election of Directors or Officers. Filing date: 2026-07-15.",
+    "hq": "New Canaan, CT",
+    "zi_subindustry": "Real Estate",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "CT",
+      "zi_subindustry": "Real Estate",
+      "vertical": "Consumer Services"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "nfp",
+    "name": "NFP",
+    "bucket": "hq_out_of_territory",
+    "source": "other",
+    "event_type": "executive_hire",
+    "title": "People Moves: NFP Names Chamberlain to Upstate New York Team",
+    "description_excerpt": "NFP, an Aon company and property/casualty broker and benefits consultant headquartered in New York City, named Fran Chamberlain as senior vice president, risk capital. Chamberlain will manage relationships with new and existing clients and lead operational and strategic initiatives for &#8230;",
+    "hq": "West Lake Hills, TX",
+    "zi_subindustry": "Insurance",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "TX"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "nike",
+    "name": "Nike",
+    "bucket": "hq_out_of_territory",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "Nike Announces <b>New CFO</b> and Finance Leadership Transition - The Globe and Mail",
+    "description_excerpt": "Nike Announces New CFO and Finance Leadership Transition. Tipranks ... The New York Times &middot; Globe Email Newsletters &middot; Gift Subscription. Business ...",
+    "hq": "Beaverton, OR",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "OR"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "nmu educational access network",
+    "name": "NMU Educational Access Network",
+    "bucket": "verified",
+    "source": "globe_newswire",
+    "event_type": "merger_acquisition",
+    "title": "Michigan Broadband to Acquire NMU Educational Access Network, Creating Foundation for Integrated Fiber-and-Wireless Platform",
+    "description_excerpt": "Michigan Broadband to Acquire NMU Educational Access Network, Creating Foundation for Integrated Fiber-and-Wireless Platform",
+    "hq": "Marquette, MI",
+    "zi_subindustry": "Colleges & Universities",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "MI",
+      "zi_subindustry": "Colleges & Universities",
+      "vertical": "Nonprofits & Organizations"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "northern jet",
+    "name": "Northern Jet",
+    "bucket": "finance_leader_title",
+    "source": "pr_newswire",
+    "event_type": "executive_hire",
+    "title": "Northern Jet Promotes Casey Cox to Vice President of Aircraft Management",
+    "description_excerpt": "ORLANDO, Fla., Aug. 20, 2026 /PRNewswire/ -- Northern Jet has promoted Casey Cox to Vice President of Aircraft Management, marking the next chapter for a longtime company leader whose career reflects both the heritage of the organization and its plans for continued growth. In his new...",
+    "hq": "Grand Rapids, MI",
+    "zi_subindustry": "Consumer Services",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "noteworthy ai",
+    "name": "Noteworthy AI Inc",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Noteworthy AI Inc",
+    "description_excerpt": "SEC Form D filed by Noteworthy AI Inc (CT) — private capital raise (Reg D exempt offering). Total offering: $18,234,987. Form D industry group: Other Technology. Filing date: 2026-08-26.",
+    "hq": "CT",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1868380/000186838026000003/0001868380-26-000003-index.htm",
+    "expected": {
+      "verdict": "out",
+      "reason": "Form D industry group Other Technology (off-vertical)",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "nwn to support ai services growth strategy",
+    "name": "NWN to Support AI Services Growth Strategy",
+    "bucket": "finance_leader_title",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "John Feehan <b>Named CFO</b> of NWN to Support AI Services Growth Strategy | citybiz",
+    "description_excerpt": "South Florida &middot; Washington DC &middot; Channels &middot; Q&A &middot; citybiz+ &middot; People &middot; Commercial ... John Feehan Named CFO of NWN to Support AI Services Growth Strategy.",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": "cfo"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "ny drs finco vii",
+    "name": "NY DRS Finco VII, LLC",
+    "bucket": "entity_shape",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — NY DRS Finco VII, LLC",
+    "description_excerpt": "SEC Form D filed by NY DRS Finco VII, LLC (NY) — private capital raise (Reg D exempt offering). Total offering: $1,500,000. Form D industry group: Other Energy. Filing date: 2026-08-31.",
+    "hq": "New York, NY",
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "fund_vehicle"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "oak brook s centerpoint properties",
+    "name": "Oak Brook’s CenterPoint Properties",
+    "bucket": "finance_leader_title",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "Oak Brook’s CenterPoint Properties names EVP and chief financial officer",
+    "description_excerpt": "Oak Brook’s CenterPoint Properties names EVP and chief financial officer",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": "cfo"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "ocean capital acquisition",
+    "name": "Ocean Capital Acquisition Corporation",
+    "bucket": "entity_shape",
+    "source": "globe_newswire",
+    "event_type": "merger_acquisition",
+    "title": "Ocean Capital Acquisition Corporation Announces Closing of $115 Million Initial Public Offering Including Full Exercise of Underwriters’ Over-Allotment Option",
+    "description_excerpt": "New York, New York, June 11, 2026 (GLOBE NEWSWIRE) -- Ocean Capital Acquisition Corporation, a blank check company incorporated in the British Virgin Islands as an exempted company with limited liability (the “Company”), today announced the closing of its previously announced initial public offering",
+    "hq": "Wilmington, DE",
+    "zi_subindustry": "Holding Companies & Conglomerates",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "spac"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "on the goga",
+    "name": "On the Goga, Inc.",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — On the Goga, Inc.",
+    "description_excerpt": "SEC Form D filed by On the Goga, Inc. (PA) — private capital raise (Reg D exempt offering). Total offering: $200,000. Form D industry group: Other. Filing date: 2026-08-10.",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1987303/000198730326000002/0001987303-26-000002-index.htm",
+    "expected": {
+      "verdict": "too_small",
+      "reason": "Form D revenue undisclosed and raise $200,000 < $10,000,000",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "our junk ltd liability",
+    "name": "Our Junk Ltd Liability Co",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Our Junk Ltd Liability Co",
+    "description_excerpt": "SEC Form D filed by Our Junk Ltd Liability Co (NY) — private capital raise (Reg D exempt offering). Total offering: $3,000,000. Form D industry group: Other. Filing date: 2026-08-20.",
+    "hq": "NY",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2151155/000215115526000001/0002151155-26-000001-index.htm",
+    "expected": {
+      "verdict": "too_small",
+      "reason": "Form D revenue undisclosed and raise $3,000,000 < $10,000,000",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "palm beach north chamber",
+    "name": "Palm Beach North Chamber",
+    "bucket": "rep_disposition",
+    "source": "adzuna",
+    "event_type": "finance_seat_open",
+    "title": "Palm Beach North Chamber hiring: Strategic CFO & Growth Architect (Northern)",
+    "description_excerpt": "The Palm Beach North Chamber is seeking an experienced Chief Financial Officer to join our senior leadership. This executive role guides organizational strategy, strengthens financial performance, and partners with the Executive Director and Board to support sustainable growth. The CFO will oversee ",
+    "hq": null,
+    "zi_subindustry": "Membership Organizations",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "rep_status": "Not a Fit"
+    },
+    "provenance": "rep:Not a Fit",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "pardee resources",
+    "name": "Pardee Resources Company",
+    "bucket": "verified",
+    "source": "pr_newswire",
+    "event_type": "merger_acquisition",
+    "title": "Pardee Resources Company To Sell West Virginia Property",
+    "description_excerpt": "RADNOR, Pa., June 15, 2026 /PRNewswire/ -- Pardee Resources Company (OTC: PDER) (the \"Company\") announced today that it has entered into a definitive agreement to sell approximately 2,465 acres of surface and mineral property located in West Virginia for $23,000 per acre or approximately...",
+    "hq": "Radnor, PA",
+    "zi_subindustry": "Holding Companies & Conglomerates",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "PA",
+      "zi_subindustry": "Holding Companies & Conglomerates",
+      "vertical": "Financial Services"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "park heights renaissance",
+    "name": "PARK HEIGHTS RENAISSANCE INC",
+    "bucket": "verified",
+    "source": "adzuna",
+    "event_type": "finance_seat_open",
+    "title": "PARK HEIGHTS RENAISSANCE INC hiring: Chief Financial Officer (CFO)",
+    "description_excerpt": "Job Description Job Description Description: Chief Financial Officer (CFO) Baltimore, Maryland Full-Time | Executive Leadership Salary Range: $160,000 - $190,000 DOE About Park Heights Renaissance (PHR) Park Heights Renaissance (PHR) is a 501(c)(3) nonprofit organization serving as the community qua",
+    "hq": "Baltimore, MD",
+    "zi_subindustry": "Non-Profit & Charitable Organizations",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "MD",
+      "zi_subindustry": "Non-Profit & Charitable Organizations",
+      "vertical": "Nonprofits & Organizations"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "part of the sound ltd liability",
+    "name": "Part of the Sound Ltd Liability Co",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Part of the Sound Ltd Liability Co",
+    "description_excerpt": "SEC Form D filed by Part of the Sound Ltd Liability Co (NY) — private capital raise (Reg D exempt offering). Total offering: $3,400,000. Form D industry group: Other. Filing date: 2026-09-03.",
+    "hq": "New York, NY",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2143526/000214352626000001/0002143526-26-000001-index.htm",
+    "expected": {
+      "verdict": "too_small",
+      "reason": "Form D revenue undisclosed and raise $3,400,000 < $10,000,000",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "pathlight project",
+    "name": "Pathlight Project, Inc.",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Pathlight Project, Inc.",
+    "description_excerpt": "SEC Form D filed by Pathlight Project, Inc. (DE) — private capital raise (Reg D exempt offering). Total offering: $20,000. Form D industry group: Other Technology. Filing date: 2026-08-10.",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2148271/000214827126000001/0002148271-26-000001-index.htm",
+    "expected": {
+      "verdict": "out",
+      "reason": "Form D industry group Other Technology (off-vertical)",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "peachtree hotel partners",
+    "name": "Peachtree Hotel Partners LLC",
+    "bucket": "entity_shape",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Peachtree Hotel Partners LLC",
+    "description_excerpt": "SEC Form D filed by Peachtree Hotel Partners LLC (FL) — private capital raise (Reg D exempt offering). Total offering: $32,000,000. Form D industry group: Other. Filing date: 2026-08-28.",
+    "hq": "FL",
+    "zi_subindustry": "Real Estate",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "lodging"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "peloton",
+    "name": "Peloton",
+    "bucket": "finance_leader_title",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "Exec Moves: Peloton Names <b>New CFO</b> - Athletech News",
+    "description_excerpt": "CDM is headquartered in Foxborough, Mass., with 69 clubs across Massachusetts, New Hampshire, Rhode Island and Vermont, the largest operator of ...",
+    "hq": "New York, NY",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": "cfo"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "pensacola palafox lodging",
+    "name": "PENSACOLA PALAFOX LODGING, LLC",
+    "bucket": "entity_shape",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — PENSACOLA PALAFOX LODGING, LLC",
+    "description_excerpt": "SEC Form D filed by PENSACOLA PALAFOX LODGING, LLC (TN) — private capital raise (Reg D exempt offering). Total offering: $22,500,000. Form D industry group: Commercial. Filing date: 2026-08-06.",
+    "hq": "Pensacola, FL",
+    "zi_subindustry": "Real Estate",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "lodging"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "pentair",
+    "name": "Pentair",
+    "bucket": "hq_out_of_territory",
+    "source": "pr_newswire",
+    "event_type": "cfo_hire",
+    "title": "PNR Stock Drop: Pentair Pool Inventory Destocking Leads to 15% Stock Drop and Securities Fraud Investigation for Investors",
+    "description_excerpt": "BFA Law is investigating whether Pentair committed securities fraud relating to destocking of inventory by its channel partners in Pentair's Pool segment amid Pentair's CFO departure. NEW YORK, Aug. 4, 2026 /PRNewswire/ -- Leading securities law firm Bleichmar Fonti & Auld LLP announces...",
+    "hq": "Golden Valley, MN",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "MN"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "periscope equity",
+    "name": "Periscope Equity",
+    "bucket": "hq_out_of_territory",
+    "source": "other",
+    "event_type": "stable_target",
+    "title": "Care Career picks up Periscope Equity-backed MAS Medical Staffing",
+    "description_excerpt": "Headquartered in Manchester, New Hampshire, MAS Medical Staffing is a travel nurse and allied staffing agency. The post Care Career picks up Periscope Equity-backed MAS Medical Staffing appeared first on PE Hub.",
+    "hq": "Chicago, IL",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "IL"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "pharmacorp rx",
+    "name": "PHARMACORP RX INC.",
+    "bucket": "hq_out_of_territory",
+    "source": "other",
+    "event_type": "merger_acquisition",
+    "title": "PharmaCorp Announces Definitive Agreement to Acquire PharmaChoice Canada Bannered Pharmacy in Ontario",
+    "description_excerpt": "Purchase price of approximately $8.2 million The acquisition represents a continued expansion of PharmaCorp’s footprint in Ontario SASKATOON, Saskatchewan, May 25, 2026 (GLOBE NEWSWIRE) &#8212; PHARMACORP RX INC. (“PharmaCorp” or the “Corporation”) (TSXV: PCRX) a Canadian pharmacy acquisition and ow",
+    "hq": "Saskatoon, SK",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "SK"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "potomac bancshares",
+    "name": "POTOMAC BANCSHARES INC",
+    "bucket": "verified",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — POTOMAC BANCSHARES INC",
+    "description_excerpt": "SEC Form D filed by POTOMAC BANCSHARES INC (WV) — private capital raise (Reg D exempt offering). Total offering: $15,000,000. Form D industry group: Commercial Banking. Filing date: 2026-09-03.",
+    "hq": "Charles Town, WV",
+    "zi_subindustry": "Banking",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "WV",
+      "zi_subindustry": "Banking",
+      "vertical": "Financial Services"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "primary bank",
+    "name": "Primary Bank",
+    "bucket": "verified",
+    "source": "pr_newswire",
+    "event_type": "merger_acquisition",
+    "title": "Hometown Financial Group, Inc. Announces Agreement to Acquire Primary Bank and Plan for Mutual-to-Stock Conversion",
+    "description_excerpt": "EASTHAMPTON, Mass. and BEDFORD, N.H., July 6, 2026 /PRNewswire/ -- Hometown Financial Group, Inc. (\"Hometown\"), the holding company for bankESB, bankHometown, and TruNorth Bank (collectively referred to as \"TruNorth Bank\"), today announced that it has entered into a merger agreement to...",
+    "hq": "Bedford, NH",
+    "zi_subindustry": "Banking",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "NH",
+      "zi_subindustry": "Banking",
+      "vertical": "Financial Services"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "prosentra",
+    "name": "ProSentra, Inc.",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — ProSentra, Inc.",
+    "description_excerpt": "SEC Form D filed by ProSentra, Inc. (DE) — private capital raise (Reg D exempt offering). Total offering: Indefinite. Form D industry group: Computers. Filing date: 2026-08-17.",
+    "hq": "DE",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2150581/000215058126000001/0002150581-26-000001-index.htm",
+    "expected": {
+      "verdict": "out",
+      "reason": "Form D industry group Computers (off-vertical)",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "protect progress",
+    "name": "Protect Progress",
+    "bucket": "tombstone_reason",
+    "source": "other",
+    "event_type": "stable_target",
+    "title": "Crypto PAC-backed Adrian Boafo secures victory in Maryland Democratic primary",
+    "description_excerpt": "Boafo received substantial backing from Protect Progress, a super PAC associated with Fairshake, according to FEC filings.",
+    "hq": "Washington, DC",
+    "zi_subindustry": "Non-Profit & Charitable Organizations",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "reason_prefix": "no_workable_account",
+      "roles": [
+        "Partner",
+        "Partner"
+      ],
+      "workable": false
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "providence equity partners",
+    "name": "Providence Equity Partners",
+    "bucket": "verified",
+    "source": "other",
+    "event_type": "merger_acquisition",
+    "title": "BNPP AM Prime eyes up to five European GP stakes from current vintage; Providence to acquire valuation and property risk data biz",
+    "description_excerpt": "Providence Equity Partners announced on Friday it has entered into an agreement to acquire Hometrack. The post BNPP AM Prime eyes up to five European GP stakes from current vintage; Providence to acquire valuation and property risk data biz appeared first on PE Hub.",
+    "hq": "Providence, RI",
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "RI",
+      "zi_subindustry": "Venture Capital & Private Equity",
+      "vertical": "Financial Services"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "qapture investments",
+    "name": "Qapture Investments",
+    "bucket": "hq_out_of_territory",
+    "source": "pr_newswire",
+    "event_type": "merger_acquisition",
+    "title": "Qapture Investments Establishes Investment Manager and Acquires Hermetik Trading's DeFi Strategies; Appoints Brendan MacNeil as Head of DeFi",
+    "description_excerpt": "HAMILTON, Bermuda, Sept. 2, 2026 /PRNewswire/ -- Qapture Investments, a Bermuda-based investment manager led by Frederick Pye, founder of 3iQ Corp, today announced the completion of two strategic transactions: the acquisition of Flammarion Partners Ltd., a British Virgin Islands Approved...",
+    "hq": "Hamilton, Bermuda",
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "rainier acquisition",
+    "name": "Rainier Acquisition Corporation",
+    "bucket": "entity_shape",
+    "source": "globe_newswire",
+    "event_type": "merger_acquisition",
+    "title": "Rainier Acquisition Corporation Announces Full Exercise of Over-Allotment Option, Bringing Total IPO Gross Proceeds to $86,250,000",
+    "description_excerpt": "NEW YORK, NY, Sept. 02, 2026 (GLOBE NEWSWIRE) -- Rainier Acquisition Corporation (the \"Company\") announced today that the underwriter of its previously announced initial public offering has exercised in full its over-allotment option to purchase an additional 1,125,000 units at a price of $10.00 per",
+    "hq": "New York, NY",
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "spac"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "range capital acquisition",
+    "name": "Range Capital Acquisition Corp.",
+    "bucket": "entity_shape",
+    "source": "sec_edgar",
+    "event_type": "merger_acquisition",
+    "title": "SEC 8-K Item 1.01 (Entry into a Material Definitive Agreement) — Range Capital Acquisition Corp.",
+    "description_excerpt": "SEC 8-K filing by Range Capital Acquisition Corp. (NY) — Item 1.01: Entry into a Material Definitive Agreement. Filing date: 2026-06-25.",
+    "hq": "Cold Spring Harbor, NY",
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "spac"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "real asset acquisition",
+    "name": "Real Asset Acquisition Corp.",
+    "bucket": "entity_shape",
+    "source": "sec_edgar",
+    "event_type": "merger_acquisition",
+    "title": "SEC 8-K Item 2.01 (Completion of Acquisition or Disposition) — Real Asset Acquisition Corp.",
+    "description_excerpt": "SEC 8-K filing by Real Asset Acquisition Corp. (NJ) — Item 2.01: Completion of Acquisition or Disposition. Filing date: 2026-07-08.",
+    "hq": "Princeton, NJ",
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "spac"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "rebel rebel",
+    "name": "REBEL REBEL",
+    "bucket": "verified",
+    "source": "adzuna",
+    "event_type": "finance_seat_open",
+    "title": "REBEL REBEL hiring: Controller (Toronto)",
+    "description_excerpt": "About REBEL REBEL is the first and largest tech platform transforming retail’s $1 trillion returns problem into a smarter, more sustainable model. As the only Certified B Corporation returns recommerce marketplace backed by top-tier investors, we’re leading the returns revolution—partnering with ove",
+    "hq": "Kannapolis, NC",
+    "zi_subindustry": "Auctions",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "NC",
+      "zi_subindustry": "Auctions",
+      "vertical": "Consumer Services"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "regional medical center has",
+    "name": "Regional Medical Center has",
+    "bucket": "finance_leader_title",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "<b>Tennessee</b> hospital taps CFO",
+    "description_excerpt": "Tennessee hospital taps CFO Greg ... Cookeville (Tenn.) Regional Medical Center has named Greg Anderson its new CFO, The UC Now reported July 21.",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": "cfo"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "reinsurance group of america",
+    "name": "Reinsurance Group Of America",
+    "bucket": "hq_out_of_territory",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "Reinsurance Group Of America (RGA) Appoints <b>New CFO</b> As Board And Executive Changes Build",
+    "description_excerpt": "Reinsurance Group Of America (RGA) Appoints New CFO As Board And Executive Changes Build ... Kate Spade New York &middot; Lowes &middot; Macy's &middot; Nordstrom &middot; Sephora ...",
+    "hq": "Chesterfield, MO",
+    "zi_subindustry": "Insurance",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "MO"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "reliance global group",
+    "name": "Reliance Global Group, Inc.",
+    "bucket": "verified",
+    "source": "sec_edgar",
+    "event_type": "executive_hire",
+    "title": "SEC 8-K Item 5.02 (Departure/Election of Directors or Officers) — Reliance Global Group, Inc.",
+    "description_excerpt": "SEC 8-K filing by Reliance Global Group, Inc. (NJ) — Item 5.02: Departure/Election of Directors or Officers. Filing date: 2026-07-29.",
+    "hq": "Lakewood, NJ",
+    "zi_subindustry": "Insurance",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "NJ",
+      "zi_subindustry": "Insurance",
+      "vertical": "Financial Services"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "resha investor",
+    "name": "Resha Investor, LLC",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Resha Investor, LLC",
+    "description_excerpt": "SEC Form D filed by Resha Investor, LLC (TN) — private capital raise (Reg D exempt offering). Total offering: $4,490,000. Form D industry group: Commercial. Filing date: 2026-09-02.",
+    "hq": "TN",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2152913/000215291326000001/0002152913-26-000001-index.htm",
+    "expected": {
+      "verdict": "too_small",
+      "reason": "Form D revenue undisclosed and raise $4,490,000 < $10,000,000",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "resources connection",
+    "name": "Resources Connection",
+    "bucket": "finance_leader_title",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "Resources Connection Names Chief AI Officer Interim CFO",
+    "description_excerpt": "Resources Connection Names Chief AI Officer Interim CFO",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": "cfo"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "rhode island department of environmental management",
+    "name": "Rhode Island Department of Environmental Management",
+    "bucket": "entity_shape",
+    "source": "adzuna",
+    "event_type": "finance_seat_open",
+    "title": "Rhode Island Department of Environmental Management hiring: Associate Controller",
+    "description_excerpt": "Department Department of Administration Division Accounting/Finance Salary $150,262.00 - $169,357.00 Job Profile JC-02643100-99 - Associate Controller (Non-Union Executive Branch) Scheduled Work Days & Work Hours Monday - Friday; 8:30 am - 4:00 pm Job Requisition Number JR103702 ASSOCIATE CONTROLLER",
+    "hq": null,
+    "zi_subindustry": "Non-Profit & Charitable Organizations",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "government"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "river associates investments",
+    "name": "River Associates Investments, L.P.",
+    "bucket": "entity_shape",
+    "source": "pr_newswire",
+    "event_type": "merger_acquisition",
+    "title": "River Associates Announces Acquisition of Horsepower Automotive Group",
+    "description_excerpt": "Marking Our Third Platform in the Automotive Aftermarket CHATTANOOGA, Tenn., July 8, 2026 /PRNewswire/ -- River Associates Investments, L.P. (\"River Associates\"), a longstanding lower middle market private equity firm based in Chattanooga, TN, is pleased to announce the successful...",
+    "hq": "Chattanooga, TN",
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "fund_vehicle"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "roberts agency",
+    "name": "The Roberts Agency, Inc.",
+    "bucket": "verified",
+    "source": "other",
+    "event_type": "merger_acquisition",
+    "title": "King Risk Partners Acquires Construction Insurance Specialist",
+    "description_excerpt": "King Risk Partners has acquired The Roberts Agency, Inc., an independent insurance agency specializing in the construction industry that is based in Bloomfield, Connecticut. This partnership strengthens King Risk Partners&#8217; presence in Connecticut while expanding its construction insurance and ",
+    "hq": "Connecticut, CT",
+    "zi_subindustry": "Insurance",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "CT",
+      "zi_subindustry": "Insurance",
+      "vertical": "Financial Services"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "sc greenville meadow",
+    "name": "SC Greenville Meadow, LLC",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — SC Greenville Meadow, LLC",
+    "description_excerpt": "SEC Form D filed by SC Greenville Meadow, LLC (SC) — private capital raise (Reg D exempt offering). Total offering: $3,000,000. Form D industry group: Commercial. Filing date: 2026-08-12.",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2144925/000214492526000001/0002144925-26-000001-index.htm",
+    "expected": {
+      "verdict": "too_small",
+      "reason": "Form D revenue undisclosed and raise $3,000,000 < $10,000,000",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "serenx",
+    "name": "SerenX, Inc.",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — SerenX, Inc.",
+    "description_excerpt": "SEC Form D filed by SerenX, Inc. (FL) — private capital raise (Reg D exempt offering). Total offering: $2,305,500. Form D industry group: Other. Filing date: 2026-09-03.",
+    "hq": "FL",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2153053/000215305326000001/0002153053-26-000001-index.htm",
+    "expected": {
+      "verdict": "too_small",
+      "reason": "Form D revenue undisclosed and raise $2,305,500 < $10,000,000",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "sippi kids",
+    "name": "SIPPI KIDS, LLC",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — SIPPI KIDS, LLC",
+    "description_excerpt": "SEC Form D filed by SIPPI KIDS, LLC (NJ) — private capital raise (Reg D exempt offering). Total offering: $400,000. Form D industry group: Other. Filing date: 2026-08-25.",
+    "hq": "NJ",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2150872/000215087226000001/0002150872-26-000001-index.htm",
+    "expected": {
+      "verdict": "too_small",
+      "reason": "Form D revenue undisclosed and raise $400,000 < $10,000,000",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "six nations of the grand river",
+    "name": "Six Nations of the Grand River",
+    "bucket": "entity_shape",
+    "source": "adzuna",
+    "event_type": "finance_seat_open",
+    "title": "Six Nations hiring: 145-26-1 EA to CFO",
+    "description_excerpt": "Applications will be received by Six Nations of the Grand River and Grand River Employment & Training (GREAT) up until 4:00 p.m. EST, Wednesday , August 19, 2026, for the EA to CFO with Finance, Core Services . The Six Nations of the Grand River Application for Employment Form, Job Posting and Job D",
+    "hq": "Ohsweken, ON",
+    "zi_subindustry": "Membership Organizations",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "government"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "slr secured lending partners",
+    "name": "SLR SECURED LENDING PARTNERS, LLC",
+    "bucket": "verified",
+    "source": "sec_iapd",
+    "event_type": "expansion",
+    "title": "New SEC-registered investment adviser: SLR SECURED LENDING PARTNERS, LLC (New York, NY)",
+    "description_excerpt": "SLR SECURED LENDING PARTNERS, LLC (NY) registered with the SEC as an investment adviser on July 22, 2026 (SEC file no. 801-136840; CRD 343062). Legal name: SLR SECURED LENDING PARTNERS, LLC. Regulatory assets under management: not reported. Employees: 65. Website: https://www.slrcapitalpartners.com.",
+    "hq": "NY",
+    "zi_subindustry": "Lending & Brokerage",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "NY",
+      "zi_subindustry": "Lending & Brokerage",
+      "vertical": "Financial Services"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "solo avt investment",
+    "name": "SOLO AVT Investment, LLC",
+    "bucket": "tombstone_reason",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — SOLO AVT Investment, LLC",
+    "description_excerpt": "SEC Form D filed by SOLO AVT Investment, LLC (PA) — private capital raise (Reg D exempt offering). Total offering: $2,000,000. Form D industry group: Investing. Filing date: 2026-08-19.",
+    "hq": "PA",
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "reason_prefix": "no_workable_account",
+      "roles": [
+        "Investor"
+      ],
+      "workable": false
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "southeast elevator",
+    "name": "Southeast Elevator",
+    "bucket": "verified",
+    "source": "adzuna",
+    "event_type": "finance_seat_open",
+    "title": "Southeast Elevator hiring: Controller",
+    "description_excerpt": "Description: The Controller position is a key leadership role within our growing finance organization. The Company operates across the Southeastern United States and continues to expand through both organic growth and strategic acquisitions. This role will oversee financial reporting, internal contr",
+    "hq": "Fort Pierce, FL",
+    "zi_subindustry": "Repair Services",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "FL",
+      "zi_subindustry": "Repair Services",
+      "vertical": "Consumer Services"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "sparc ai",
+    "name": "SPARC AI Inc.",
+    "bucket": "hq_out_of_territory",
+    "source": "globe_newswire",
+    "event_type": "executive_hire",
+    "title": "Sparc AI Option Grant",
+    "description_excerpt": "VANCOUVER, British Columbia, Aug. 25, 2026 (GLOBE NEWSWIRE) -- SPARC AI Inc. (CSE: SPAI; OTCQB: SPAIF; Frankfurt: 5OV0) (“SPARC AI” or the “Company”) announces the granting of incentive stock options to directors and CEO of the company pursuant to the company's stock option plan.",
+    "hq": "Vancouver, BC",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "BC"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "squary",
+    "name": "Squary, Inc.",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Squary, Inc.",
+    "description_excerpt": "SEC Form D filed by Squary, Inc. (PA) — private capital raise (Reg D exempt offering). Total offering: $2,000,000. Form D industry group: Other Technology. Filing date: 2026-08-06.",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2148990/000214899026000001/0002148990-26-000001-index.htm",
+    "expected": {
+      "verdict": "out",
+      "reason": "Form D industry group Other Technology (off-vertical)",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "stewardwell",
+    "name": "STEWARDWELL LLC",
+    "bucket": "verified",
+    "source": "sec_iapd",
+    "event_type": "expansion",
+    "title": "New SEC-registered investment adviser: STEWARDWELL LLC (Franklin, TN)",
+    "description_excerpt": "STEWARDWELL LLC (TN) registered with the SEC as an investment adviser on July 1, 2026 (SEC file no. 801-136602; CRD 342950). Legal name: STEWARDWELL LLC. Regulatory assets under management: $0. Employees: 19. Website: https://stewardwellwp.com. Estimated revenue about $7.6M (basis: 19 employees x $4",
+    "hq": "TN",
+    "zi_subindustry": "Lending & Brokerage",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "TN",
+      "zi_subindustry": "Lending & Brokerage",
+      "vertical": "Financial Services"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "stout holdings management aggregator ii",
+    "name": "Stout Holdings Management Aggregator II, L.P.",
+    "bucket": "tombstone_reason",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Stout Holdings Management Aggregator II, L.P.",
+    "description_excerpt": "SEC Form D filed by Stout Holdings Management Aggregator II, L.P. (NY) — private capital raise (Reg D exempt offering). Total offering: Indefinite. Form D industry group: Other. Filing date: 2026-08-12.",
+    "hq": "New York, NY",
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "reason_prefix": "no_workable_account",
+      "roles": [
+        "Lead Investor"
+      ],
+      "workable": false
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "stout holdings management aggregator iii",
+    "name": "Stout Holdings Management Aggregator III, L.P.",
+    "bucket": "tombstone_reason",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Stout Holdings Management Aggregator III, L.P.",
+    "description_excerpt": "SEC Form D filed by Stout Holdings Management Aggregator III, L.P. (NY) — private capital raise (Reg D exempt offering). Total offering: Indefinite. Form D industry group: Other. Filing date: 2026-08-12.",
+    "hq": "New York, NY",
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "reason_prefix": "no_workable_account",
+      "roles": [
+        "Investor"
+      ],
+      "workable": false
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "suic worldwide holdings",
+    "name": "SUIC Worldwide Holdings Ltd.",
+    "bucket": "verified",
+    "source": "sec_edgar",
+    "event_type": "merger_acquisition",
+    "title": "SEC 8-K Item 2.01 (Completion of Acquisition or Disposition) — SUIC Worldwide Holdings Ltd.",
+    "description_excerpt": "SEC 8-K filing by SUIC Worldwide Holdings Ltd. (NY) — Item 2.01: Completion of Acquisition or Disposition. Filing date: 2026-07-10.",
+    "hq": "Flushing, NY",
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "NY",
+      "zi_subindustry": "Venture Capital & Private Equity",
+      "vertical": "Financial Services"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "sunpower",
+    "name": "SunPower",
+    "bucket": "finance_leader_title",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "SunPower Reports Inducement Grants for <b>New CFO</b> - Yahoo Finance",
+    "description_excerpt": "SunPower Reports Inducement Grants for New CFO ... Kate Spade New York &middot; Lowes &middot; Macy's &middot; Nordstrom &middot; Sephora &middot; Sur La Table &middot; Target ...",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": "cfo"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "sycamore partners",
+    "name": "Sycamore Partners",
+    "bucket": "verified",
+    "source": "pr_newswire",
+    "event_type": "merger_acquisition",
+    "title": "Spencer Spirit Holdings, Inc. Completes Acquisition of Hot Topic, Inc.",
+    "description_excerpt": "CITY OF INDUSTRY, Calif. and EGG HARBOR TOWNSHIP, N.J., Sept. 2, 2026 /PRNewswire/ -- Spencer Spirit Holdings, Inc. announced today that it has completed its acquisition of Hot Topic, Inc. and its portfolio of brands: Hot Topic, BoxLunch, and Her Universe from Sycamore Partners. This...",
+    "hq": "New York, NY",
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "NY",
+      "zi_subindustry": "Venture Capital & Private Equity",
+      "vertical": "Financial Services"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "technology and telecommunication acquisition",
+    "name": "Technology & Telecommunication Acquisition Corp",
+    "bucket": "entity_shape",
+    "source": "sec_edgar",
+    "event_type": "merger_acquisition",
+    "title": "SEC 8-K Item 1.01 (Entry into a Material Definitive Agreement) — Technology & Telecommunication Acquisition Corp",
+    "description_excerpt": "SEC 8-K filing by Technology & Telecommunication Acquisition Corp (FL) — Item 1.01: Entry into a Material Definitive Agreement. Filing date: 2026-08-26.",
+    "hq": "FL",
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "spac"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "telos artifex",
+    "name": "Telos Artifex LLC",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Telos Artifex LLC",
+    "description_excerpt": "SEC Form D filed by Telos Artifex LLC (NY) — private capital raise (Reg D exempt offering). Total offering: $3,552,500. Form D industry group: Other. Filing date: 2026-09-01.",
+    "hq": "New York, NY",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2136482/000213648226000002/0002136482-26-000002-index.htm",
+    "expected": {
+      "verdict": "too_small",
+      "reason": "Form D revenue undisclosed and raise $3,552,500 < $10,000,000",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "terravest industries",
+    "name": "TerraVest Industries Inc.",
+    "bucket": "hq_out_of_territory",
+    "source": "other",
+    "event_type": "merger_acquisition",
+    "title": "Kalloghlian Myers LLP: Potential Investor Class Action Against TerraVest Industries Inc.",
+    "description_excerpt": "TORONTO &#8212; Kalloghlian Myers LLP is investigating a potential investor class action against TerraVest Industries Inc. (TSE: TVK). On June 5, 2026, TerraVest shares fell 31.6% following allegations that executive chairman Charles Pellerin tipped off family members and acquaintances ahead of a ma",
+    "hq": "Vegreville, AB",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "AB"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "these ceos are fueling its billionaire boom miami was just",
+    "name": "These CEOs are fueling its billionaire boom. Miami was just",
+    "bucket": "tombstone_reason",
+    "source": "other",
+    "event_type": "executive_hire",
+    "title": "Miami is now the second-most expensive metro area in the US. These CEOs are fueling its billionaire boom.",
+    "description_excerpt": "Miami was just named the second-most expensive metro area in the US. See some of the biggest companies and CEOs shaping its billionaire migration.",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "reason_prefix": "bad_company_name",
+      "bad_company_name": true
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "total benefits advisors",
+    "name": "Total Benefits Advisors",
+    "bucket": "verified",
+    "source": "other",
+    "event_type": "merger_acquisition",
+    "title": "NFP Acquires Ohio’s Total Benefit Advisors",
+    "description_excerpt": "NFP, an Aon company and leading property and casualty (P&#38;C) broker and benefits consultant, today announced the acquisition of Total Benefits Advisors, a Cleveland, Ohio-based advisory firm specializing in retirement services and employee benefits solutions for business owners and wealth &#8230;",
+    "hq": "Beachwood, OH",
+    "zi_subindustry": "Insurance",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "OH",
+      "zi_subindustry": "Insurance",
+      "vertical": "Financial Services"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "townhome health",
+    "name": "TownHome Health Inc.",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — TownHome Health Inc.",
+    "description_excerpt": "SEC Form D filed by TownHome Health Inc. (NY) — private capital raise (Reg D exempt offering). Total offering: $2,000,000. Form D industry group: Other Technology. Filing date: 2026-08-26.",
+    "hq": "NY",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1983565/000198356526000002/0001983565-26-000002-index.htm",
+    "expected": {
+      "verdict": "out",
+      "reason": "Form D industry group Other Technology (off-vertical)",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "tpg twin brook capital income fund",
+    "name": "TPG Twin Brook Capital Income Fund",
+    "bucket": "entity_shape",
+    "source": "sec_edgar",
+    "event_type": "merger_acquisition",
+    "title": "SEC 8-K Item 1.01 (Entry into a Material Definitive Agreement) — TPG Twin Brook Capital Income Fund",
+    "description_excerpt": "SEC 8-K filing by TPG Twin Brook Capital Income Fund (NY) — Item 1.01: Entry into a Material Definitive Agreement. Filing date: 2026-08-25.",
+    "hq": "New York, NY",
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "fund_vehicle"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "transformation 9",
+    "name": "Transformation 9, LLC",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Transformation 9, LLC",
+    "description_excerpt": "SEC Form D filed by Transformation 9, LLC (AL) — private capital raise (Reg D exempt offering). Total offering: $5,750,000. Form D industry group: Other Technology. Filing date: 2026-08-31.",
+    "hq": "AL",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2151720/000215172026000001/0002151720-26-000001-index.htm",
+    "expected": {
+      "verdict": "out",
+      "reason": "Form D industry group Other Technology (off-vertical)",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "translational development acquisition",
+    "name": "Translational Development Acquisition Corp.",
+    "bucket": "entity_shape",
+    "source": "sec_edgar",
+    "event_type": "merger_acquisition",
+    "title": "SEC 8-K Item 1.01 (Entry into a Material Definitive Agreement) — Translational Development Acquisition Corp.",
+    "description_excerpt": "SEC 8-K filing by Translational Development Acquisition Corp. (NY) — Item 1.01: Entry into a Material Definitive Agreement. Filing date: 2026-07-27.",
+    "hq": "New York, NY",
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "spac"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "trayam",
+    "name": "TRAYAM INC.",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — TRAYAM INC.",
+    "description_excerpt": "SEC Form D filed by TRAYAM INC. (DE) — private capital raise (Reg D exempt offering). Total offering: $4,301. Form D industry group: Other. Filing date: 2026-08-06.",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2147398/000214739826000002/0002147398-26-000002-index.htm",
+    "expected": {
+      "verdict": "too_small",
+      "reason": "Form D revenue undisclosed and raise $4,301 < $10,000,000",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "tritonpoint",
+    "name": "TritonPoint",
+    "bucket": "verified",
+    "source": "other",
+    "event_type": "merger_acquisition",
+    "title": "Deals &amp; Moves: Beacon Pointe Acquires $360M Female-Founded RIA",
+    "description_excerpt": "Also, Dynasty-backed TritonPoint adds again, Carson Group fully acquires another partner firm, and IBD Arkadios adds a $300M team in Alabama.",
+    "hq": "Washington, DC",
+    "zi_subindustry": "Investment Banking",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "DC",
+      "zi_subindustry": "Investment Banking",
+      "vertical": "Financial Services"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "tusk practice sales",
+    "name": "TUSK Practice Sales",
+    "bucket": "tombstone_reason",
+    "source": "pr_newswire",
+    "event_type": "merger_acquisition",
+    "title": "TUSK Practice Sales Provides Guidance on Doctor-to-Doctor Transitions for Dental Practice Owners",
+    "description_excerpt": "The sell-side exclusive healthcare M&A advisory firm, with more than $1.5 billion in completed transactions, examines why the next generation of dentists is reshaping the private practice ownership landscape. CHARLOTTE, N.C., Aug. 19, 2026 /PRNewswire/ -- TUSK Practice Sales (\"TUSK\"), a...",
+    "hq": "Charlotte, NC",
+    "zi_subindustry": "Investment Banking",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "reason_prefix": "no_workable_account",
+      "roles": [
+        "Advisor"
+      ],
+      "workable": false
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "twenty four wealth ria",
+    "name": "TWENTY FOUR WEALTH RIA, LLC",
+    "bucket": "verified",
+    "source": "sec_iapd",
+    "event_type": "expansion",
+    "title": "New SEC-registered investment adviser: TWENTY FOUR WEALTH (Darien, CT)",
+    "description_excerpt": "TWENTY FOUR WEALTH (CT) registered with the SEC as an investment adviser on August 14, 2026 (SEC file no. 801-137083; CRD 343559). Legal name: TWENTY FOUR WEALTH RIA, LLC. Regulatory assets under management: $0. Employees: 31. Website: https://www.twentyfourwealth.com. Estimated revenue about $12.4M",
+    "hq": "Darien, CT",
+    "zi_subindustry": "Lending & Brokerage",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "CT",
+      "zi_subindustry": "Lending & Brokerage",
+      "vertical": "Financial Services"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "united way miami",
+    "name": "United Way Miami",
+    "bucket": "verified",
+    "source": "adzuna",
+    "event_type": "finance_seat_open",
+    "title": "United Way Miami hiring: VP, Accounting and Controller- Hybrid",
+    "description_excerpt": "Full-time Description Salary Range: The salary for this position is competitive and commensurate with experience and qualifications Hybrid Schedule: 2 days from home and 3 days on-site Benefits (The Good Stuff) 3 WKS Vacation Paid* 12 Paid Holidays 12 PTO Paid Days Competitive Health Benefits Packag",
+    "hq": "Miami, FL",
+    "zi_subindustry": "Non-Profit & Charitable Organizations",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "FL",
+      "zi_subindustry": "Non-Profit & Charitable Organizations",
+      "vertical": "Nonprofits & Organizations"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "usa made in america",
+    "name": "USA Made in America Inc.",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — USA Made in America Inc.",
+    "description_excerpt": "SEC Form D filed by USA Made in America Inc. (FL) — private capital raise (Reg D exempt offering). Total offering: $10,000,000. Form D industry group: Other Technology. Filing date: 2026-08-20.",
+    "hq": "FL",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2150812/000215081226000001/0002150812-26-000001-index.htm",
+    "expected": {
+      "verdict": "out",
+      "reason": "Form D industry group Other Technology (off-vertical)",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "vanta",
+    "name": "Vanta",
+    "bucket": "hq_out_of_territory",
+    "source": "other",
+    "event_type": "executive_hire",
+    "title": "Vanta Announces Receipt of Distillery Manufacturer Licence, Expanding Manufacturing and Commercialization Capabilities at its British Columbia Beverage Manufacturing Facility",
+    "description_excerpt": "News Release Highlights:Vanta has been issued a Distillery Manufacturer Licence from the British Columbia Liquor and Cannabis Regulation Branch (LCRB), authorizing commercial spirits manufacturing within a dedicated licensed production area at the Company's 40,000-square-foot British Columbia bevera",
+    "hq": "British Columbia, BC",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "BC"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "vf",
+    "name": "VF",
+    "bucket": "hq_out_of_territory",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "VF Names <b>New CFO</b> as Q1 Outlook Improves - The Globe and Mail",
+    "description_excerpt": "VF Names New CFO as Q1 Outlook Improves. Tipranks - Tipranks - Thu ... The New York Times &middot; Globe Email Newsletters &middot; Gift Subscription. Business ...",
+    "hq": "Denver, CO",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "CO"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "vice president kamala d harris to",
+    "name": "Vice President Kamala D. Harris to",
+    "bucket": "tombstone_reason",
+    "source": "other",
+    "event_type": "executive_hire",
+    "title": "Vice President Kamala D. Harris to Join National Bar Association President Ashley L. Upkins for One-On-One Conversation at 101st Annual Convention",
+    "description_excerpt": "Vice President Harris Joins President Upkins for a Candid Lawyer‑to‑Lawyer Discussion at the Annual Convention in Nashville",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "reason_prefix": "bad_company_name",
+      "bad_company_name": true
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "victory capital holdings",
+    "name": "Victory Capital Holdings, Inc.",
+    "bucket": "hq_out_of_territory",
+    "source": "sec_edgar",
+    "event_type": "merger_acquisition",
+    "title": "SEC 8-K Item 1.01 (Entry into a Material Definitive Agreement) — Victory Capital Holdings, Inc.",
+    "description_excerpt": "SEC 8-K filing by Victory Capital Holdings, Inc. (OH) — Item 1.01: Entry into a Material Definitive Agreement. Filing date: 2026-05-21.",
+    "hq": "San Antonio, TX",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "TX"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "viking acquisition corp ii",
+    "name": "Viking Acquisition Corp. II",
+    "bucket": "entity_shape",
+    "source": "sec_edgar",
+    "event_type": "merger_acquisition",
+    "title": "SEC 8-K Item 1.01 (Entry into a Material Definitive Agreement) — Viking Acquisition Corp. II",
+    "description_excerpt": "SEC 8-K filing by Viking Acquisition Corp. II (NY) — Item 1.01: Entry into a Material Definitive Agreement. Filing date: 2026-08-19.",
+    "hq": "NY",
+    "zi_subindustry": "Venture Capital & Private Equity",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "spac"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "visalaw ventures",
+    "name": "Visalaw Ventures, Inc.",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Visalaw Ventures, Inc.",
+    "description_excerpt": "SEC Form D filed by Visalaw Ventures, Inc. (TN) — private capital raise (Reg D exempt offering). Total offering: $1,000,000. Form D industry group: Other Technology. Filing date: 2026-09-04.",
+    "hq": "TN",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2055610/000205561026000003/0002055610-26-000003-index.htm",
+    "expected": {
+      "verdict": "out",
+      "reason": "Form D industry group Other Technology (off-vertical)",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "w n tuscano agency",
+    "name": "W.N. Tuscano Agency, Inc.",
+    "bucket": "verified",
+    "source": "pr_newswire",
+    "event_type": "merger_acquisition",
+    "title": "Arthur J. Gallagher &amp; Co. Acquires W.N. Tuscano Agency, Inc.",
+    "description_excerpt": "ROLLING MEADOWS, Ill., July 21, 2026 /PRNewswire/ -- Arthur J. Gallagher & Co. today announced that its U.S. wholesale brokerage, binding authority and programs division, Risk Placement Services, Inc. (RPS), has acquired Greensburg, Pennsylvania-based W.N. Tuscano Agency, Inc. (Tuscano)....",
+    "hq": "Greensburg, PA",
+    "zi_subindustry": "Insurance",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "PA",
+      "zi_subindustry": "Insurance",
+      "vertical": "Financial Services"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "warren county community services",
+    "name": "Warren County Community Services, Inc.",
+    "bucket": "rep_disposition",
+    "source": "adzuna",
+    "event_type": "finance_seat_open",
+    "title": "Warren County Community Services, Inc. hiring: Chief Financial Officer CFO",
+    "description_excerpt": "Job Description Job Description The Chief Financial Officer (CFO) provides strategic leadership and oversight of all financial operations for Warren County Community Services, Inc. (WCCS), including affiliated entities and HUD-funded properties. The CFO ensures fiscal integrity, regulatory complianc",
+    "hq": null,
+    "zi_subindustry": "Non-Profit & Charitable Organizations",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "rep_status": "Out of Alignment"
+    },
+    "provenance": "rep:Out of Alignment",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "wedgewood weddings",
+    "name": "Wedgewood Weddings",
+    "bucket": "hq_out_of_territory",
+    "source": "other",
+    "event_type": "merger_acquisition",
+    "title": "Wedgewood Weddings Expands Greater Charlotte Portfolio with Acquisition of Separk Mansion",
+    "description_excerpt": "Historic Gastonia estate joins Wedgewood Weddings, bringing full-service planning to one of the Charlotte region's most distinguished event venues",
+    "hq": "Phoenix, AZ",
+    "zi_subindustry": "Consumer Services",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "AZ"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "wellious",
+    "name": "Wellious Inc.",
+    "bucket": "structured",
+    "source": "sec_edgar",
+    "event_type": "funding",
+    "title": "SEC Form D (Private Capital Raise) — Wellious Inc.",
+    "description_excerpt": "SEC Form D filed by Wellious Inc. (FL) — private capital raise (Reg D exempt offering). Total offering: $3,884,137. Form D industry group: Retailing. Filing date: 2026-08-26.",
+    "hq": "FL",
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2151166/000215116626000001/0002151166-26-000001-index.htm",
+    "expected": {
+      "verdict": "out",
+      "reason": "Form D industry group Retailing (off-vertical)",
+      "revenue_segment": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "west creek financial",
+    "name": "West Creek Financial, Inc.",
+    "bucket": "verified",
+    "source": "other",
+    "event_type": "merger_acquisition",
+    "title": "Michigan Secures Settlement With Car Financing Company Over Auto-Repair Agreements",
+    "description_excerpt": "Michigan Attorney General Dana Nessel has secured an agreement with West Creek Financial, Inc., a Virginia corporation doing business under the name Koalafi, to resolve allegations that the lease-to-own financing company violated the Michigan Consumer Protection Act and Rental-Purchase Agreement &#8",
+    "hq": "Glen Allen, VA",
+    "zi_subindustry": "Lending & Brokerage",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "VA",
+      "zi_subindustry": "Lending & Brokerage",
+      "vertical": "Financial Services"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "westminster christian school",
+    "name": "Westminster Christian School",
+    "bucket": "entity_shape",
+    "source": "adzuna",
+    "event_type": "finance_seat_open",
+    "title": "MISBO hiring: Mission-Driven CFO for Growing Christian School (Town of Florida)",
+    "description_excerpt": "Westminster Christian School seeks a mission-aligned, visionary financial leader to serve as Chief Financial Officer (CFO), providing creative and forward-thinking leadership in the stewardship of the school’s financial health, sustainability, and fiduciary integrity. In close collaboration with the",
+    "hq": null,
+    "zi_subindustry": "K-12 Schools",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "k12"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "williston northampton school",
+    "name": "The Williston Northampton School",
+    "bucket": "entity_shape",
+    "source": "adzuna",
+    "event_type": "finance_seat_open",
+    "title": "Williston hiring: Human Resources Coordinator and Admin Assistant to the CFO",
+    "description_excerpt": "Job Description Job Description The Williston Northampton School, an independent coeducational boarding and day school located in Easthampton, MA, has a full-time, calendar-year opening for a Human Resources Coordinator and Administrative Assistant to the CFO. The schedule for the position is Monday",
+    "hq": "Easthampton, MA",
+    "zi_subindustry": "K-12 Schools",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "k12"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "windshield surgeons",
+    "name": "Windshield Surgeons",
+    "bucket": "hq_out_of_territory",
+    "source": "other",
+    "event_type": "merger_acquisition",
+    "title": "One Equity-backed PGW acquires automotive glass firm Windshield Surgeons",
+    "description_excerpt": "Headquartered in Cranberry Township, Pennsylvania, PGW is a distributor of automotive replacement glass, specialty parts, shop accessories, and business technology solutions in North America. The post One Equity-backed PGW acquires automotive glass firm Windshield Surgeons appeared first on PE Hub.",
+    "hq": "Alberta, Canada",
+    "zi_subindustry": "Automotive Service & Collision Repair",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "out",
+      "hq_state": "AB"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "woodsboro bank",
+    "name": "Woodsboro Bank",
+    "bucket": "finance_leader_title",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "Woodsboro Bank appoints CFO",
+    "description_excerpt": "Woodsboro Bank appoints CFO",
+    "hq": null,
+    "zi_subindustry": null,
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": "cfo"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "woodsboro bank",
+    "name": "Woodsboro Bank",
+    "bucket": "verified",
+    "source": "google_news",
+    "event_type": "cfo_hire",
+    "title": "<b>Maryland&#39;s</b> Woodsboro Bank names Brian Ropp <b>new CFO</b> - FinTech Futures",
+    "description_excerpt": "Maryland's Woodsboro Bank names Brian Ropp new CFO. Ropp succeeds Patty Muldoon, who has directed the bank's financial strategy for the past nine ...",
+    "hq": "Woodsboro, MD",
+    "zi_subindustry": "Banking",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "territory": "in",
+      "hq_state": "MD",
+      "zi_subindustry": "Banking",
+      "vertical": "Financial Services"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "zeta phi beta sorority",
+    "name": "Zeta Phi Beta Sorority, Incorporated",
+    "bucket": "entity_shape",
+    "source": "pr_newswire",
+    "event_type": "executive_hire",
+    "title": "ZETA PHI BETA SORORITY, INCORPORATED WELCOMES ITS HONORARY MEMBER CLASS OF 2026",
+    "description_excerpt": "Accomplished Trailblazers Across Entertainment, Government, Journalism, Advocacy, Faith, and Public Service Welcomed into the Sisterhood During Grand Boulé 2026 NASHVILLE, Tenn., July 11, 2026 /PRNewswire/ -- Zeta Phi Beta Sorority, Incorporated welcomed its Alpha Omega Chapter Class of...",
+    "hq": "Washington, DC",
+    "zi_subindustry": "Membership Organizations",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "non_operating": true,
+      "kind": "greek"
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  },
+  {
+    "account_key": "zeta phi beta sorority",
+    "name": "Zeta Phi Beta Sorority, Incorporated",
+    "bucket": "finance_leader_title",
+    "source": "pr_newswire",
+    "event_type": "executive_hire",
+    "title": "ZETA PHI BETA SORORITY, INCORPORATED WELCOMES ITS HONORARY MEMBER CLASS OF 2026",
+    "description_excerpt": "Accomplished Trailblazers Across Entertainment, Government, Journalism, Advocacy, Faith, and Public Service Welcomed into the Sisterhood During Grand Boulé 2026 NASHVILLE, Tenn., July 11, 2026 /PRNewswire/ -- Zeta Phi Beta Sorority, Incorporated welcomed its Alpha Omega Chapter Class of...",
+    "hq": "Washington, DC",
+    "zi_subindustry": "Membership Organizations",
+    "sic": null,
+    "source_url": null,
+    "expected": {
+      "hire_kind": null
+    },
+    "provenance": "machine-seeded 2026-09-08",
+    "reviewed": false,
+    "review_note": null
+  }
+]
