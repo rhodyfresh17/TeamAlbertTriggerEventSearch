@@ -814,7 +814,7 @@ territory:
       - "market cap"
 
     excluded_public_companies:
-    - "GS Finance Corp"          # Goldman Sachs notes issuer (subsidiary — name check misses it)
+      - "GS Finance Corp"        # Goldman Sachs notes issuer (subsidiary — name check misses it)
       # ── US mega-banks (Tier 1: G-SIBs + super-regionals) ──────────
       # All way too large for NetSuite up-market ($0-$200M target band)
       - "JPMorgan"
