@@ -15,7 +15,8 @@ import json
 import base64
 import urllib.parse
 import pandas as pd
-from datetime import datetime, timedelta
+from collections import Counter
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -25,6 +26,20 @@ import streamlit as st
 # and names across scrapers, enrichment and this UI (src/pipeline/gates.py).
 # The app runs from the repo root on Streamlit Cloud, so `src.` resolves.
 from src.pipeline.gates import ALL_STATE_CODES, STATE_NAMES, TERRITORY_STATES
+# Phase 3 supply visibility (2026-09-08): the Weekly Scorecard buckets rows
+# exactly as monitor_health.py does (same source labels, same finance-leader
+# family), so the dashboard and the Monday health check never disagree.
+from src.pipeline.sources import OTHER as OTHER_SOURCE, finance_leader_family, source_label
+from src.pipeline.typed import parse_ts
+# The FY27 vertical taxonomy (32 ZoomInfo subindustries → 3 verticals) is
+# defined ONCE, in the enrichment engine. The import is guarded because this
+# app must still render if that module ever fails to import on Streamlit
+# Cloud — the Supply section then says so and shows every account as
+# 'Unknown' (visible), rather than silently mis-bucketing with a stale copy.
+try:
+    from enrichment_scout import ZI_SUBINDUSTRIES, NONPROFIT_VERTICAL
+except Exception:  # noqa: BLE001 — any import failure, not only ImportError
+    ZI_SUBINDUSTRIES, NONPROFIT_VERTICAL = {}, 'Nonprofits & Organizations'
 
 
 def get_logo_base64() -> str:
@@ -1754,96 +1769,502 @@ def _account_key(name) -> str:
     return s.strip(' .,')
 
 
-@st.cache_data(ttl=900)
-def load_scorecard_events():
-    """Last 14 days of pipeline activity (visible AND tombstoned) for the
-    Weekly Scorecard — one cheap query, cached 15 min."""
-    client = get_supabase_client()
-    if not client:
-        return []
-    since = (datetime.utcnow() - timedelta(days=14)).isoformat()
-    cols = 'discovered_at,blocked_at,blocked_reason,grade,source_url'
-    # Typed `source` + `event_type` once the migration lands (Phase 2); the
-    # probe can be an hour stale, so a failed typed select falls back to
-    # the legacy column list instead of an empty scorecard.
-    selects = [cols]
-    if 'source' in typed_columns_present():
-        selects.insert(0, cols + ',source,event_type')
+# Scorecard query (Phase 3 2026-09-08). ONE cheap paginated read feeds the
+# 7d-vs-prior-7d metrics, the Supply pivot and the 28-day vertical mix: the
+# typed columns are short strings, so 28 days is ~1.1k rows × 16 columns —
+# no JSONB blob. `verdict_json` is fit->>verdict selected as a scalar (a
+# PostgREST JSON-path alias, validated read-only 2026-09-08) so a row an
+# in-flight enricher wrote with verify_state NULL is still judged by its
+# verdict without downloading `fit`.
+SCORECARD_DAYS = 28
+SCORECARD_LEGACY_COLUMNS = ('id,discovered_at,blocked_at,blocked_reason,grade,'
+                            'source_url,title,event_type,hashtags')
+SCORECARD_TYPED_COLUMNS = (SCORECARD_LEGACY_COLUMNS +
+                           ',source,verify_state,fit_verdict,zi_subindustry,'
+                           'classified_by,account_key,verdict_json:fit->>verdict')
+
+
+def _load_scorecard_rows(client, present, now=None, days=SCORECARD_DAYS):
+    """Pure loader behind load_scorecard_events (client + probed column set
+    injected so tests can drive it). Typed select first once the migration
+    has landed; the probe can be an hour stale, so a typed select that fails
+    anyway falls back to the legacy column list instead of blanking the
+    scorecard. Pages are ORDERED (discovered_at, id) — a total order — so
+    concurrent enrichment UPDATEs can't reshuffle rows between pages
+    (review 2026-09-07, same fix as monitor_health._fetch_recent_events)."""
+    now = now or datetime.now(timezone.utc)
+    since = (now - timedelta(days=days)).isoformat()
+    selects = [SCORECARD_LEGACY_COLUMNS]
+    if {'source', 'verify_state'} <= set(present or ()):
+        selects.insert(0, SCORECARD_TYPED_COLUMNS)
     for sel in selects:
         try:
             rows, off = [], 0
             while True:
-                q = client.table('events').select(sel).gte(
-                    'discovered_at', since).range(off, off + 999).execute()
-                rows += q.data or []
-                if len(q.data or []) < 1000:
-                    break
+                q = (client.table('events').select(sel).gte('discovered_at', since)
+                     .order('discovered_at').order('id').range(off, off + 999).execute())
+                page = q.data or []
+                rows += page
+                if len(page) < 1000:
+                    return rows
                 off += 1000
-            return rows
         except Exception:
             continue
     return []
 
 
-# SQLite events.source enum → scorecard label. 'other' falls through to the
-# URL host so a typed-but-unbucketed source still reads as something.
-_SOURCE_LABELS = {
-    'sec_edgar': 'SEC EDGAR', 'adzuna': 'Adzuna', 'google_news': 'Google News',
-    'pr_newswire': 'PR Newswire', 'globe_newswire': 'GlobeNewswire',
-    'business_wire': 'Business Wire', 'linkedin': 'LinkedIn',
-}
+@st.cache_data(ttl=900)
+def load_scorecard_events():
+    """Last SCORECARD_DAYS days of pipeline activity (visible AND tombstoned)
+    for the Weekly Scorecard — one cheap query, cached 15 min."""
+    client = get_supabase_client()
+    if not client:
+        return []
+    return _load_scorecard_rows(client, typed_columns_present())
 
 
 def _scorecard_src(row_or_url):
-    """Bucket an event into a readable source label. Accepts a row dict
-    (typed `source` preferred, `source_url` fallback) or, as before, a
-    bare source_url string."""
-    from urllib.parse import urlparse
-    url = row_or_url
-    if isinstance(row_or_url, dict):
-        src = str(row_or_url.get('source') or '').strip().lower()
-        if src in _SOURCE_LABELS:
-            return _SOURCE_LABELS[src]
-        url = row_or_url.get('source_url')
-    h = urlparse(url or '').netloc.replace('www.', '')
-    if 'sec.gov' in h:
-        return 'SEC EDGAR'
-    if 'adzuna' in h:
-        return 'Adzuna'
-    return h[:28] or 'other'
+    """Bucket an event into the ONE source vocabulary — src.pipeline.sources
+    .source_label, the same function the Supply pivot, the yield table and
+    monitor_health use. Accepts a row dict (typed `source` preferred, then
+    URL host + title) or, for older callers, a bare source_url string.
+
+    Review 2026-09-08: this used to carry its own label table ('SEC EDGAR',
+    a bare host for every Phase 3 feed) under a comment claiming it agreed
+    with the pivot below it. It did not: the same expander said 'SEC EDGAR'
+    in "New events by source" and 'SEC 8-K' / 'SEC Form D' /
+    'NH Business Review' in the supply pivot. Delegating is the only way
+    the two stay equal — there is no second table to drift.
+    """
+    if hasattr(row_or_url, 'get'):
+        return source_label(row_or_url)
+    return source_label({'source_url': row_or_url})
+
+
+# ── Supply visibility (Phase 3 2026-09-08) ───────────────────────────────────
+# Phase 3 adds supply — press-release personnel feeds, regional business
+# journals, the fixed Google News scraper, the sec_iapd adviser source, and
+# free oracles that verify banks / RIAs / nonprofits without a search. Its
+# acceptance bar (the plan): finance-leader (CFO / Controller) triggers
+# ≥ 30% of new intake with no single source above 40% of them, nonprofits
+# verified without search > 50%, and a per-vertical mix report every week.
+# Everything below is a pure function over plain dicts so tests drive it
+# with synthetic rows. monitor_health.py measures the same numbers on
+# Mondays; both sides bucket with src.pipeline.sources and the same vertical
+# and provenance rules, so the numbers agree.
+SUPPLY_PIVOT_DAYS = 7
+SUPPLY_TOP_SOURCES = 6              # pivot columns before the 'other' fold
+FINANCE_LEADER_TARGET_PCT = 30      # of survivors (Phase 3 plan)
+TOP_SOURCE_CEILING_PCT = 40         # of finance-leader survivors (= monitor_health.CONCENTRATION_WARN_PCT)
+NONPROFIT_NO_SEARCH_TARGET_PCT = 50
+# Fewer nonprofits WITH provenance than this and the share is arithmetic,
+# not a signal — one searched account painted the line red at "0% (0 of 1)"
+# (review 2026-09-08). Same floor as monitor_health.CONCENTRATION_MIN_ROWS.
+SHARE_JUDGE_MIN_N = 5
+# classified_by values that mean "verified without spending a search":
+# 'structured' (SEC SIC / Form D fields) and 'oracle' (Phase 3 registries:
+# SEC IAPD advisers, FDIC banks, nonprofits). 'article' is free too (one
+# local LLM read) but it is a model's guess, not a registry hit, so it stays
+# out — this number tracks the oracles. 'cache' is OUT as well (review
+# 2026-09-08): enrichment_scout stamps 'cache' when the account cache
+# supplies the subindustry, i.e. it REPLAYS the classification stored the
+# first time the account was researched — usually by a search — so counting
+# it made the "without search" share climb with every repeat event for a
+# known account, not with the oracles. monitor_health.NO_SEARCH_CLASSIFIERS
+# is the same set; the shared-thresholds test keeps them equal.
+NO_SEARCH_CLASSIFIERS = frozenset({'oracle', 'structured'})
+UNKNOWN_VERTICAL = 'Unknown'
+# Taxonomy order = the order the FY27 sheet lists the verticals. The literal
+# fallback only keeps the mix table's shape when the taxonomy import failed
+# (see the guarded import at the top) — every account is 'Unknown' then.
+VERTICAL_ORDER = (list(dict.fromkeys(ZI_SUBINDUSTRIES.values())) or
+                  ['Financial Services', 'Nonprofits & Organizations', 'Consumer Services'])
+FINANCE_LEADER_ROLLUP = 'Finance leader (all)'
+ALL_SURVIVORS = 'All survivors'
+# The family sub-rows are mutually exclusive with each other AND with the
+# per-type rows, so sub-rows + per-type rows add up to ALL_SURVIVORS and the
+# roll-up is exactly its three sub-rows. A #NewController row keeps its own
+# event_type (executive_hire by design) but is counted here, not there.
+_FAMILY_ROWS = (('cfo_hire', '↳ CFO hire'),
+                ('finance_seat_open', '↳ Open finance seat'),
+                ('controller_tag', '↳ Controller hire (#NewController)'))
+_TRIGGER_ORDER = ('merger_acquisition', 'funding', 'executive_hire', 'expansion',
+                  'stable_target')
+
+
+def _clean_str(v) -> str:
+    """str(v).strip().lower(); '' for None / NaN (pandas rows carry NaN)."""
+    if v is None or (isinstance(v, float) and v != v):
+        return ''
+    return str(v).strip().lower()
+
+
+def _aware(now) -> datetime:
+    now = now or datetime.now(timezone.utc)
+    return now if now.tzinfo else now.replace(tzinfo=timezone.utc)
+
+
+def vertical_of(zi) -> str:
+    """ZoomInfo subindustry → NSCorp vertical. Anything outside the FY27
+    taxonomy (None, 'OTHER', a legacy free-text industry) → 'Unknown'."""
+    if zi is None or (isinstance(zi, float) and zi != zi):
+        return UNKNOWN_VERTICAL
+    return ZI_SUBINDUSTRIES.get(str(zi).strip(), UNKNOWN_VERTICAL)
+
+
+def is_verified_row(row) -> bool:
+    """verify_state == 'verified'. A row with NO verify_state (written by an
+    enricher whose column probe was stale — review 2026-09-07) is judged by
+    its verdict instead: the typed fit_verdict, else the `verdict_json`
+    alias the scorecard query selects from fit->>verdict, else the fit blob
+    when a caller has it. The client-side twin of VERIFIED_FILTER."""
+    state = _clean_str(row.get('verify_state'))
+    if state:
+        return state == 'verified'
+    verdict = _clean_str(row.get('fit_verdict')) or _clean_str(row.get('verdict_json'))
+    if not verdict:
+        fit = _parse_json_field(row.get('fit'), None)
+        verdict = _clean_str(fit.get('verdict')) if isinstance(fit, dict) else ''
+    return verdict == 'pass'
+
+
+def classified_by_of(row) -> Optional[str]:
+    """How the account's classification was reached: the typed column when
+    populated, else the companies_data account entry's classified_by. The
+    typed column is FILL-ONLY from that entry, so they agree wherever both
+    exist (1,124 of 1,124 rows in the window on 2026-09-08) — which is why
+    the scorecard query selects the column and skips the JSONB blob. None
+    when neither knows (rows verified before Phase 2 recorded provenance)."""
+    v = _clean_str(row.get('classified_by'))
+    if v:
+        return v
+    if row.get('companies_data') is None:
+        return None
+    acct = _account_company(row) or {}
+    return _clean_str(acct.get('classified_by')) or None
+
+
+def _trigger_key(row) -> tuple:
+    """('fl', sub-row) for the finance-leader family, ('', event_type) for
+    everything else — one key per survivor, so rows never double count."""
+    etype = _clean_str(row.get('event_type')) or 'other'
+    if etype in ('cfo_hire', 'finance_seat_open'):
+        return ('fl', etype)
+    if finance_leader_family(row):
+        return ('fl', 'controller_tag')
+    return ('', etype)
+
+
+def _trigger_label(etype: str) -> str:
+    """Card vocabulary when the type has one; a new type (sec_iapd's
+    'expansion') reads as itself instead of vanishing into 'Other'."""
+    cfg = EVENT_TYPES.get(etype)
+    return cfg['full_label'] if cfg else etype.replace('_', ' ').capitalize()
+
+
+def supply_pivot(rows, now=None, days=SUPPLY_PIVOT_DAYS,
+                 top_sources=SUPPLY_TOP_SOURCES) -> dict:
+    """Survivors (blocked_at NULL) by trigger × source, last `days` vs the
+    `days` before. → {'sources': [top labels…, 'other'], 'rows': [{'trigger',
+    'key', 'cells': {source: (recent, prior)}, 'total': (recent, prior)}…],
+    'survival': {'recent': (survivors, rows), 'prior': (survivors, rows)},
+    'days'}. Rows: the finance-leader roll-up, its three sub-rows, one row
+    per other trigger type present, then ALL_SURVIVORS. Tombstoned rows
+    never enter a cell but do count in 'survival', so the rate says how much
+    of raw intake the gates let through. Columns are the top sources by
+    survivors over both windows; the rest (and the literal 'other' label)
+    fold into 'other'."""
+    now = _aware(now)
+    recent_start = now - timedelta(days=days)
+    prior_start = now - timedelta(days=2 * days)
+    survival = {'recent': [0, 0], 'prior': [0, 0]}
+    cells, src_totals = {}, Counter()
+    for r in rows:
+        dt = parse_ts(r.get('discovered_at'))
+        if dt is None or dt < prior_start:
+            continue
+        period = 'recent' if dt >= recent_start else 'prior'
+        survival[period][1] += 1
+        if r.get('blocked_at'):
+            continue
+        survival[period][0] += 1
+        src = source_label(r)
+        cell = cells.setdefault((_trigger_key(r), src), [0, 0])
+        cell[0 if period == 'recent' else 1] += 1
+        src_totals[src] += 1
+    ranked = sorted((s for s in src_totals if s != OTHER_SOURCE),
+                    key=lambda s: (-src_totals[s], s))
+    columns = ranked[:top_sources] + [OTHER_SOURCE]
+
+    def _sum(pred):
+        out = {c: [0, 0] for c in columns}
+        for (tkey, src), (rc, pr) in cells.items():
+            if pred(tkey):
+                col = out[src if src in out else OTHER_SOURCE]
+                col[0] += rc
+                col[1] += pr
+        return {c: tuple(v) for c, v in out.items()}
+
+    def _row(label, key, pred):
+        c = _sum(pred)
+        return {'trigger': label, 'key': key, 'cells': c,
+                'total': (sum(v[0] for v in c.values()), sum(v[1] for v in c.values()))}
+
+    out_rows = [_row(FINANCE_LEADER_ROLLUP, 'finance_leader', lambda k: k[0] == 'fl')]
+    out_rows += [_row(label, sub, lambda k, sub=sub: k == ('fl', sub))
+                 for sub, label in _FAMILY_ROWS]
+    present = {tk[1] for tk, _ in cells if tk[0] == ''}
+    ordered = [t for t in _TRIGGER_ORDER if t in present]
+    ordered += sorted(t for t in present if t not in _TRIGGER_ORDER and t != 'other')
+    if 'other' in present:
+        ordered.append('other')
+    out_rows += [_row(_trigger_label(t), t, lambda k, t=t: k == ('', t)) for t in ordered]
+    out_rows.append(_row(ALL_SURVIVORS, 'all', lambda k: True))
+    return {'sources': columns, 'rows': out_rows, 'days': days,
+            'survival': {p: tuple(v) for p, v in survival.items()}}
+
+
+def vertical_mix(rows, now=None, days=SCORECARD_DAYS) -> dict:
+    """Verified ACCOUNTS (not events) by vertical over the last `days`: one
+    account per account_key (fallback: the event id), its newest verified
+    event deciding subindustry and provenance. → {'rows': [{'vertical',
+    'accounts', 'share_pct', 'provenance_n', 'no_search_n', 'no_search_pct'
+    (None when no provenance)}…] in taxonomy order (+ 'Unknown' when any),
+    'total', 'provenance_n', 'no_search_n', 'days'}. no_search_pct is over
+    the accounts WITH provenance: rows verified before Phase 2 recorded it
+    carry None and would otherwise read as "searched"."""
+    now = _aware(now)
+    start = now - timedelta(days=days)
+    newest = {}
+    for r in rows:
+        if r.get('blocked_at') or not is_verified_row(r):
+            continue
+        dt = parse_ts(r.get('discovered_at'))
+        if dt is None or dt < start:
+            continue
+        key = _clean_str(r.get('account_key')) or 'id:{}'.format(r.get('id') or id(r))
+        if key not in newest or dt > newest[key][0]:
+            newest[key] = (dt, r)
+    counts, known, no_search = Counter(), Counter(), Counter()
+    for _, r in newest.values():
+        v = vertical_of(r.get('zi_subindustry'))
+        counts[v] += 1
+        cb = classified_by_of(r)
+        if cb:
+            known[v] += 1
+            if cb in NO_SEARCH_CLASSIFIERS:
+                no_search[v] += 1
+    total = sum(counts.values())
+    order = list(VERTICAL_ORDER) + ([UNKNOWN_VERTICAL] if counts[UNKNOWN_VERTICAL] else [])
+    out = [{'vertical': v, 'accounts': counts[v],
+            'share_pct': counts[v] / total * 100 if total else 0.0,
+            'provenance_n': known[v], 'no_search_n': no_search[v],
+            'no_search_pct': no_search[v] / known[v] * 100 if known[v] else None}
+           for v in order]
+    return {'rows': out, 'total': total, 'days': days,
+            'provenance_n': sum(known.values()), 'no_search_n': sum(no_search.values())}
+
+
+def supply_headline(rows, now=None, days=SCORECARD_DAYS) -> dict:
+    """The two Phase 3 numbers: finance-leader share of survivors, and the
+    top source's share OF the finance-leader survivors (the single point of
+    failure monitor_health's concentration check watches)."""
+    now = _aware(now)
+    start = now - timedelta(days=days)
+    surv = []
+    for r in rows:
+        if r.get('blocked_at'):
+            continue
+        dt = parse_ts(r.get('discovered_at'))
+        if dt is not None and dt >= start:
+            surv.append(r)
+    fam = [r for r in surv if finance_leader_family(r)]
+    top = Counter(source_label(r) for r in fam).most_common(1)
+    return {'days': days, 'survivors': len(surv), 'family': len(fam),
+            'family_pct': len(fam) / len(surv) * 100 if surv else None,
+            'top_source': top[0][0] if top else None,
+            'top_source_pct': top[0][1] / len(fam) * 100 if fam else None}
+
+
+# ── Supply rendering ─────────────────────────────────────────────────────────
+
+def _pair_text(pair) -> str:
+    return '—' if tuple(pair) == (0, 0) else f'{pair[0]} / {pair[1]}'
+
+
+def _rate_text(pair) -> str:
+    survivors, total = pair
+    return f'{survivors / total * 100:.0f}% ({survivors} of {total})' if total else 'n/a (no rows)'
+
+
+def supply_pivot_frame(pivot: dict) -> pd.DataFrame:
+    cols = ['Trigger'] + list(pivot['sources']) + ['Total']
+    data = []
+    for row in pivot['rows']:
+        rec = {'Trigger': row['trigger'], 'Total': _pair_text(row['total'])}
+        for s in pivot['sources']:
+            rec[s] = _pair_text(row['cells'].get(s, (0, 0)))
+        data.append(rec)
+    return pd.DataFrame(data, columns=cols)
+
+
+def _no_search_text(r: dict) -> str:
+    if not r['provenance_n']:
+        return 'n/a — no provenance recorded'
+    return f"{r['no_search_pct']:.0f}% ({r['no_search_n']} of {r['provenance_n']} with provenance)"
+
+
+def judge_no_search_share(row: dict) -> Optional[bool]:
+    """True / False against NONPROFIT_NO_SEARCH_TARGET_PCT, or None ("too
+    few to judge", drawn grey) when fewer than SHARE_JUDGE_MIN_N accounts
+    carry provenance — 0 of 1 is not a red number (review 2026-09-08)."""
+    if row.get('no_search_pct') is None or (row.get('provenance_n') or 0) < SHARE_JUDGE_MIN_N:
+        return None
+    return row['no_search_pct'] > NONPROFIT_NO_SEARCH_TARGET_PCT
+
+
+def vertical_mix_frame(mix: dict) -> pd.DataFrame:
+    n_col = f"Verified accounts ({mix['days']}d)"
+    data = [{'Vertical': r['vertical'], n_col: r['accounts'],
+             'Share': f"{r['share_pct']:.0f}%",
+             'Verified without search': _no_search_text(r)} for r in mix['rows']]
+    total = {'vertical': 'All verticals', 'provenance_n': mix['provenance_n'],
+             'no_search_n': mix['no_search_n'],
+             'no_search_pct': (mix['no_search_n'] / mix['provenance_n'] * 100
+                               if mix['provenance_n'] else None)}
+    data.append({'Vertical': total['vertical'], n_col: mix['total'],
+                 'Share': '100%' if mix['total'] else '—',
+                 'Verified without search': _no_search_text(total)})
+    return pd.DataFrame(data, columns=['Vertical', n_col, 'Share', 'Verified without search'])
+
+
+def _threshold_line(label: str, value: str, ok, hint: str):
+    """One line, the number colored by its threshold (grey = no data)."""
+    color = '#6b7280' if ok is None else ('#10b981' if ok else '#ef4444')
+    st.markdown(f"{label}: <span style='color:{color};font-weight:600'>{value}</span> — {hint}",
+                unsafe_allow_html=True)
+
+
+def render_supply_section(rows, now=None):
+    """The Supply block of the Weekly Scorecard (Phase 3 2026-09-08)."""
+    now = _aware(now)
+    st.markdown("**Supply — where the triggers come from**")
+    if not ZI_SUBINDUSTRIES:
+        st.warning("Vertical taxonomy unavailable (enrichment_scout.ZI_SUBINDUSTRIES failed "
+                   "to import) — every account below shows as Unknown.")
+    if rows and 'verify_state' not in rows[0]:
+        # The typed select failed and the legacy column list was used (see
+        # _load_scorecard_rows): the pivot still works off URL hosts, but no
+        # row can be judged verified, so say so instead of showing 0 accounts.
+        st.caption("Verification columns not in this query (legacy select) — the vertical "
+                   "mix below counts nothing until migration 002 has run.")
+
+    pivot = supply_pivot(rows, now)
+    st.caption(f"Survivors by trigger × source — each cell is last {pivot['days']} days / "
+               f"prior {pivot['days']} days (blocked rows excluded; the roll-up = its ↳ sub-rows).")
+    st.dataframe(supply_pivot_frame(pivot), use_container_width=True, hide_index=True)
+    st.caption(f"Survival rate (rows that got past every gate): last {pivot['days']}d "
+               f"{_rate_text(pivot['survival']['recent'])} · prior {pivot['days']}d "
+               f"{_rate_text(pivot['survival']['prior'])}.")
+
+    head = supply_headline(rows, now)
+    fam_ok = None if head['family_pct'] is None else head['family_pct'] >= FINANCE_LEADER_TARGET_PCT
+    fam_val = ('n/a' if head['family_pct'] is None else
+               f"{head['family_pct']:.0f}% ({head['family']} of {head['survivors']} survivors)")
+    _threshold_line(f"Finance-leader share of intake ({head['days']}d)", fam_val, fam_ok,
+                    f"target ≥ {FINANCE_LEADER_TARGET_PCT}%")
+    top_ok = None if head['top_source_pct'] is None else head['top_source_pct'] <= TOP_SOURCE_CEILING_PCT
+    top_val = ('n/a' if head['top_source_pct'] is None else
+               f"{head['top_source']} {head['top_source_pct']:.0f}%")
+    _threshold_line(f"Top source's share of finance-leader triggers ({head['days']}d)", top_val,
+                    top_ok, f"ceiling {TOP_SOURCE_CEILING_PCT}% — above it, one dead feed "
+                    f"takes the best trigger with it")
+
+    mix = vertical_mix(rows, now)
+    st.caption(f"Verified accounts by vertical (last {mix['days']} days; one row per account, "
+               f"its newest verified event decides). 'Without search' = classified_by in "
+               f"{', '.join(sorted(NO_SEARCH_CLASSIFIERS))}, over accounts whose provenance "
+               f"was recorded.")
+    st.dataframe(vertical_mix_frame(mix), use_container_width=True, hide_index=True)
+    np_row = next((r for r in mix['rows'] if r['vertical'] == NONPROFIT_VERTICAL), None)
+    if np_row is not None:
+        np_ok = judge_no_search_share(np_row)
+        hint = f"target > {NONPROFIT_NO_SEARCH_TARGET_PCT}%"
+        if np_ok is None and np_row['provenance_n']:
+            hint += (f"; too few to judge ({np_row['provenance_n']} with provenance, "
+                     f"needs {SHARE_JUDGE_MIN_N})")
+        _threshold_line(f"Nonprofits verified without search ({mix['days']}d)",
+                        _no_search_text(np_row), np_ok, hint)
+
+
+SCORECARD_WEEK_DAYS = 7
+# "Auto-removed as noise (7d)" counts this week's tombstones among rows
+# discovered within this many days — the two-week query the card was built
+# over (see scorecard_week_buckets).
+NOISE_CARD_DISCOVERY_DAYS = 2 * SCORECARD_WEEK_DAYS
+
+
+def scorecard_week_buckets(rows, now=None) -> dict:
+    """The Weekly Scorecard's headline lists over the scorecard rows:
+    {'this_wk': discovered in the last 7d, 'last_wk': the 7d before,
+    'tomb_wk': tombstoned in the last 7d AND discovered within the last
+    NOISE_CARD_DISCOVERY_DAYS}.
+
+    WHY the discovery clause (review 2026-09-08): the "Auto-removed as
+    noise (7d)" card was built when the scorecard query spanned 14 days, so
+    it always meant "this week's tombstones among recent intake". When the
+    shared query grew to SCORECARD_DAYS (28) for the Supply section, the
+    unfiltered count silently widened to 3-4-week-old rows swept by the
+    re-verify pass — live it jumped 204 → 326 without the filter changing.
+    Filtering here keeps the card's meaning whatever the query spans.
+    Unparseable timestamps drop out of every bucket, as before."""
+    now = _aware(now)
+    wk_ago = now - timedelta(days=SCORECARD_WEEK_DAYS)
+    wk2_ago = now - timedelta(days=2 * SCORECARD_WEEK_DAYS)
+    discovered_cut = now - timedelta(days=NOISE_CARD_DISCOVERY_DAYS)
+    out = {'this_wk': [], 'last_wk': [], 'tomb_wk': []}
+    for r in rows:
+        disc = parse_ts(r.get('discovered_at'))
+        if disc is None:
+            continue
+        if disc >= wk_ago:
+            out['this_wk'].append(r)
+        elif disc >= wk2_ago:
+            out['last_wk'].append(r)
+        tomb = parse_ts(r.get('blocked_at')) if r.get('blocked_at') else None
+        if tomb is not None and tomb >= wk_ago and disc >= discovered_cut:
+            out['tomb_wk'].append(r)
+    return out
 
 
 def render_weekly_scorecard(df, acct_dispos):
     """Trailing 7 days vs the 7 before: what came in, what got removed and
     why, what the team picked up. Turns rep behavior into tuning signal."""
     rows = load_scorecard_events()
-    now = datetime.utcnow()
-    wk_ago, wk2_ago = now - timedelta(days=7), now - timedelta(days=14)
+    now = datetime.now(timezone.utc)
+    wk_ago = now - timedelta(days=SCORECARD_WEEK_DAYS)
+    buckets = scorecard_week_buckets(rows, now)
+    this_wk, last_wk, tomb_wk = buckets['this_wk'], buckets['last_wk'], buckets['tomb_wk']
 
-    def _ts(v):
-        try:
-            return datetime.fromisoformat((v or '').replace('Z', '')[:26])
-        except Exception:
-            return None
-
-    this_wk = [r for r in rows if (_ts(r['discovered_at']) or wk2_ago) >= wk_ago]
-    last_wk = [r for r in rows
-               if wk2_ago <= (_ts(r['discovered_at']) or now) < wk_ago]
-    tomb_wk = [r for r in rows
-               if r.get('blocked_at') and (_ts(r['blocked_at']) or wk2_ago) >= wk_ago]
+    def _recent(d):
+        """Disposition touched in the last 7d (updated_at is a naive local
+        timestamp — parse_ts reads it as UTC, close enough for a week)."""
+        ts = parse_ts(d.get('updated_at'))
+        return ts is not None and ts >= wk_ago
 
     with st.expander("📊 Weekly Scorecard — pipeline health & team activity",
                      expanded=False):
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("New events (7d)", len(this_wk),
                   delta=len(this_wk) - len(last_wk))
-        c2.metric("Auto-removed as noise (7d)", len(tomb_wk))
+        c2.metric("Auto-removed as noise (7d)", len(tomb_wk),
+                  help=f"Tombstoned in the last 7 days, among events discovered in the last "
+                       f"{NOISE_CARD_DISCOVERY_DAYS} days (the card's meaning since it was "
+                       f"built; the scorecard query itself spans {SCORECARD_DAYS} days).")
         picked = [d for d in (acct_dispos or {}).values()
-                  if d.get('status') == 'Picked Up'
-                  and (_ts(d.get('updated_at')) or wk2_ago) >= wk_ago]
+                  if d.get('status') == 'Picked Up' and _recent(d)]
         c3.metric("Accounts picked up (7d)", len(picked))
-        decided = [d for d in (acct_dispos or {}).values()
-                   if (_ts(d.get('updated_at')) or wk2_ago) >= wk_ago]
+        decided = [d for d in (acct_dispos or {}).values() if _recent(d)]
         c4.metric("Accounts dispositioned (7d)", len(decided))
 
         # The dashboard view itself — the SAME filtered frame the metric
@@ -1885,6 +2306,13 @@ def render_weekly_scorecard(df, acct_dispos):
             "Reading this: 'New events' is raw intake; 'noise removed' is the "
             "filter doing its job (high is GOOD); pickups are the ground truth "
             "— if a source never produces a pickup, tell Claude to tune it.")
+
+        # Phase 3 supply visibility (2026-09-08) — its own try so a supply
+        # bug can never take the pickup numbers above down with it.
+        try:
+            render_supply_section(rows, now)
+        except Exception as _sup_err:
+            st.caption(f"(supply section unavailable: {_sup_err})")
 
 
 def load_account_dispositions():

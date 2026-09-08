@@ -57,6 +57,7 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict
+from urllib.parse import urlparse
 import subprocess
 
 import requests
@@ -67,7 +68,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from src.pipeline.gates import (  # noqa: E402
     hq_territory_status as _gates_hq_status, is_non_operating_entity,
     is_bad_company_name, sic_to_verdict, formd_to_verdict,
-    account_key as _gates_account_key,
+    account_key as _gates_account_key, hq_state_code as _gates_hq_state_code,
 )
 # Phase 2 (2026-09-07): account-keyed search/firmographic/negative cache,
 # single-instance run lock, and the typed-column layer (probed per run —
@@ -79,6 +80,16 @@ from src.pipeline.typed import (  # noqa: E402
     llm_retry_after, typed_payload, not_fit_payload, MAX_ENRICH_ATTEMPTS,
     LLM_RETRY_HOURS,
 )
+# Phase 3 slice B2 (2026-09-08): free registries — SEC IAPD advisers, FDIC
+# banks, ProPublica nonprofits — settle territory / vertical / revenue / url
+# for those account shapes with ZERO search (src/pipeline/oracles.py).
+from src.pipeline import oracles as _oracles  # noqa: E402
+# Phase 3 slice B4 (another engineer's module): free domain resolution. The
+# hook below is a no-op until it lands — never a reason enrichment can't run.
+try:
+    from src.pipeline.domains import resolve as _resolve_domain  # noqa: E402
+except ImportError:
+    _resolve_domain = None
 
 # ── .env ─────────────────────────────────────────────────────────────────────
 try:
@@ -115,6 +126,16 @@ SCOUT_CONTAINER   = os.environ.get('SCOUT_CONTAINER', 'hermes-sales')
 # CACHE_TTL_DAYS doesn't re-search — saves time + quota for repeat companies.
 CACHE_DB_PATH      = os.environ.get('CACHE_DB_PATH', 'trigger_events.db')
 CACHE_TTL_DAYS     = int(os.environ.get('CACHE_TTL_DAYS', '30'))
+
+# Phase 3 B2 oracles (2026-09-08): the monthly registry tables
+# (scripts/refresh_oracles.py → state/oracles.db) and whether the LIVE
+# adapters (FDIC wildcard search, ProPublica) may run in this process —
+# ORACLES_LIVE_ENABLED=0 keeps a run on the local tables (outage, tests).
+# A registry answer below ORACLE_MIN_CONFIDENCE is a candidate, not a fact.
+ORACLES_DB_PATH       = os.environ.get('ORACLES_DB_PATH', _oracles.DEFAULT_DB_PATH)
+ORACLES_LIVE_ENABLED  = (os.environ.get('ORACLES_LIVE_ENABLED', '1').strip().lower()
+                         not in ('0', 'false', 'no', 'off'))
+ORACLE_MIN_CONFIDENCE = _oracles.MATCH_THRESHOLD
 
 # Article-first classification (Phase 2, 2026-09-07). When the article-only
 # LLM pass says a company is OTHER (off-vertical), how sure must it be before
@@ -430,11 +451,63 @@ def _structured_verdict(event: dict) -> dict:
 
 
 
+# P2 (A.J. 2026-09-04, applied review 2026-09-08): ALL K-12 — public,
+# private, charter — is not a fit. The vertical gate FAILS the label instead
+# of admitting it: a registry-confirmed K-12 org (oracles.zi_for_ntee, NTEE
+# B2x) or an article/search classification of 'K-12 Schools' is out, the
+# same way OTHER is. The label stays in ZI_SUBINDUSTRIES because
+# monitor_health.py and dashboard.py import that dict as the subindustry →
+# vertical LABEL map for already-verified rows (tests/test_monitor_health.py
+# pins it); the FIT allowlist is ZI_IN_VERTICAL, which excludes it, so no
+# gate can read K-12 as in-vertical. gates._K12 still tombstones school-
+# NAMED entities on arrival; this catches the ones the registry classifies.
+ZI_NOT_A_FIT = frozenset({'K-12 Schools'})
+ZI_IN_VERTICAL = frozenset(k for k in ZI_SUBINDUSTRIES if k not in ZI_NOT_A_FIT)
+
+
+def _is_iapd_event(event: dict) -> bool:
+    """A 'New SEC-registered investment adviser' trigger from
+    scripts/ria_trigger.py: typed source 'sec_iapd', or — when the typed
+    column is not live — the adviserinfo.sec.gov source_url it always sets."""
+    if (str((event or {}).get('source') or '')).strip().lower() == 'sec_iapd':
+        return True
+    try:
+        host = (urlparse(str((event or {}).get('source_url') or '')).hostname or '').lower()
+    except ValueError:
+        return False
+    return host == 'adviserinfo.sec.gov' or host.endswith('.adviserinfo.sec.gov')
+
+
+def _entity_shape(name: str, descriptor: str = '', registry: str = None) -> tuple:
+    """gates.is_non_operating_entity with ONE registry exemption (H3 / P4,
+    review 2026-09-08): a firm the SEC lists as a Registered adviser is by
+    construction the MANAGEMENT COMPANY — the fund vehicles it runs are not
+    registrants — so its '... LP' / '... Fund ...' name must not read as a
+    fund vehicle (950 of 8,571 in-territory registrants are named that way;
+    'CONSTITUTION CAPITAL HORIZON ADVISOR, LP' was tombstoned on arrival).
+    Only the fund_vehicle kind is exempt; spac / political / government /
+    k12 / lodging / greek still apply. Anything but an sec_iapd registry
+    (a news article naming the same firm) keeps the full test."""
+    nonop, kind = is_non_operating_entity(name, descriptor)
+    if nonop and kind == 'fund_vehicle' and registry == 'sec_iapd':
+        return False, ''
+    return nonop, kind
+
+
+def _with_registry(rec: dict, registry: str = None) -> dict:
+    """Stamp a companies_data record with the registry its event came from,
+    so company_fit (and the re-verify path reading stored records) applies
+    the same entity-shape exemption the pre-search gate did."""
+    if registry:
+        rec['registry_source'] = registry
+    return rec
+
+
 # Public school districts procure through RFPs — dead ends, never workable
 # (A.J. 2026-08-09: "we don't like public school districts"). Name-pattern
 # gate so it holds regardless of how the ZI classifier labels them.
-# NOTE: private/charter schools stay in-vertical (K-12 Schools) — only
-# clearly-PUBLIC district naming is blocked.
+# NOTE: A.J. 2026-09-04 extended this to ALL K-12 (see ZI_NOT_A_FIT above);
+# this name gate remains for clearly-PUBLIC district naming.
 _PUBLIC_DISTRICT_PATTERNS = (
     'school district', 'public schools', 'board of education',
     'unified school', 'school corporation', 'county schools',
@@ -459,8 +532,8 @@ def company_fit(c: dict) -> dict:
         return {'verdict': 'fail', 'territory': 'n/a', 'revenue': 'n/a',
                 'vertical': 'out',
                 'reasons': ['public school district (RFP procurement — dead end)']}
-    _nonop, _kind = is_non_operating_entity(
-        _name, c.get('descriptor') or c.get('industry') or '')
+    _nonop, _kind = _entity_shape(
+        _name, c.get('descriptor') or c.get('industry') or '', c.get('registry_source'))
     if _nonop:
         return {'verdict': 'fail', 'territory': 'n/a', 'revenue': 'n/a',
                 'vertical': 'out',
@@ -473,7 +546,12 @@ def company_fit(c: dict) -> dict:
     territory = hq_territory_status(c.get('hq') or '')
 
     rev = (c.get('revenue') or '').strip()
-    if rev in IN_BAND_REVENUE:
+    # `too_small` (Phase 3 B2): a registry estimate under the $5M bar —
+    # "oracle_too_small: fdic est $3.3M" — fails revenue the way the Form D
+    # declared-revenue rule does (gates.formd_to_verdict), no search spent.
+    if c.get('too_small'):
+        revenue = 'out'
+    elif rev in IN_BAND_REVENUE:
         revenue = 'in'
     elif rev == 'Enterprise':
         revenue = 'out'
@@ -481,7 +559,9 @@ def company_fit(c: dict) -> dict:
         revenue = 'unknown'
 
     zi = (c.get('zi_subindustry') or '').strip() or None
-    if zi and zi in ZI_SUBINDUSTRIES:
+    if zi and zi in ZI_NOT_A_FIT:
+        vertical = 'out'                        # P2: K-12 is never a fit
+    elif zi and zi in ZI_IN_VERTICAL:
         vertical = 'in'
     elif zi and zi.upper() == 'OTHER':
         vertical = 'out'
@@ -492,9 +572,11 @@ def company_fit(c: dict) -> dict:
     if territory == 'out':
         reasons.append(f"HQ out of territory ({c.get('hq')})")
     if revenue == 'out':
-        reasons.append('revenue Enterprise (>$100M, out of band)')
+        reasons.append(str(c['too_small']) if c.get('too_small')
+                       else 'revenue Enterprise (>$100M, out of band)')
     if vertical == 'out':
-        reasons.append('subindustry OTHER (not a target vertical)')
+        reasons.append(f'subindustry {zi} (A.J. 2026-09-04: all K-12 not a fit)'
+                       if zi in ZI_NOT_A_FIT else 'subindustry OTHER (not a target vertical)')
 
     if reasons:
         verdict = 'fail'
@@ -785,7 +867,10 @@ def check_required_keys():
 
 def check_columns(client):
     exists = {}
-    for col in ('companies_data', 'enriched_at', 'fit'):
+    # matched_regions (scraper-owned, synced by supabase_sync) is the state
+    # hint for the Phase 3 registry lookups; probed like the rest so a table
+    # without it keeps working.
+    for col in ('companies_data', 'enriched_at', 'fit', 'matched_regions'):
         try:
             client.table('events').select(col).limit(1).execute()
             exists[col] = True
@@ -1115,10 +1200,12 @@ def _cache_set(company_name: str, industry_hint: str, results: dict) -> None:
 # attempts; 'transport_failed' = a backend that did not ANSWER (connection
 # error / non-2xx / success=false) — deferred, never a known empty.
 # 'negative_cache' = lookups answered "known empty" without a search.
+# 'oracle' = Stage A registry hits (Phase 3 B2) — facts that cost no search.
 SEARCH_COUNTS: Dict[str, int] = {'lookups': 0, 'cache': 0, 'negative_cache': 0,
                                  'firecrawl': 0, 'firecrawl_attempts': 0,
                                  'tavily': 0, 'throttled': 0,
-                                 'transport_failed': 0, 'budget_skipped': 0}
+                                 'transport_failed': 0, 'budget_skipped': 0,
+                                 'oracle': 0}
 
 
 def reset_search_counts() -> None:
@@ -2245,47 +2332,62 @@ def probe_nonprofit_990(company_name: str) -> str:
     return block or ''
 
 
+def _remembered_state(company_name: str):
+    """State code of the account's remembered hq (AccountCache), or None.
+    Stage A/B persist a seed / registry / search hq before the grading
+    probes run, so this is the same anchor the registry lookups used."""
+    try:
+        key = _gates_account_key(company_name)
+        fg = _account_cache().get_firmographics(key) if key else None
+        return _gates_hq_state_code((fg or {}).get('hq'))
+    except Exception:
+        return None
+
+
 def _propublica_990(company_name: str):
     """The HTTP half of probe_nonprofit_990: evidence block, '' for a
-    confirmed no-match, None when the API itself failed (never cached)."""
+    confirmed no-match, None when the API itself failed (never cached).
+
+    Phase 3 B2 (research 2026-09-08) — routed through oracles.npo_lookup,
+    which fixes two defects of the v1 code: (a) ProPublica answers a
+    zero-hit search with HTTP 404 AND a valid JSON body; raise_for_status
+    made that an "API failure" (None), never cached, so the same org was
+    re-queried on every event; (b) organizations[0] was taken blind — no
+    state[id] filter, no name check — so a Boston museum could come back
+    as a Virginia one. The adapter filters by the account's remembered
+    state, applies the registry similarity gate, and shares the Stage A
+    cache (kind oracle_propublica) — a nonprofit the registry pass already
+    found costs this probe zero HTTP calls."""
     try:
-        s = requests.get(
-            'https://projects.propublica.org/nonprofits/api/v2/search.json',
-            params={'q': company_name}, timeout=12)
-        s.raise_for_status()
-        orgs = (s.json() or {}).get('organizations') or []
-        if not orgs:
-            return ''
-        org = orgs[0]
-        ein = org.get('ein')
-        lines = [
-            f'PROPUBLICA 990 ("{company_name}"):',
-            f"- Matched org: {org.get('name')} (EIN {ein}), "
-            f"{org.get('city')}, {org.get('state')} | "
-            f"https://projects.propublica.org/nonprofits/organizations/{ein}",
-        ]
-        try:
-            d = requests.get(
-                f'https://projects.propublica.org/nonprofits/api/v2/'
-                f'organizations/{ein}.json', timeout=12)
-            d.raise_for_status()
-            filings = (d.json() or {}).get('filings_with_data') or []
-            if filings:
-                f0 = filings[0]
-                rev = f0.get('totrevenue')
-                exp = f0.get('totfuncexpns')
-                yr = f0.get('tax_prd_yr')
-                lines.append(
-                    f"- Latest 990 ({yr}): total revenue ${rev:,} · "
-                    f"total expenses ${exp:,}" if rev is not None else
-                    f"- Latest filing year: {yr}")
-                lines.append(f"- 990 filings on record: {len(filings)} years")
-        except Exception:
-            pass
-        return '\n'.join(lines)
-    except Exception as e:
+        status, hit = _oracles.npo_lookup(company_name, _remembered_state(company_name),
+                                          cache=_account_cache(), live=ORACLES_LIVE_ENABLED)
+    except Exception as e:                      # the adapter never raises; belt and braces
         log.debug(f'  990 probe failed: {e}')
         return None
+    if status == 'error':
+        return None
+    if not hit:
+        return ''                               # confirmed zero (or negative-cached)
+    lines = [
+        f'PROPUBLICA 990 ("{company_name}"):',
+        f"- Matched org: {hit.get('matched_name')} (EIN {hit.get('ein')}), "
+        f"{hit.get('hq')} | {hit.get('profile_url')}",
+    ]
+    latest = hit.get('latest_990') or {}
+    if latest.get('total_revenue') is not None:
+        exp = latest.get('total_expenses')
+        line = f"- Latest 990 ({latest.get('year')}): total revenue ${latest['total_revenue']:,}"
+        if exp is not None:
+            try:
+                line += f" · total expenses ${int(exp):,}"
+            except (TypeError, ValueError):
+                pass
+        lines.append(line)
+    if hit.get('filings'):
+        lines.append(f"- 990 filings on record: {hit['filings']} years")
+    if hit.get('ntee_code'):
+        lines.append(f"- NTEE {hit['ntee_code']} → {hit.get('zi_subindustry')}")
+    return '\n'.join(lines)
 
 
 def gather_extra_evidence(event: dict, companies_data: list,
@@ -2656,6 +2758,13 @@ def _company_record(name: str, role: str, firm: dict) -> dict:
         rec['field_sources'] = srcs
     if firm.get('deferred'):
         rec['deferred'] = True
+    # Phase 3: the registry's under-$5M verdict (company_fit reads it) and
+    # the resolved website domain — identity for dedup and paid enrichers.
+    if firm.get('too_small'):
+        rec['too_small'] = firm['too_small']
+    if firm.get('domain'):
+        rec['domain'] = firm['domain']
+        rec['domain_method'] = firm.get('domain_method')
     return rec
 
 
@@ -2701,7 +2810,7 @@ def _structured_seeds(event: dict, name: str, structured: dict) -> dict:
 def _fill_missing(base: dict, new: dict, fields=_FIRM_FIELDS, source: str = None) -> dict:
     """Copy of `base` with empty firmographic fields filled from `new`.
     `source` (review 2026-09-07) stamps each field it fills into the copy's
-    `_sources` provenance map ('seed' | 'cache' | 'article' | 'search'):
+    `_sources` provenance map ('seed' | 'oracle' | 'cache' | 'article' | 'search'):
     the pre-search gates, Stage B's needs and the AccountCache write all
     decide by WHERE a value came from, not just whether it is there."""
     out = dict(base)
@@ -2736,10 +2845,13 @@ def _article_other_decision(firm: dict, structured_out: bool = False,
     ARTICLE_TOMBSTONE_MIN_DESCRIPTION_CHARS (review 2026-09-07; a caller
     that doesn't pass the length gets the conservative 0: no article-only
     tombstone). Otherwise it is only a hunch: reset to None (unknown) so
-    Stage B can resolve it."""
-    if (firm.get('zi_subindustry') or '').upper() != 'OTHER':
+    Stage B can resolve it. An out-of-vertical LABEL (ZI_NOT_A_FIT, P2:
+    'K-12 Schools') is decided by the same rule — it fails the gate like
+    OTHER, so it must clear the same evidence bar first."""
+    zi = (firm.get('zi_subindustry') or '').strip()
+    if zi.upper() != 'OTHER' and zi not in ZI_NOT_A_FIT:
         return firm, False
-    final = (structured_out or firm.get('classified_by') == 'cache'
+    final = (structured_out or firm.get('classified_by') in ('cache', 'oracle')
              or (_confidence_meets(firm.get('classification_confidence'),
                                    ARTICLE_OTHER_TOMBSTONE_MIN_CONFIDENCE)
                  and (article_chars or 0) > ARTICLE_TOMBSTONE_MIN_DESCRIPTION_CHARS))
@@ -2748,21 +2860,136 @@ def _article_other_decision(firm: dict, structured_out: bool = False,
     return dict(firm, zi_subindustry=None), False
 
 
+def _event_state_hint(event: dict, seeds: dict):
+    """State to anchor a registry lookup on: the SEC-seeded hq state, else
+    the ONE state the scraper's territory match named (matched_regions — a
+    dateline or body mention; two different states = no anchor, because a
+    wrong anchor pushes the right registry row 0.3 below the bar)."""
+    st = _gates_hq_state_code(seeds.get('hq')) if seeds.get('hq') else None
+    if st:
+        return st
+    regions = event.get('matched_regions')
+    if isinstance(regions, str):
+        try:
+            regions = json.loads(regions) if regions.strip() else []
+        except ValueError:
+            regions = []
+    if not isinstance(regions, list):
+        regions = [regions] if regions else []
+    codes = {c for c in (_gates_hq_state_code(str(r)) for r in regions if r) if c}
+    return next(iter(codes)) if len(codes) == 1 else None
+
+
+def _hq_city(hq) -> str:
+    """'Westerly, RI' → 'Westerly'; a bare state / blank → ''."""
+    head = (str(hq or '').split(',')[0]).strip()
+    return '' if not head or _gates_hq_state_code(head) == head.upper() else head
+
+
+def _oracle_lookup(name: str, hint: dict, cache, live: bool = None):
+    """The registry call (seam for tests). oracles.lookup never raises.
+    `live` (M9, review 2026-09-08): a dry run must stay on the local tables
+    — the FDIC wildcard and ProPublica adapters call out AND write
+    search_cache / negative_cache, which a dry run promises not to do."""
+    return _oracles.lookup(name, hint, db_path=ORACLES_DB_PATH, cache=cache,
+                           live=ORACLES_LIVE_ENABLED if live is None else live)
+
+
+_ORACLE_FIELDS = ('hq', 'revenue', 'zi_subindustry', 'url', 'size', 'industry')
+
+
+def _oracle_apply(firm: dict, hit: dict) -> tuple:
+    """(copy of `firm` with the registry's facts applied, fields taken).
+
+    A field is taken when it is empty OR known only from the article — a
+    registry beats a dateline and a model's guess; seeds, cache and search
+    values keep theirs — and is stamped 'oracle' in `_sources`. A revenue
+    taken from the registry brings its revenue_source, and when the
+    estimate sits under the $5M bar the copy carries `too_small`, the
+    reason company_fit fails revenue with (the Form D declared-revenue
+    rule's twin). zi from the registry → classified_by 'oracle' at High."""
+    out = dict(firm)
+    srcs = dict(out.get('_sources') or {})
+    took = []
+
+    def replaceable(f):
+        return not out.get(f) or srcs.get(f) == 'article'
+    for f in _ORACLE_FIELDS:
+        v = hit.get(f)
+        if v and replaceable(f):
+            out[f] = v
+            srcs[f] = 'oracle'
+            took.append(f)
+    if 'revenue' in took:
+        out['revenue_source'] = hit.get('revenue_source')
+        srcs['revenue_source'] = 'oracle'
+        if hit.get('too_small'):
+            out['too_small'] = (f'oracle_too_small: {hit.get("source")} est '
+                                f'{_oracles.format_usd(hit.get("revenue_amount_usd"))}')
+    if 'zi_subindustry' in took:
+        out['classified_by'] = 'oracle'
+        out['classification_confidence'] = 'High'
+    out['_sources'] = srcs
+    return out, took
+
+
+def _stage_a_oracle(name: str, firm: dict, hint: dict, cache, second_chance: bool = False,
+                    live: bool = None, anchor_state: str = None):
+    """One registry lookup for a Stage A company → (firm, hit | None). Only
+    a hit at ORACLE_MIN_CONFIDENCE or better is applied; one log line each.
+    `anchor_state` (M2): the lookup ran WITHOUT a state (the only anchor was
+    the article's dateline) — the hit counts only if its RAW name score (no
+    geography bonus) clears the bar AND its registry state equals the
+    dateline's; otherwise the dateline stays an article fact."""
+    hit = _oracle_lookup(name, hint, cache, live=live)
+    if not hit or (hit.get('confidence') or 0) < ORACLE_MIN_CONFIDENCE:
+        return firm, None
+    if anchor_state:
+        raw = hit.get('raw_score', hit.get('confidence')) or 0
+        if raw < ORACLE_MIN_CONFIDENCE or (hit.get('hq_state') or '').upper() != anchor_state:
+            log.info(f'  ✗ Registry candidate not confirmed (second chance, dateline anchor '
+                     f'{anchor_state}): {name} → {hit.get("matched_name")} · '
+                     f'{hit.get("hq") or "hq ?"} · raw {float(raw):.2f} — article hq kept')
+            return firm, None
+    out, took = _oracle_apply(firm, hit)
+    SEARCH_COUNTS['oracle'] += 1
+    log.info(f'  ✓ Registry hit ({hit.get("source")}{", second chance" if second_chance else ""}): '
+             f'{name} → {hit.get("matched_name")} · {hit.get("hq") or "hq ?"} · '
+             f'{hit.get("revenue") or "revenue ?"} · {hit.get("zi_subindustry") or "zi ?"} · '
+             f'conf {float(hit.get("confidence") or 0):.2f}'
+             + (f' · filled {", ".join(took)}' if took else ' · nothing new'))
+    if out.get('too_small'):
+        log.info(f'     {out["too_small"]} — below the $5M bar, no search')
+    return out, hit
+
+
 def _stage_a_company(event: dict, co: dict, structured: dict, article_ctx: str,
-                     cache) -> dict:
+                     cache, dry_run: bool = False) -> dict:
     """STAGE A — free classification for one workable company:
-    structured seeds → account firmographic cache → ONE article-only local
-    LLM call (only when zi_subindustry or hq is still missing). Returns a
-    firm dict carrying classification_confidence / classified_by /
-    no_search / _seeds; the LLM never overrides a seed."""
+    structured seeds → account firmographic cache → registry (Phase 3 B2:
+    SEC IAPD / FDIC / ProPublica for adviser-, bank- and nonprofit-shaped
+    names) → ONE article-only local LLM call (only when zi_subindustry or
+    hq is still missing) → a second registry chance when the article's
+    subindustry says bank / adviser / nonprofit but the name did not.
+    Returns a firm dict carrying classification_confidence / classified_by
+    / no_search / _seeds; nothing downstream overrides a seed.
+
+    Order (M6, review 2026-09-08): the AccountCache fills BEFORE the
+    registry runs. The cache holds what a SEARCH established for this
+    account (hq, revenue, zi, up to 365 days); the registry may only fill
+    what is empty or known from the article (_oracle_apply) — with the old
+    order a fuzzy registry hit overwrote researched facts and re-stamped
+    them 'oracle' for another year. A cached hq also anchors the lookup.
+    `dry_run` (M9): the registry stays on the local tables."""
     name = co['name']
     key = _gates_account_key(name)
     firm = {f: None for f in _FIRM_FIELDS}
     seeds = _structured_seeds(event, name, structured)
     firm.update(seeds)
-    # Per-field provenance (review 2026-09-07): 'seed' | 'cache' | 'article'
-    # here, 'search' added by _merge_search. Decides what the pre-search
-    # gates may judge, what Stage B still needs and what the cache keeps.
+    # Per-field provenance (review 2026-09-07): 'seed' | 'oracle' | 'cache' |
+    # 'article' here, 'search' added by _merge_search. Decides what the
+    # pre-search gates may judge, what Stage B still needs and what the
+    # cache keeps.
     firm['_sources'] = {f: 'seed' for f in seeds}
     if seeds.get('hq'):
         log.info(f'     hq seeded from SEC filing: {seeds["hq"]}')
@@ -2773,10 +3000,22 @@ def _stage_a_company(event: dict, co: dict, structured: dict, article_ctx: str,
     cached = cache.get_firmographics(key) if key else None
     if cached:
         firm = _fill_missing(firm, cached, source='cache')
-        if cached.get('zi_subindustry'):
+        if firm['_sources'].get('zi_subindustry') == 'cache':
             conf, by = cached.get('classification_confidence'), 'cache'
-    if by == 'cache' and firm.get('hq'):
-        log.info(f'  → Account cache: {name} (zi + hq known — no LLM call)')
+    # Registry anchor: the SEC seed's state, else the cached (researched)
+    # hq's, else the ONE state the scraper's territory match named.
+    state_hint = ((_gates_hq_state_code(seeds['hq']) if seeds.get('hq') else None)
+                  or (_gates_hq_state_code(firm.get('hq'))
+                      if firm['_sources'].get('hq') == 'cache' else None)
+                  or _event_state_hint(event, seeds))
+    live = ORACLES_LIVE_ENABLED and not dry_run
+    firm, oracle_hit = _stage_a_oracle(name, firm, {'kind': 'auto', 'state': state_hint}, cache,
+                                       live=live)
+    if firm['_sources'].get('zi_subindustry') == 'oracle':
+        conf, by = 'High', 'oracle'
+    if by in ('cache', 'oracle') and firm.get('hq') and firm.get('zi_subindustry'):
+        log.info(f'  → {"Registry" if by == "oracle" else "Account cache"}: {name} '
+                 f'(zi + hq known — no LLM call)')
     else:
         log.info(f'  → Classifying from article: {name}')
         got = enrich_one_company(name, _industry_hint_for(co),
@@ -2785,6 +3024,13 @@ def _stage_a_company(event: dict, co: dict, structured: dict, article_ctx: str,
         firm = _fill_missing(firm, got, source='article')
         if not had_zi:
             conf, by = got.get('classification_confidence'), 'article'
+        # Second chance: the name looked like nothing ("Beacon Hill Partners"),
+        # but the article called it a bank / adviser / nonprofit — the
+        # registries can now confirm hq, revenue and url for free.
+        if oracle_hit is None and firm.get('zi_subindustry') in _oracles.SECOND_CHANCE_ZI:
+            firm, oracle_hit = _stage_a_second_chance(name, firm, state_hint, cache, live)
+            if firm.get('classified_by') == 'oracle':
+                conf, by = 'High', 'oracle'
     firm['classification_confidence'] = conf
     firm['classified_by'] = by
     structured_out = ((structured or {}).get('verdict') == 'out'
@@ -2796,6 +3042,31 @@ def _stage_a_company(event: dict, co: dict, structured: dict, article_ctx: str,
     firm['no_search'] = no_search
     firm['_seeds'] = seeds
     return firm
+
+
+def _stage_a_second_chance(name: str, firm: dict, state_hint, cache, live: bool):
+    """The registry retry after the article pass → (firm, hit | None).
+
+    M2 (review 2026-09-08): when the event itself named a state (SEC seed,
+    cached hq, single matched region) that state anchors the lookup as
+    before. When the only anchor is the ARTICLE's hq — a dateline, i.e.
+    where the release was issued — the lookup runs with NO state and no
+    city (no geography bonus at all) and the hit is accepted only if its
+    raw name score clears the bar AND the registry puts it in the
+    dateline's state. Anchoring on the dateline let a Boston-datelined
+    release confirm a same-name Boston firm, replace the article hq with
+    the registry's (provenance 'oracle'), and tombstone the event before
+    any search — for a company that was never in Boston."""
+    zi = firm['zi_subindustry']
+    if state_hint:
+        hint = {'kind': 'auto', 'zi_guess': zi, 'state': state_hint,
+                'city': _hq_city(firm.get('hq'))}
+        return _stage_a_oracle(name, firm, hint, cache, second_chance=True, live=live)
+    anchor = (_gates_hq_state_code(firm.get('hq'))
+              if firm.get('_sources', {}).get('hq') == 'article' else None)
+    hint = {'kind': 'auto', 'zi_guess': zi, 'state': None, 'city': None}
+    return _stage_a_oracle(name, firm, hint, cache, second_chance=True, live=live,
+                           anchor_state=anchor)
 
 
 def _merge_search(firm_a: dict, got: dict, seeds: dict) -> dict:
@@ -2883,6 +3154,12 @@ def _stage_b_company(co: dict, firm_a: dict, article_ctx: str, tier: int) -> dic
     if not needs:
         log.info(f'  → No search ({name}): nothing left to learn')
         return dict(firm_a, deferred=False)
+    if needs == ['size'] and 'oracle' in srcs.values():
+        # Phase 3 B2: the registry settled everything fit-relevant (FDIC and
+        # ProPublica publish no headcount). `size` never changes a verdict —
+        # a search for it alone is quota spent on a nice-to-have.
+        log.info(f'  → No search ({name}): registry-settled, only headcount unknown')
+        return dict(firm_a, deferred=False)
     if budget.exhausted():
         key = _gates_account_key(name)
         if not (key and _account_cache().get_search(key, 'firmographic')):
@@ -2904,11 +3181,12 @@ def _remember_firmographics(cache, name: str, firm: dict) -> None:
     Provenance gate (review 2026-09-07): the cache lives up to 365 days and
     every later event of the account starts from it, so an article-only
     guess written here poisoned them all. Per `_sources`:
-      * hq / revenue / industry — a structured seed or a search, never the
-        article pass;
-      * zi_subindustry — search-derived, or article at High confidence (the
-        same bar that lets it tombstone), with its confidence alongside;
-      * url / linkedin / size — search only;
+      * hq / revenue / industry — a structured seed, a registry (Phase 3
+        'oracle') or a search, never the article pass;
+      * zi_subindustry — registry- or search-derived, or article at High
+        confidence (the same bar that lets it tombstone), with its
+        confidence alongside;
+      * url / linkedin / size — registry or search only;
       * cache-sourced values are not re-stamped (that would extend a TTL
         without new evidence). A firm with no provenance persists nothing."""
     key = _gates_account_key(name)
@@ -2922,17 +3200,53 @@ def _remember_firmographics(cache, name: str, firm: dict) -> None:
         if not v:
             continue
         if f in ('url', 'linkedin', 'size'):
-            keep = src == 'search'
+            keep = src in ('oracle', 'search')
         elif f == 'zi_subindustry':
-            keep = src == 'search' or (src == 'article' and conf == 'High')
+            keep = src in ('oracle', 'search') or (src == 'article' and conf == 'High')
         else:                       # hq, revenue, revenue_source, industry
-            keep = src in ('seed', 'search')
+            keep = src in ('seed', 'oracle', 'search')
         if keep:
             payload[f] = v
     if 'zi_subindustry' in payload:
         payload['classification_confidence'] = conf
     if payload:
         cache.set_firmographics(key, payload)
+
+
+def _resolve_company_domain(firm: dict, name: str, cache) -> dict:
+    """Phase 3 B4 hook: attach `domain` / `domain_method` from the free
+    resolver (src.pipeline.domains.resolve — hint url → cache → oracle
+    tables → FDIC → SEC → Clearbit) when the company has none yet. The
+    resolver persists a confident answer to the AccountCache itself; a
+    cache-served answer reports the method that originally found it.
+    Optional module, fail-soft: no resolver or any error → firm untouched."""
+    if _resolve_domain is None or firm.get('domain'):
+        return firm
+    try:
+        # H2 (review 2026-09-08): a hint reaches the resolver only when it
+        # was RESEARCHED — seed / oracle / search / cache provenance. The
+        # article-only LLM pass invents plausible urls from the company
+        # name, and a name-derived url passes the resolver's name-token
+        # test by construction; it must never become the account's
+        # identity. Same for hq (a dateline is not an HQ) and linkedin (an
+        # invented profile URL would become a dedup alias). M4: no `zi` —
+        # the resolver wants a ZoomInfo URL/id there, not a subindustry
+        # label ('zoominfo:banking' was written to every account).
+        srcs = firm.get('_sources') or {}
+        hints = {k: firm.get(k) for k in ('url', 'hq', 'linkedin')
+                 if firm.get(k) and srcs.get(k) in ('seed', 'oracle', 'search', 'cache')}
+        res = _resolve_domain(name, hints, cache=cache) or {}
+        domain = res.get('domain')
+        if not domain:
+            return firm
+        method = res.get('method')
+        if method == 'cache':
+            method = (res.get('evidence') or {}).get('cached_method') or 'cache'
+        log.info(f'     domain: {domain} [{method}]')
+        return dict(firm, domain=domain, domain_method=method)
+    except Exception as e:      # noqa: BLE001 — identity is a bonus, never a blocker
+        log.debug(f'  domain resolution failed for {name}: {e}')
+        return firm
 
 
 def _pre_search_view(firm: dict) -> dict:
@@ -3003,6 +3317,8 @@ def enrich_events(
                   if c in typed_cols]
     if retry_cols:
         cols += ', ' + ', '.join(retry_cols)
+    if col_ok.get('matched_regions'):       # Phase 3: registry state anchor
+        cols += ', matched_regions'
     query = client.table('events').select(cols)
     if not re_enrich and col_ok.get('enriched_at'):
         query = query.is_('enriched_at', 'null')
@@ -3242,12 +3558,15 @@ def enrich_events(
             ok += 1
             outcomes['not_fit'] += 1
             continue
+        # H3 / P4: an SEC-registered adviser is the management company —
+        # its '... LP' name is not a fund vehicle (see _entity_shape).
+        _registry = 'sec_iapd' if _is_iapd_event(event) else None
         _workable_ops = [c for c in companies
                          if (c.get('role') or '').lower() in WORKABLE_ROLES
-                         and not is_non_operating_entity(c.get('name') or '',
-                                                         c.get('descriptor') or '')[0]]
+                         and not _entity_shape(c.get('name') or '',
+                                               c.get('descriptor') or '', _registry)[0]]
         if not _workable_ops:
-            _kinds = {is_non_operating_entity(c.get('name') or '', c.get('descriptor') or '')[1]
+            _kinds = {_entity_shape(c.get('name') or '', c.get('descriptor') or '', _registry)[1]
                       for c in companies if (c.get('role') or '').lower() in WORKABLE_ROLES}
             log.info(f'  🚫 Every workable company is a non-operating entity '
                      f'({", ".join(sorted(k for k in _kinds if k))}) — soft-deleting.')
@@ -3289,7 +3608,7 @@ def enrich_events(
                 continue
             # (b) Auto-fail names (public school districts, non-operating
             #     entities) fail the fit gate on name alone.
-            _nonop_kind = is_non_operating_entity(name, co.get('descriptor') or '')[1]
+            _nonop_kind = _entity_shape(name, co.get('descriptor') or '', _registry)[1]
             if _is_public_school_district(name) or _nonop_kind:
                 log.info(f'  → Skipping ({_nonop_kind or "public school district"}): {name}')
                 stage.append((co, None))
@@ -3303,7 +3622,8 @@ def enrich_events(
                 log.info(f'  → Cached (this run): {name}')
                 firm = dict(firm_cache[run_key], no_search=True)
             else:
-                firm = _stage_a_company(event, co, _sv, _article_ctx, acct_cache)
+                firm = _stage_a_company(event, co, _sv, _article_ctx, acct_cache,
+                                        dry_run=dry_run)
             stage.append((co, firm))
         if LLM_STATE['unavailable']:
             outcomes['llm_unavailable'] += 1
@@ -3322,8 +3642,9 @@ def enrich_events(
         # SEC verdict, zi OTHER at High confidence (or structured agreement)
         # and a High-confidence blocklisted industry. Everything else goes
         # on to Stage B; the full gates run on the merged data afterwards.
-        _probe = [_company_record(c['name'], c['role'], _pre_search_view(f)) if f else
-                  _placeholder_company(c['name'], c['role']) for c, f in stage]
+        _probe = [_with_registry(_company_record(c['name'], c['role'], _pre_search_view(f)) if f
+                                 else _placeholder_company(c['name'], c['role']), _registry)
+                  for c, f in stage]
         _probe = copy.deepcopy(_probe)      # apply_fit_gates attaches c['fit'] in place
         _pri = pick_primary(_probe)
         _blk, _kw = industry_is_blocked(_pri.get('industry') or '')
@@ -3351,10 +3672,11 @@ def enrich_events(
 
         # ── STAGE B (survivors only; dry-run never searches) ──
         enriched = []
+        _stage_firms = {}       # name → firm dict, for the domain hook after the fit gates
         for co, firm in stage:
             name, role = co['name'], co['role']
             if firm is None:
-                enriched.append(_placeholder_company(name, role))
+                enriched.append(_with_registry(_placeholder_company(name, role), _registry))
                 continue
             if not firm.get('no_search') and not dry_run:
                 firm = _stage_b_company(co, firm, _article_ctx, tier)
@@ -3365,12 +3687,13 @@ def enrich_events(
             firm_cache[run_key] = firm
             if not dry_run:
                 _remember_firmographics(acct_cache, name, firm)
-            _srcs = firm.get('_sources') or {}      # [seed|cache|article|search]
+            _srcs = firm.get('_sources') or {}      # [seed|oracle|cache|article|search]
             found = [f'{k}: {firm[k]}' + (f' [{_srcs[k]}]' if _srcs.get(k) else '')
                      for k in _FIRM_FIELDS + ('classified_by',) if firm.get(k)]
             if found:
                 log.info(f'     {" | ".join(found)}')
-            enriched.append(_company_record(name, role, firm))
+            enriched.append(_with_registry(_company_record(name, role, firm), _registry))
+            _stage_firms[name] = firm
         if LLM_STATE['unavailable']:
             outcomes['llm_unavailable'] += 1
             _unavail_streak = True
@@ -3419,6 +3742,22 @@ def enrich_events(
             ok += 1
             outcomes['not_fit'] += 1
             continue
+        # Phase 3 B4: website domain for the companies that SURVIVED the fit
+        # gates — L6 (review 2026-09-08): the hook used to run inside the
+        # Stage B loop, so a company about to be tombstoned still spent a
+        # Clearbit / FDIC call. A company whose own fit failed (the acquirer
+        # of a surviving target) can never be the account and is skipped
+        # too; a dry run never resolves (the resolver may call keyless APIs).
+        if not dry_run:
+            for _rec in enriched:
+                _firm = _stage_firms.get(_rec.get('name'))
+                if _firm is None or (_rec.get('fit') or {}).get('verdict') == 'fail':
+                    continue
+                _resolved = _resolve_company_domain(_firm, _rec['name'], acct_cache)
+                if _resolved.get('domain'):
+                    _rec['domain'] = _resolved['domain']
+                    _rec['domain_method'] = _resolved.get('domain_method')
+                    firm_cache[_rec['name'].lower().strip()] = _resolved
         if fit['verdict'] == 'staged':
             # Vertical unknown → hidden from reps, no grading spend. If the
             # search was throttled/deferred, leave enriched_at NULL so the
@@ -3640,7 +3979,8 @@ def enrich_events(
         f'transport_failed:{sc.get("transport_failed", 0)})  ·  '
         f'Served without a search: cache:{sc["cache"]} '
         f'negative_cache:{sc["negative_cache"]} '
-        f'budget_skipped:{sc.get("budget_skipped", 0)}  ·  '
+        f'budget_skipped:{sc.get("budget_skipped", 0)} '
+        f'oracle:{sc.get("oracle", 0)}  ·  '
         f'Tavily month {_tavily_month_count()}/{TAVILY_MONTHLY_BUDGET}, '
         f'today {_tavily_day_count()}/{TAVILY_DAILY_RATION}'
     )
@@ -3744,7 +4084,10 @@ def regrade_only_events(limit: int = None, dry_run: bool = False,
         # Note: legacy events lack zi_subindustry (added 2026-07-16) — their
         # vertical reads 'unknown', so most legacy events land 'unverified'
         # (kept, capped at B, flagged) rather than 'fail'. Full re-enrichment
-        # is what upgrades them to confirmed fit.
+        # is what upgrades them to confirmed fit. Records written before the
+        # registry stamp existed (H3) get it here from the event itself.
+        if _is_iapd_event(event):
+            cd = [_with_registry(dict(c), 'sec_iapd') if isinstance(c, dict) else c for c in cd]
         fit = apply_fit_gates(cd)
         if fit['verdict'] == 'fail':
             log.info(f'  🚫 Fit gate FAIL — {"; ".join(fit["reasons"])} '

@@ -269,6 +269,78 @@ their names logged (`--no-reap` keeps them). **Dashboard**: server-side `verify_
 when the column exists (NULL + `fit.verdict=pass` counts as verified — in-flight rows during
 the migration), legacy client-side path otherwise; hidden-count caption is window-wide.
 
+### Phase 3 (2026-09-08) — SUPPLY: more finance-leader triggers, free oracles, new sources
+
+**Why the finance-leader trigger was starved (research 2026-09-08, all live-verified):** the
+"PR Newswire Personnel" feed URL was the all-news firehose (a duplicate); the hire detector
+only knew *named/appointed/hired/joins* so "X **Appoints** Y as CFO" / "**Names** new Controller"
+never matched; GlobeNewswire has no datelines so every CFO item died on "territory unknown";
+and **Google News had produced zero events since 2026-02-05** — every item embeds a
+news.google.com link and "Google" sat on the substring-matched public-company blocklist.
+
+**Scrape side (GitHub Actions):** whole-word matching for excluded public companies and
+excluded industries (ticker indicators stay substring; bare "Pipeline" narrowed to oil/gas
+phrases); hire indicators widened; finance-leader roles (controller, VP finance, treasurer,
+finance director, head of finance, CAO) → `executive_hire` only with a hire indicator (CFO →
+`cfo_hire`; never relabel controllers — #NewController +3 vs #NewCFO +5); unknown-territory
+admission ONLY for finance-leader hires (enrichment verifies HQ; false rejects are lost
+forever); Google News: `strip_html` before gates, excluded-location only without an
+in-territory signal, region-grouped queries (≤12 terms, `when:7d`, 8 state groups: CFO hires,
+dealership M&A, home-care M&A) — the state group ADMITS the item only (`matched_regions`
+stays empty; the HQ gate decides territory); feed-level `default_region` for regional
+journals works the same way (admission only, vetoed by any dateline elsewhere, never a
+relevance boost, never a `stable_target` on its own). Hire TYPE is decided from the TITLE
+(finance role + strong verb or "new/as/incoming <role>"); earnings releases and product news
+that merely mention a CFO are not hires.
+**Feeds added** (`config.example.yaml` = `config.yaml`): real PRN Personnel URL, GlobeNewswire
+CFO / Chief Financial Officer keyword feeds + Management Changes, PRWeb, HomeCare Magazine,
+Performance Brokerage (dealer transactions), BodyShop Business, Virginia Business, Vermont
+Business Magazine, NH Business Review, Providence Business News, Hartford Business Journal.
+DO NOT ADD: GlobeNewswire subjectcode/24 (class-action spam), Business Wire (registered channel
+only), EIN Presswire / ACCESS Newswire (gated), Automotive News / McKnight's / Kerrigan /
+bizjournals.com (blocked/404), Funeral Business Advisor (domain gone); funeral-home queries
+have no yield anywhere. Fixtures: `tests/fixtures/*.xml` (one real fetch each).
+
+**Free oracles (`src/pipeline/oracles.py`, tables in `state/oracles.db`, refreshed by
+`scripts/refresh_oracles.py --source all` — monthly via `run_oracles.sh` /
+`com.teamalbert.oracles.plist`, 2nd of the month 05:00 ET):** SEC IAPD adviser feed
+(23,797 RIAs; state, RAUM, headcount, website; revenue ≈ min(RAUM×0.7%, employees×$400K)),
+FDIC active banks (4,235; state, assets, website; revenue ≈ assets×5.5%; call
+`api.fdic.gov` directly — the documented host redirects and the hop is metered 20/min),
+ProPublica nonprofits (state-filtered search + similarity gate ≥0.85; **zero hits = HTTP 404
+with a JSON body**, treated as a confirmed miss and negative-cached; alias expansion
+YMCA↔"Young Mens Christian Association"; no website, no officers). `lookup(name, hint)` runs in
+Stage A after the structured seeds and before the article LLM (provenance `oracle`,
+`classified_by='oracle'`), plus a second chance when the article says banking/nonprofit/RIA.
+An oracle estimate < $5M = `too_small` → revenue out (same rule as Form D). **990 Part VII
+officer diffs are NOT a trigger** (median 16–18 month lag) — decided, don't re-propose.
+
+**New trigger source `sec_iapd`:** `scripts/ria_trigger.py` (dry-run default, `--apply`)
+emits `expansion` events "New SEC-registered investment adviser" for in-territory, in-band
+(≥$5M est.) registrations of the last 45 days (~50/yr), seeded with hq_state / zi / revenue,
+`verify_state` NULL so enrichment grades them; per-firm ledger `ria_trigger_emitted` in
+`state/oracles.db` (refresh never drops it). Label 'SEC IAPD' (`adviserinfo.sec.gov` before
+the generic sec.gov rule in `sources.py` and the dashboard).
+
+**Domains (`src/pipeline/domains.py`):** `resolve(name, hints)` ladder hint_url → cache →
+local oracle tables → FDIC → Clearbit autocomplete (keyless; accept only an exact
+account-key match or a single token-superset; bank-shaped names need the state) → SEC
+submissions (CIK) → guess (OFF: `DOMAINS_GUESS_ENABLED`, unsafe). Aggregator/wire/social
+denylist; profile URLs become aliases (`linkedin:<slug>`), never identities. Transient errors
+are never negative-cached. Stored on the company record (`domain`, `domain_method`) and in
+the AccountCache; a typed `domain` column waits for the Phase 4 accounts table.
+
+**Supply visibility:** Weekly Scorecard "Supply" section (trigger × source pivot 7d vs prior
+7d, verified accounts per vertical over 28d with the verified-without-search share, finance-
+leader share vs the 30% target, top-source share vs the 40% ceiling). Weekly monitor checks
+`Vertical mix` (WARN ONCE when a vertical with ≥5 verified goes to 0 — remembered as
+"still dark since <date>" in `state/vertical_mix.json` until it recovers — or drops under 5%
+from >15%) and `Finance-leader share` (WARN when <15% while the last on-target reading, a
+high-water mark kept in `state/finance_leader_share.json`, is ≤6 weeks old). Manual runs:
+add `--no-state` so they never overwrite the Monday baselines.
+First reading 2026-09-08: finance-leader share 32%; verified 28d = FS 65% · Nonprofits 18% ·
+Consumer Services 18%; without-search 0% (provenance starts now).
+
 ## 1. Architecture (data flow)
 
 ```
@@ -515,7 +587,7 @@ Each check returns 🟢 PASS / 🟡 WARN / 🔴 FAIL with a one-liner. **Exit co
 # Run from Mac terminal or inside Elon's container
 python monitor_health.py            # quick
 python monitor_health.py --daily
-python monitor_health.py --weekly
+python monitor_health.py --weekly --no-state   # manual weekly runs keep the Monday baselines
 python monitor_health.py --json     # machine-readable
 ```
 
@@ -610,7 +682,7 @@ source venv/bin/activate
 |---|---|
 | **Health check (quick — ~10s)** | `python monitor_health.py` |
 | **Health check (daily — ~30s)** | `python monitor_health.py --daily` |
-| **Health check (weekly — ~60s)** | `python monitor_health.py --weekly` |
+| **Health check (weekly — ~60s)** | `python monitor_health.py --weekly --no-state` (manual runs must not overwrite the Monday baselines) |
 | Manual scrape cycle (locally, mirrors GitHub Actions) | `python -m src.main` |
 | Enrich only NEW events | `python enrichment_scout.py` |
 | Re-grade ALL events (free, no search API) | `python enrichment_scout.py --regrade-only` |
@@ -619,6 +691,9 @@ source venv/bin/activate
 | **Typed-column migration (one-time, A.J.)** | paste `supabase/migrations/002_v2_typed_columns.sql` into Supabase → SQL Editor → Run; then `python scripts/backfill_typed_columns.py` (dry-run) and `--apply` |
 | Re-verify hidden accounts (ranked, capped 50, honors retry_after) | `python enrichment_scout.py --re-enrich --reverify-unverified` |
 | Daily re-verify job (06:30 ET, `com.teamalbert.reverify.plist` → `run_reverify.sh`, posts to #scout-engine) | `tail -f logs/reverify.log` · pause with `touch state/PAUSE` |
+| Refresh the free oracle tables (SEC advisers + FDIC banks; monthly job does this) | `python scripts/refresh_oracles.py --source all` |
+| New-adviser trigger events (dry-run default) | `python scripts/ria_trigger.py` / `--apply` (monthly job: `run_oracles.sh`, log `logs/oracles.log`) |
+| Local scrape cycle with the new feeds (writes local SQLite + alerts/ only) | `python -m src.main` (one cycle; `--daemon` loops) |
 | Re-gate the queue with zero paid search | `python scripts/migrate_v2.py` (dry-run) / `--apply` |
 | Full re-enrich (hits Firecrawl by default; Tavily only on fallbacks ~3%) | `python enrichment_scout.py --re-enrich` |
 | Cleanup industry leaks + dupes (dry-run) | `python cleanup_legacy_events.py` |

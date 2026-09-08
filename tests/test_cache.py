@@ -254,3 +254,42 @@ def test_corrupt_rows_are_misses(tmp_path):
     assert cache.get_search('acme', now=T0) is None
     assert cache.get_firmographics('acme', now=T0) is None
     assert cache.should_skip('acme', now=T0) is False
+
+
+# ── Phase 3 B4: domain-resolution TTL entries (src/pipeline/domains.py) ──────
+
+def test_domain_kind_ttls_are_registered():
+    # research 2026-09-08: Clearbit is cacheable 30d, FDIC/oracle refresh
+    # monthly-ish, SEC websites basically never move, guesses are low-trust.
+    assert KIND_TTL_DAYS['domain:clearbit'] == 30
+    assert KIND_TTL_DAYS['domain:fdic'] == 90
+    assert KIND_TTL_DAYS['domain:sec'] == 365
+    assert KIND_TTL_DAYS['domain:oracle'] == 180
+    assert KIND_TTL_DAYS['domain:guess'] == 30
+
+
+def test_domain_field_ttls_are_registered():
+    for field in ('domain', 'domain_method', 'domain_confidence', 'aliases'):
+        assert FIELD_TTL_DAYS[field] == 365
+
+
+def test_domain_search_kind_expires_on_its_own_ttl(cache):
+    hit = {'results': [{'name': 'Cherry Bekaert', 'domain': 'cbh.com'}], 'chosen': 'cbh.com'}
+    cache.set_search('cherry bekaert', 'domain:clearbit', hit, now=T0)
+    assert cache.get_search('cherry bekaert', 'domain:clearbit', now=T0 + timedelta(days=29)) == hit
+    assert cache.get_search('cherry bekaert', 'domain:clearbit', now=T0 + timedelta(days=31)) is None
+    # A different kind under the same key is independent (fdic lives 90d).
+    cache.set_search('cherry bekaert', 'domain:fdic', hit, now=T0)
+    assert cache.get_search('cherry bekaert', 'domain:fdic', now=T0 + timedelta(days=89)) == hit
+
+
+def test_domain_identity_fields_outlive_revenue(cache):
+    cache.set_firmographics('cherry bekaert', {
+        'domain': 'cbh.com', 'domain_method': 'clearbit', 'domain_confidence': 'medium',
+        'aliases': ['linkedin:cherry-bekaert'], 'revenue': '$100M',
+    }, now=T0)
+    later = T0 + timedelta(days=200)
+    fg = cache.get_firmographics('cherry bekaert', now=later)
+    assert fg == {'domain': 'cbh.com', 'domain_method': 'clearbit',
+                  'domain_confidence': 'medium', 'aliases': ['linkedin:cherry-bekaert']}
+    assert cache.get_firmographics('cherry bekaert', now=T0 + timedelta(days=366)) is None

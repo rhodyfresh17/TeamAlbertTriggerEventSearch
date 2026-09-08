@@ -593,6 +593,14 @@ territory:
     # Other
     - "Russia"
     - "Moscow"
+    # Non-territory Canada (review 2026-09-08: neither territory nor
+    # excluded, so a "CALGARY, Alberta" M&A release was admitted on a
+    # feed's default_region and a Google News state-group hint)
+    - "Alberta"
+    - "British Columbia"
+    - "Manitoba"
+    - "Saskatchewan"
+    - "Yukon"
     # Non-territory US (states outside Team Albert's coverage)
     - "California"
     - "Los Angeles"
@@ -624,6 +632,7 @@ territory:
     - "Milwaukee"
     - "Missouri"
     - "St. Louis"
+    - "Kansas"                 # review 2026-09-08: "Wichita, Kansas" was neither in nor out
     - "Kansas City"
     - "Louisiana"
     - "New Orleans"
@@ -662,7 +671,10 @@ territory:
     - "Oil & Gas"
     - "Petroleum"
     - "Drilling"
-    - "Pipeline"
+    - "Oil pipeline"          # was bare "Pipeline": whole-word still killed CFO releases
+    - "Gas pipeline"          # mentioning a "sales pipeline" (research 2026-09-08)
+    - "Pipeline operator"
+    - "Midstream"
     - "Petrochemical"
     - "Refinery"
     - "Refining"
@@ -808,6 +820,10 @@ territory:
       - "common stock"
       - "shareholders"
       - "SEC filing"
+      # "Fortune 500" / "Fortune 100" count in the TITLE only (base.py
+      # TITLE_ONLY_PUBLIC_INDICATORS, review 2026-09-08): a private company's
+      # release calls its new CFO a "Fortune 500 executive" (Lotlinx) — the
+      # hire's résumé, not the company's listing.
       - "Fortune 500"
       - "Fortune 100"
       - "S&P 500"
@@ -819,6 +835,7 @@ territory:
       # All way too large for NetSuite up-market ($0-$200M target band)
       - "JPMorgan"
       - "JPMorgan Chase"
+      - "JPMorganChase"          # the bank's own one-word spelling (review 2026-09-08)
       - "Bank of America"
       - "BofA"
       - "Wells Fargo"
@@ -928,6 +945,8 @@ keywords:
     - "Director of Accounting"
     - "Accounting Director"
     - "Treasurer"
+    - "Vice President of Finance"   # 2026-09-08: long form of "VP of Finance"
+    - "Chief Accounting Officer"    # 2026-09-08: finance-leader seat below the CFO
     - "Finance Lead"
     - "Accounting Manager"
     - "Finance Manager"
@@ -1013,8 +1032,35 @@ sources:
     # ── HIGH-SIGNAL personnel & executive announcements ──────────────────
     # PR Newswire's dedicated Personnel Announcements feed: best single
     # source for new CFO/CEO/exec hires across public & private companies.
+    # URL fixed 2026-09-08: /rss/personnel-announcements-list.rss is the
+    # all-news firehose (19/20 items identical to "PR Newswire" below); the
+    # real personnel feed sits under general-business-latest-news (channel
+    # title "Personnel Announcements", 10-20 items per weekday, every item
+    # datelined, about half in territory).
     - name: "PR Newswire - Personnel Announcements"
-      url: "https://www.prnewswire.com/rss/personnel-announcements-list.rss"
+      url: "https://www.prnewswire.com/rss/general-business-latest-news/personnel-announcements-list.rss"
+      enabled: true
+
+    # GlobeNewswire keyword / subject feeds (added 2026-09-08, live-verified).
+    # GlobeNewswire RSS carries no datelines, so rss_scraper admits the
+    # finance-leader hires from these with unknown territory and enrichment
+    # verifies the HQ; listed issuers are dropped via their stock category.
+    - name: "Globe Newswire - CFO Keyword"
+      url: "https://www.globenewswire.com/RssFeed/keyword/CFO/feedTitle/GlobeNewswire%20-%20CFO"
+      enabled: true
+
+    - name: "Globe Newswire - Chief Financial Officer Keyword"
+      url: "https://www.globenewswire.com/RssFeed/keyword/chief%20financial%20officer/feedTitle/GlobeNewswire%20-%20Chief%20Financial%20Officer"
+      enabled: true
+
+    - name: "Globe Newswire - Management Changes"
+      url: "https://www.globenewswire.com/RssFeed/subject/mgc/feedTitle/GlobeNewswire%20-%20Management%20Changes"
+      enabled: true
+
+    # PRWeb — Cision's small-business wire (added 2026-09-08, live-verified):
+    # private mid-market hires and deals that never reach PR Newswire proper.
+    - name: "PRWeb - All News"
+      url: "https://www.prweb.com/rss/news-releases-list.rss"
       enabled: true
 
     - name: "PR Newswire - Mergers & Acquisitions"
@@ -1149,6 +1195,64 @@ sources:
     - name: "WebWire - Business"
       url: "http://rssfeeds.webwire.com/WebWire-News-Business-Announcements"
       enabled: true
+
+    # ── Consumer Services trade press (added 2026-09-08, live-verified) ──
+    # Home care, auto-dealer and collision-repair verticals: operator M&A and
+    # dealer transactions the general wires never carry.
+    - name: "HomeCare Magazine"
+      url: "https://www.homecaremag.com/rss.xml"
+      enabled: true
+
+    - name: "Performance Brokerage Services - Dealer Transactions"
+      url: "https://performancebrokerageservices.com/feed/"
+      enabled: true
+
+    - name: "BodyShop Business"
+      url: "https://www.bodyshopbusiness.com/feed/"
+      enabled: true
+
+    # ── Regional business journals (added 2026-09-08, live-verified) ─────
+    # default_region: the journal's home state ADMITS a story that names no
+    # place at all ("Bedford-based", "CT") past the territory gate — and
+    # nothing more (review 2026-09-08): matched_regions stays empty (no
+    # relevance points, no HQ hint downstream), a dateline elsewhere or an
+    # excluded location vetoes it, a real trigger is still required, the
+    # industry/public blocks still apply, and the enrichment HQ gate
+    # re-verifies. Must be a territory region.
+    - name: "Virginia Business"
+      url: "https://virginiabusiness.com/feed/"
+      enabled: true
+      default_region: "Virginia"
+
+    - name: "Vermont Business Magazine"
+      url: "https://vermontbiz.com/rss.xml"
+      enabled: true
+      default_region: "Vermont"
+
+    - name: "NH Business Review"
+      url: "https://www.nhbr.com/feed/"
+      enabled: true
+      default_region: "New Hampshire"
+
+    - name: "Providence Business News"
+      url: "https://pbn.com/feed/"
+      enabled: true
+      default_region: "Rhode Island"
+
+    - name: "Hartford Business Journal"
+      url: "https://hartfordbusiness.com/feed/"
+      enabled: true
+      default_region: "Connecticut"
+
+    # DO NOT ADD (checked 2026-09-08 — save the next person the hour):
+    #   GlobeNewswire subjectcode/24      class-action / shareholder-suit spam
+    #   Business Wire                     RSS needs a registered channel ID (note above)
+    #   EIN Presswire, ACCESS Newswire    feeds gated / bot-blocked
+    #   Automotive News, McKnight's,
+    #   Kerrigan Advisors, bizjournals.com  block scrapers or 404
+    #   Funeral Business Advisor          domain gone — and funeral-home Google
+    #                                     News queries had no yield in 20 years
+    #                                     of results
 
     # Google Alerts — CFO hire signals by territory region
     - name: "Google Alert - CFO Hires (Northeast)"

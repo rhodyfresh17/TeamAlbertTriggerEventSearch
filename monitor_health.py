@@ -10,9 +10,13 @@ Usage:
     python monitor_health.py            # default = --quick (~10s)
     python monitor_health.py --quick    # essential checks only
     python monitor_health.py --daily    # adds source health + yield checks
-    python monitor_health.py --weekly   # daily set + finance-leader source mix (Monday run;
-                                        #   the all-clear heartbeat is in the wrapper)
+    python monitor_health.py --weekly   # daily set + Monday-only checks: finance-leader source
+                                        #   mix + share of intake, vertical mix (Phase 3 2026-09-08);
+                                        #   the all-clear heartbeat is in the wrapper
     python monitor_health.py --json     # machine-readable output
+    python monitor_health.py --weekly --no-state
+                                        # manual / diagnostic run: READ the state files,
+                                        #   never write them (see "Manual runs" below)
 
 Exit codes:
     0  — all checks PASS, or any WARN
@@ -30,6 +34,13 @@ dead for 9 days. Every WARN here is posted to Mattermost by
 run_health_check.sh, so a check must not WARN for a condition that is
 expected every day — that is noise the owner learns to ignore.
 
+Manual runs (review 2026-09-08): the weekly checks compare against what the
+LAST run wrote under state/ — the Monday baseline. A --weekly run by hand
+would overwrite that baseline (and the daily state: search_mode, the
+rep-state count, the quiet-feed memory), so any manual or diagnostic run
+passes --no-state: every check still READS its state file, so the memory
+still shapes the verdicts, but nothing under state/ is written.
+
 State files (state/, gitignored — created on first run):
     state/search_mode              'ok' | 'defer' — enrichment_scout.py reads this;
                                    'defer' after 2 consecutive empty Firecrawl canaries
@@ -39,6 +50,14 @@ State files (state/, gitignored — created on first run):
                                    went quiet; kept until they recover (check_source_yield)
     state/finance_leader_mix.json  {top_source, share_pct, checked_at} from the last weekly
                                    run (check_trigger_source_concentration)
+    state/vertical_mix.json        {checked_at, total, prior_total, mix: {vertical: {n, pct}},
+                                   dark: {vertical: {since, prior}}} from the last weekly run;
+                                   `dark` lists verticals that went dark, kept until they
+                                   recover (check_vertical_mix, Phase 3 2026-09-08 / review 2026-09-08)
+    state/finance_leader_share.json {share_pct, family_n, survivors_n, checked_at,
+                                   last_on_target: {pct, checked_at}} from the last weekly run;
+                                   `last_on_target` is the high-water mark — the most recent
+                                   run at/above the target (check_finance_leader_share)
 """
 
 import os
@@ -58,6 +77,14 @@ from src.pipeline.sources import (  # noqa: E402
     source_label, feed_label, feed_matches_label, finance_leader_family,
     is_canonical_label,
 )
+# Phase 3 (2026-09-08): the FY27 vertical taxonomy is defined once, in the
+# enrichment engine; import it rather than copy it. Guarded so a broken
+# engine module degrades check_vertical_mix to a WARN that names the cause
+# instead of taking every other check down with it.
+try:
+    from enrichment_scout import ZI_SUBINDUSTRIES, NONPROFIT_VERTICAL  # noqa: E402
+except Exception:  # noqa: BLE001 — any import failure, not only ImportError
+    ZI_SUBINDUSTRIES, NONPROFIT_VERTICAL = {}, 'Nonprofits & Organizations'
 
 # Load .env
 try:
@@ -84,6 +111,10 @@ PLAIN = {PASS: 'pass', WARN: 'warn', FAIL: 'fail'}
 PROJECT_DIR = Path(__file__).parent
 DB_PATH = PROJECT_DIR / 'trigger_events.db'   # same file enrichment_scout.py's CACHE_DB_PATH defaults to
 STATE_DIR = PROJECT_DIR / 'state'
+# --no-state (review 2026-09-08): True turns every _state_write into a no-op
+# so a manual run can never move the baselines the cron compares against.
+# Set from main(); tests set it directly.
+STATE_READ_ONLY = False
 
 
 # ── Tiny state store (plain text files, one value each) ──────────────────────
@@ -97,6 +128,8 @@ def _state_read(name: str):
 
 
 def _state_write(name: str, value) -> None:
+    if STATE_READ_ONLY:         # --no-state: read the memory, never rewrite it
+        return
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     (STATE_DIR / name).write_text(f'{value}\n')
 
@@ -636,12 +669,21 @@ CRON_RAN_MAX_HOURS = 10       # same threshold check_scrape_freshness FAILs at
 FEED_ACTIVE_HOURS = 48        # source_status rows older than this are retired feeds, not "the latest run"
 CONCENTRATION_WARN_PCT = 40   # one source carrying more than this share of the best trigger = single point of failure
 CONCENTRATION_MIN_ROWS = 5    # below this a share is arithmetic noise, not a signal
-# Change-driven (review 2026-09-07): until Phase 3 adds independent finance-
-# leader sources the top share is above CONCENTRATION_WARN_PCT in every
-# reachable state (Adzuna 68% live; Google News 70% once Adzuna ages out), so
-# a WARN every run was noise. WARN only when the top source flips, its share
-# moves more than this many points since the previous weekly run, it newly
-# crosses the bar, or on the first run ever; otherwise PASS with the mix.
+# Change-driven (review 2026-09-07): with Adzuna the only live finance-leader
+# feed, the top share sat above CONCENTRATION_WARN_PCT in every reachable
+# state (Adzuna 67% on 2026-09-07), so a WARN every run was noise. The
+# review's other "reachable state" — Google News at 70% once Adzuna ages out
+# — never was one: the Google News scraper had produced next to nothing
+# since 2026-02-05 (2 news.google.com rows in seven months — a scraper bug,
+# fixed Phase 3 2026-09-08); the 'Google News' rows in the window are the
+# three Google Alerts RSS feeds (google.com/url redirects) carrying the same
+# typed source and label. Phase 3 also adds press-release personnel feeds,
+# regional business journals and the sec_iapd source, so the mix WILL move
+# over the coming weeks — the change-driven rule is what makes each shift
+# alert once instead of every Monday. WARN only when the top source flips,
+# its share moves more than this many points since the previous weekly run,
+# it newly crosses the bar, or on the first run ever; otherwise PASS with
+# the mix.
 CONCENTRATION_SHIFT_PTS = 15
 MIX_STATE_FILE = 'finance_leader_mix.json'   # {top_source, share_pct, checked_at}
 MIX_SHOW_MAX = 6              # sources listed in the "mix unchanged" line before "+n more"
@@ -1024,6 +1066,373 @@ def check_trigger_source_concentration(now=None):
     )
 
 
+# ── Phase 3 supply checks (weekly, 2026-09-08) ──────────────────────────────
+#
+# Phase 3 adds supply — press-release personnel feeds, regional business
+# journals, the fixed Google News scraper, the sec_iapd adviser source, and
+# free oracles that verify banks / RIAs / nonprofits without a search. The
+# plan's bar: finance-leader triggers ≥ 30% of new intake with no source
+# above 40% of them; nonprofits verified without search > 50%; a
+# per-vertical mix report every week. The two checks below ARE that weekly
+# report: plain language, informational PASS text in the normal case, WARN
+# only for a CHANGE the owner should act on (a vertical that went dark, a
+# share that collapsed) — every WARN is posted to Mattermost. dashboard.py
+# renders the same numbers (Weekly Scorecard → Supply); both sides bucket
+# with src.pipeline.sources and the rules below, so they agree.
+VERTICAL_WINDOW_DAYS = 28
+VERTICAL_DARK_MIN_PRIOR = 5     # ≥ this many verified accounts in the prior 28d and 0 now = "went dark"
+VERTICAL_THIN_PCT = 5           # under this share of verified accounts a vertical is "thin"
+VERTICAL_WAS_HEALTHY_PCT = 15   # thin WARNs (not just informs) when the last weekly run had it above this
+VERTICAL_MIX_STATE_FILE = 'vertical_mix.json'   # {checked_at, total, prior_total, mix: {vertical: {n, pct}}, dark: {vertical: {since, prior}}}
+UNKNOWN_VERTICAL = 'Unknown'
+# classified_by values that mean "verified without spending a search":
+# 'structured' (SEC SIC / Form D fields) and 'oracle' (Phase 3 registries).
+# 'article' is free too but it is a model's guess, not a registry hit —
+# this number tracks the oracles. 'cache' is out as well (review 2026-09-08):
+# enrichment_scout stamps it when the account cache supplies the
+# subindustry, i.e. a REPLAY of the classification stored the first time
+# the account was researched — usually by a search — so counting it inflated
+# the share with every repeat event for a known account. Same set as
+# dashboard.NO_SEARCH_CLASSIFIERS (the shared-thresholds test keeps them equal).
+NO_SEARCH_CLASSIFIERS = frozenset({'oracle', 'structured'})
+NONPROFIT_NO_SEARCH_TARGET_PCT = 50
+FINANCE_SHARE_TARGET_PCT = 30   # finance-leader share of survivors the plan aims for
+FINANCE_SHARE_WARN_PCT = 15     # WARN only under this while the high-water mark is fresh
+# High-water mark (review 2026-09-08): the WARN used to need the IMMEDIATELY
+# previous run at/above the target, so a two-week slide 32% → 27% → 11% never
+# warned — 27% was the only baseline 11% was compared with. The most recent
+# run at/above FINANCE_SHARE_TARGET_PCT is kept in the state file as
+# last_on_target and arms the WARN for this many days (6 weeks).
+FINANCE_SHARE_MARK_MAX_AGE_DAYS = 42
+FINANCE_SHARE_STATE_FILE = 'finance_leader_share.json'   # {share_pct, family_n, survivors_n, checked_at, last_on_target: {pct, checked_at}}
+# Verified = verify_state 'verified', or a NULL state with fit.verdict pass
+# (an enricher whose column probe was stale — review 2026-09-07). The same
+# PostgREST expression as dashboard.VERIFIED_FILTER, validated read-only on
+# the live project 2026-09-07; a literal here because the cron must not
+# import the Streamlit app.
+VERIFIED_FILTER = 'verify_state.eq.verified,and(verify_state.is.null,fit->>verdict.eq.pass)'
+VERIFIED_COLUMNS = 'id,discovered_at,blocked_at,account_key,verify_state,zi_subindustry,classified_by'
+
+
+def vertical_of(zi) -> str:
+    """ZoomInfo subindustry → NSCorp vertical; anything outside the FY27
+    taxonomy (None, 'OTHER', legacy free text) → 'Unknown'."""
+    if not zi:
+        return UNKNOWN_VERTICAL
+    return ZI_SUBINDUSTRIES.get(str(zi).strip(), UNKNOWN_VERTICAL)
+
+
+class ProbeFailed(RuntimeError):
+    """The typed-column probe failed for a reason OTHER than the column being
+    absent (network, 5xx, auth): a transient the check must report, not mask
+    as "not measurable yet (typed columns not migrated)" (review 2026-09-08)."""
+
+
+def _typed_columns_present(client) -> bool:
+    """One cheap select of events.verify_state. False when Postgres says the
+    column is absent — SQLSTATE 42703 in the error text, or PostgREST's
+    "… does not exist" message that carries it. Anything else raises
+    ProbeFailed with a short error so the caller can WARN."""
+    try:
+        client.table('events').select('verify_state').limit(1).execute()
+        return True
+    except Exception as e:      # noqa: BLE001 — classified below
+        text = str(e)
+        if '42703' in text or 'does not exist' in text:
+            return False
+        raise ProbeFailed(' '.join(text.split())[:160] or type(e).__name__) from e
+
+
+def _fetch_verified_accounts(days, client=None):
+    """Verified rows discovered in the last `days` — filtered server-side
+    (≈ 90 rows for 56 days instead of ≈ 2,300), paginated and ordered like
+    _fetch_recent_events. None when the typed columns are not migrated, so
+    the check can say so instead of failing; ProbeFailed when the probe
+    itself failed (the caller WARNs). Module-level for tests."""
+    client = client or get_supabase()
+    if not client:
+        return None
+    if not _typed_columns_present(client):
+        return None
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    rows, off = [], 0
+    while True:
+        q = (client.table('events').select(VERIFIED_COLUMNS).gte('discovered_at', since)
+             .or_(VERIFIED_FILTER).order('discovered_at').order('id')
+             .range(off, off + 999).execute())
+        page = q.data or []
+        rows += page
+        if len(page) < 1000:
+            return rows
+        off += 1000
+
+
+def _accounts_by_period(rows, now, days=VERTICAL_WINDOW_DAYS):
+    """({key: row} for the last `days`, {key: row} for the `days` before) —
+    one entry per account_key (fallback: the event id), the newest verified
+    event deciding its subindustry and provenance. Blocked rows are out."""
+    recent_start = now - timedelta(days=days)
+    prior_start = now - timedelta(days=2 * days)
+    cur, prev = {}, {}
+    for r in rows:
+        if r.get('blocked_at'):
+            continue
+        dt = _parse_ts(r.get('discovered_at'))
+        if dt is None or dt < prior_start:
+            continue
+        bucket = cur if dt >= recent_start else prev
+        key = (str(r.get('account_key') or '').strip().lower()
+               or 'id:{}'.format(r.get('id') or id(r)))
+        if key not in bucket or dt > bucket[key][0]:
+            bucket[key] = (dt, r)
+    return ({k: v[1] for k, v in cur.items()}, {k: v[1] for k, v in prev.items()})
+
+
+def _mix_counts(accounts):
+    """(accounts by vertical, of those with provenance, of those verified
+    without search) — three Counters over {key: row}."""
+    counts, known, no_search = Counter(), Counter(), Counter()
+    for r in accounts.values():
+        v = vertical_of(r.get('zi_subindustry'))
+        counts[v] += 1
+        cb = str(r.get('classified_by') or '').strip().lower()
+        if cb:
+            known[v] += 1
+            if cb in NO_SEARCH_CLASSIFIERS:
+                no_search[v] += 1
+    return counts, known, no_search
+
+
+def _newest_by_vertical(accounts):
+    """{vertical: datetime of its newest verified event} over {key: row} —
+    the "dark since" date is the day a vertical last produced, not the
+    Monday the check noticed."""
+    out = {}
+    for r in accounts.values():
+        dt = _parse_ts(r.get('discovered_at'))
+        if dt is None:
+            continue
+        v = vertical_of(r.get('zi_subindustry'))
+        if v not in out or dt > out[v]:
+            out[v] = dt
+    return out
+
+
+def _mix_line(counts, total, verticals):
+    parts = [f'{v} {counts[v]} ({counts[v] / total * 100:.0f}%)' if total else f'{v} 0'
+             for v in verticals]
+    if counts[UNKNOWN_VERTICAL]:
+        parts.append(f'{UNKNOWN_VERTICAL} {counts[UNKNOWN_VERTICAL]}')
+    return ' · '.join(parts)
+
+
+def check_vertical_mix(now=None):
+    """Verified ACCOUNTS per vertical, last 28d vs the prior 28d (Phase 3
+    2026-09-08) — the weekly mix report the plan asks for, plus the one
+    nonprofit number it scores (verified without search, target > 50%).
+
+    WARN  ONCE when a vertical goes dark — ≥ VERTICAL_DARK_MIN_PRIOR verified
+          accounts in the prior 28d and 0 in the last 28d ("Consumer
+          Services went dark") — or when a thin vertical (< VERTICAL_THIN_PCT
+          of verified accounts while the others have some) was above
+          VERTICAL_WAS_HEALTHY_PCT at the last weekly run ("was 18%").
+    PASS  the mix line — a thin vertical is named in it as context, not as
+          an alert; a vertical already on the dark record is listed as
+          "still dark since <date>" until it recovers (≥ 1 verified account
+          in the current window), then "recovered" once and the entry
+          clears — or "not measurable yet" before the typed columns exist.
+
+    Dark memory (review 2026-09-08; the quiet_sources.json pattern of
+    check_source_yield): without it "went dark" repeated every Monday while
+    the prior-28d window drained, then went silent for good once it had —
+    after eight weeks a dark vertical looked healthy. The record lives in
+    state/vertical_mix.json under 'dark' ({vertical: {since, prior}}, since
+    = the date of the vertical's last verified account) and is rewritten
+    only when something changed. Manual clear: delete the vertical from
+    that map; it re-arms only while the prior window still holds
+    ≥ VERTICAL_DARK_MIN_PRIOR accounts. The mix itself is rewritten on every
+    run that had something to count, so the check can say what a share WAS.
+    """
+    now = now or datetime.now(timezone.utc)
+    if not get_supabase():
+        return WARN, 'Supabase unavailable — cannot check'
+    try:
+        rows = _fetch_verified_accounts(2 * VERTICAL_WINDOW_DAYS)
+    except ProbeFailed as e:
+        return WARN, f'Vertical mix probe failed: {e} — a transient, not the migration; retried next run'
+    except Exception as e:
+        return WARN, f'Could not read verified accounts: {e}'
+    if rows is None:
+        return PASS, 'Vertical mix not measurable yet (typed columns not migrated)'
+    if not ZI_SUBINDUSTRIES:
+        return WARN, ('Vertical taxonomy unavailable (enrichment_scout.ZI_SUBINDUSTRIES failed '
+                      'to import) — cannot bucket verified accounts')
+    verticals = list(dict.fromkeys(ZI_SUBINDUSTRIES.values()))
+    cur, prev = _accounts_by_period(rows, now)
+    counts, known, no_search = _mix_counts(cur)
+    prev_counts = _mix_counts(prev)[0]
+    total = sum(counts.values())
+    pct = {v: (counts[v] / total * 100 if total else 0.0) for v in verticals}
+
+    last = _state_json(VERTICAL_MIX_STATE_FILE)
+    last = last if isinstance(last, dict) else {}
+    last_mix = last.get('mix') if isinstance(last.get('mix'), dict) else {}
+    last_when = str(last.get('checked_at') or '')[:10] or 'the last weekly run'
+    on_record = last.get('dark') if isinstance(last.get('dark'), dict) else {}
+    on_record = {v: e for v, e in on_record.items() if v in verticals}
+
+    # Dark memory: on record → "still dark" context until ≥ 1 verified account
+    # shows up ("recovered", then cleared); newly dark → WARN once and record.
+    recovered = [v for v in verticals if v in on_record and counts[v] >= 1]
+    still_dark = [v for v in verticals if v in on_record and counts[v] == 0]
+    dark = [v for v in verticals if v not in on_record
+            and prev_counts[v] >= VERTICAL_DARK_MIN_PRIOR and counts[v] == 0]
+    record = {v: e for v, e in on_record.items() if v not in recovered}
+    if dark:
+        last_seen = _newest_by_vertical(prev)
+        for v in dark:
+            record[v] = {'since': (last_seen.get(v) or now).date().isoformat(),
+                         'prior': prev_counts[v]}
+
+    state = {k: last[k] for k in ('checked_at', 'total', 'prior_total', 'mix') if k in last}
+    if total:   # nothing to remember about the mix when nothing verified
+        state.update({
+            'checked_at': now.isoformat(), 'total': total, 'prior_total': len(prev),
+            'mix': {v: {'n': counts[v], 'pct': round(pct[v], 1)} for v in verticals},
+        })
+    if record:
+        state['dark'] = record
+    if total or dark or recovered:
+        _state_write_json(VERTICAL_MIX_STATE_FILE, state)
+
+    def _last_pct(v):
+        entry = last_mix.get(v)
+        try:
+            return float(entry.get('pct')) if isinstance(entry, dict) else None
+        except (TypeError, ValueError):
+            return None
+
+    unlit = set(dark) | set(still_dark)
+    thin = [v for v in verticals if total and v not in unlit and pct[v] < VERTICAL_THIN_PCT
+            and any(counts[o] for o in verticals if o != v)]
+    thin_warn = [v for v in thin if (_last_pct(v) or 0) > VERTICAL_WAS_HEALTHY_PCT]
+
+    mix = (f'{_mix_line(counts, total, verticals)} — {total} verified accounts/'
+           f'{VERTICAL_WINDOW_DAYS}d (prior {VERTICAL_WINDOW_DAYS}d: {len(prev)})')
+    np_known, np_free = known[NONPROFIT_VERTICAL], no_search[NONPROFIT_VERTICAL]
+    if np_known:
+        mix += (f' · nonprofits verified without search: {np_free / np_known * 100:.0f}% '
+                f'({np_free} of {np_known} with provenance; target > '
+                f'{NONPROFIT_NO_SEARCH_TARGET_PCT}%)')
+    else:
+        mix += ' · nonprofits verified without search: n/a (no provenance recorded yet)'
+    if recovered:
+        mix += ' · recovered: ' + ', '.join(
+            f'{v} (dark since {_quiet_entry(on_record[v])[0]})' for v in recovered)
+    for v in still_dark:
+        since, prior = _quiet_entry(on_record[v])
+        mix += f' · {v} still dark since {since} (was {prior}/{VERTICAL_WINDOW_DAYS}d)'
+
+    problems = [f'{v} went dark — 0 verified accounts in the last {VERTICAL_WINDOW_DAYS}d, '
+                f'was {prev_counts[v]} in the prior {VERTICAL_WINDOW_DAYS}d' for v in dark]
+    problems += [f'{v} is thin — {pct[v]:.0f}% of verified accounts (was {_last_pct(v):.0f}% '
+                 f'at the last weekly run, {last_when})' for v in thin_warn]
+    if problems:
+        return WARN, f'{"; ".join(problems)} · mix: {mix}'
+    info = [v for v in thin if v not in thin_warn]
+    if info:
+        mix += ' · thin: ' + ', '.join(f'{v} {pct[v]:.0f}%' for v in info)
+    return PASS, f'Verified accounts by vertical ({VERTICAL_WINDOW_DAYS}d): {mix}'
+
+
+def _on_target_mark(prev):
+    """{'pct', 'checked_at' (aware)} of the most recent run at/above the
+    target, from the state file, or None. Tolerant of hand edits. A file
+    written before the mark existed (2026-09-08) whose own share_pct was on
+    target IS the mark — the first run after the upgrade must not forget
+    that last Monday was fine."""
+    mark = prev.get('last_on_target')
+    if not isinstance(mark, dict):
+        try:
+            if float(prev.get('share_pct')) < FINANCE_SHARE_TARGET_PCT:
+                return None
+        except (TypeError, ValueError):
+            return None
+        mark = {'pct': prev.get('share_pct'), 'checked_at': prev.get('checked_at')}
+    try:
+        pct = float(mark.get('pct'))
+    except (TypeError, ValueError):
+        return None
+    when = _parse_ts(mark.get('checked_at'))
+    return {'pct': pct, 'checked_at': when} if when else None
+
+
+def check_finance_leader_share(now=None):
+    """Finance-leader triggers (cfo_hire / finance_seat_open / #NewController)
+    as a share of survivors in the last 28d, against the Phase 3 target
+    FINANCE_SHARE_TARGET_PCT (2026-09-08). Informational by design — the
+    share sits below target until the new supply lands — so it WARNs only
+    for a collapse: under FINANCE_SHARE_WARN_PCT while the high-water mark
+    (the most recent run at/above the target, kept in
+    state/finance_leader_share.json as last_on_target) is at most
+    FINANCE_SHARE_MARK_MAX_AGE_DAYS old. Review 2026-09-08: comparing with
+    the immediately previous run let a two-week slide 32% → 27% → 11% pass
+    in silence. The WARN repeats on each weekly run while the mark is fresh
+    and the share stays collapsed; it stops when the share recovers or the
+    mark ages out. The rest of the file is rewritten on every measurable
+    run; the mark is carried forward until a run at/above target replaces it.
+    """
+    now = now or datetime.now(timezone.utc)
+    if not get_supabase():
+        return WARN, 'Supabase unavailable — cannot check'
+    try:
+        rows = _fetch_recent_events(YIELD_WINDOW_DAYS)
+    except Exception as e:
+        return WARN, f'Could not read recent events: {e}'
+    surv = _survivors(rows)
+    n = len(surv)
+    if n == 0:
+        return PASS, (f'No survivors in the last {YIELD_WINDOW_DAYS} days to measure '
+                      f'(see "Source yield")')
+    fam_n = sum(1 for r in surv if finance_leader_family(r))
+    share = fam_n / n * 100
+
+    prev = _state_json(FINANCE_SHARE_STATE_FILE)
+    prev = prev if isinstance(prev, dict) else {}
+    try:
+        prev_pct = float(prev['share_pct']) if 'share_pct' in prev else None
+    except (TypeError, ValueError):
+        prev_pct = None
+    prev_when = str(prev.get('checked_at') or '')[:10] or 'the last weekly run'
+    mark = _on_target_mark(prev)
+    if share >= FINANCE_SHARE_TARGET_PCT:
+        mark = {'pct': share, 'checked_at': now}
+    state = {'share_pct': round(share, 1), 'family_n': fam_n, 'survivors_n': n,
+             'checked_at': now.isoformat()}
+    if mark:
+        state['last_on_target'] = {'pct': round(mark['pct'], 1),
+                                   'checked_at': mark['checked_at'].isoformat()}
+    _state_write_json(FINANCE_SHARE_STATE_FILE, state)
+
+    msg = (f'Finance-leader triggers are {share:.0f}% of survivors ({fam_n} of {n} in '
+           f'{YIELD_WINDOW_DAYS}d; target ≥ {FINANCE_SHARE_TARGET_PCT}%)')
+    notes = [f'was {prev_pct:.0f}% on {prev_when}'] if prev_pct is not None else []
+    if share >= FINANCE_SHARE_TARGET_PCT:
+        return PASS, f'{msg} — on target' + (f' ({notes[0]})' if notes else '')
+    mark_when = mark['checked_at'].date().isoformat() if mark else None
+    mark_fresh = mark is not None and (now - mark['checked_at']).days <= FINANCE_SHARE_MARK_MAX_AGE_DAYS
+    if share < FINANCE_SHARE_WARN_PCT and mark_fresh:
+        return WARN, (f'{msg} — fell from {mark["pct"]:.0f}% on {mark_when}, the last run on '
+                      f'target; the best trigger is drying up — check "Source yield" and '
+                      f'"Fetched vs filtered" for the feed that stopped')
+    if mark and mark_when != prev_when:      # the mark is older than the last run: say so
+        notes.append(f'last on target {mark["pct"]:.0f}% on {mark_when}'
+                     + ('' if mark_fresh else
+                        f', over {FINANCE_SHARE_MARK_MAX_AGE_DAYS // 7} weeks ago'))
+    was = f' ({"; ".join(notes)})' if notes else ''
+    return PASS, f'{msg} — below target{was}; Phase 3 supply is what moves it'
+
+
 def _count(query):
     r = query.limit(1).execute()
     return r.count or 0
@@ -1039,9 +1448,10 @@ def check_retry_backlog(now=None):
     if not client:
         return WARN, 'Supabase unavailable — cannot check'
     try:
-        client.table('events').select('verify_state').limit(1).execute()
-    except Exception:
-        return PASS, 'Retry backlog not measurable yet (typed columns not migrated)'
+        if not _typed_columns_present(client):
+            return PASS, 'Retry backlog not measurable yet (typed columns not migrated)'
+    except ProbeFailed as e:
+        return WARN, f'Retry backlog probe failed: {e} — a transient, not the migration; retried next run'
     try:
         iso = now.isoformat()
         base = lambda: client.table('events').select('id', count='exact').is_('blocked_at', 'null')  # noqa: E731
@@ -1091,6 +1501,11 @@ def run_checks(mode: str):
         # Phase 3, and it is change-driven, so once a week is the right cadence.
         checks += [
             ('Finance-leader source mix',       check_trigger_source_concentration),
+            # Phase 3 supply report (2026-09-08): is the new supply producing
+            # the RIGHT mix — enough finance-leader triggers, every vertical
+            # still fed? Informational unless something collapsed.
+            ('Finance-leader share of intake',  check_finance_leader_share),
+            ('Vertical mix (28d vs prior 28d)', check_vertical_mix),
         ]
     results = []
     for name, fn in checks:
@@ -1107,6 +1522,7 @@ def print_report(results, mode: str, json_mode: bool):
         out = {
             'mode':      mode,
             'timestamp': datetime.now(timezone.utc).isoformat(),
+            'state_read_only': STATE_READ_ONLY,
             'checks':    [{'name': n, 'status': PLAIN[s], 'message': m}
                           for n, s, m in results],
         }
@@ -1120,7 +1536,8 @@ def print_report(results, mode: str, json_mode: bool):
     passes = sum(1 for _, s, _ in results if s == PASS)
     overall = FAIL if fails else (WARN if warns else PASS)
 
-    print(f'\n=== Health check ({mode}) — {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC} ===\n')
+    note = ' · state read-only (--no-state)' if STATE_READ_ONLY else ''
+    print(f'\n=== Health check ({mode}) — {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC} ==={note}\n')
     name_w = max(len(n) for n, _, _ in results) + 2
     for n, s, m in results:
         print(f'  {s}  {n:<{name_w}}  {m}')
@@ -1130,13 +1547,22 @@ def print_report(results, mode: str, json_mode: bool):
     print()
 
 
-def main():
+def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--quick',  action='store_true', help='Essential checks only (default)')
     p.add_argument('--daily',  action='store_true', help='Adds source health, volume trend + yield checks')
-    p.add_argument('--weekly', action='store_true', help='--daily checks + finance-leader source mix (Monday run)')
+    p.add_argument('--weekly', action='store_true', help='--daily checks + Monday-only: finance-leader mix + share of intake, vertical mix')
     p.add_argument('--json',   action='store_true', help='Machine-readable output')
-    args = p.parse_args()
+    p.add_argument('--no-state', action='store_true',
+                   help='Read the state/ files but never write them — for manual --weekly runs, '
+                        'so the baselines the Monday cron compares against are not overwritten')
+    return p.parse_args(argv)
+
+
+def main(argv=None):
+    global STATE_READ_ONLY
+    args = parse_args(argv)
+    STATE_READ_ONLY = bool(args.no_state)
 
     mode = 'weekly' if args.weekly else ('daily' if args.daily else 'quick')
 

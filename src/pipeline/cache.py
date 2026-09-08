@@ -44,6 +44,14 @@ KIND_TTL_DAYS = {
     'complexity':      180,
     'funding_history': 90,
     'nonprofit_990':   365,
+    # Domain resolution (Phase 3 B4, research 2026-09-08): Clearbit is
+    # undocumented and cacheable 30d; FDIC/oracle tables refresh monthly;
+    # SEC websites basically never move; guesses are low-trust.
+    'domain:clearbit': 30,
+    'domain:fdic':     90,
+    'domain:sec':      365,
+    'domain:oracle':   180,
+    'domain:guess':    30,
 }
 DEFAULT_KIND_TTL_DAYS = 90
 
@@ -57,6 +65,11 @@ FIELD_TTL_DAYS = {
     'size':           180,
     'revenue':        90,
     'revenue_source': 90,
+    # Identity fields from domains.resolve() — as slow-moving as `url`.
+    'domain':            365,
+    'domain_method':     365,
+    'domain_confidence': 365,
+    'aliases':           365,
 }
 DEFAULT_FIELD_TTL_DAYS = 90
 

@@ -1251,3 +1251,560 @@ def test_summary_reports_lookups(env, monkeypatch, caplog):
 # ── 8. httpx request lines are silenced ─────────────────────────────────────
 def test_httpx_logger_is_quiet():
     assert logging.getLogger('httpx').level == logging.WARNING
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 3 slice B2 (2026-09-08): free registries (oracles) in Stage A, the
+# ProPublica probe fix, and the domains hook.
+# ═══════════════════════════════════════════════════════════════════════════
+from src.pipeline import oracles as _oracles_mod  # noqa: E402
+
+# The real probe, captured at import (the `env` fixture stubs it) for the
+# tests that exercise the rewritten HTTP half through a faked requests.get.
+_REAL_PROPUBLICA_990 = es._propublica_990
+
+
+@pytest.fixture(autouse=True)
+def _phase3_offline(monkeypatch, tmp_path):
+    """Every test in this module runs with the registry DB pointed at an
+    absent tmp file, the live oracle adapters off and the domains resolver
+    stubbed — no test here may reach FDIC / ProPublica / Clearbit. Tests
+    that exercise the hooks replace these stubs themselves."""
+    monkeypatch.setattr(es, 'ORACLES_DB_PATH', str(tmp_path / 'no-oracles.db'))
+    monkeypatch.setattr(es, 'ORACLES_LIVE_ENABLED', False)
+    monkeypatch.setattr(es, '_resolve_domain',
+                        lambda name, hints=None, **kw: {'domain': None, 'host': None, 'method': None,
+                                                        'confidence': None, 'aliases': [], 'evidence': {}},
+                        raising=False)
+
+
+BANK_HIT = {'kind': 'bank', 'hq': 'Westerly, RI', 'hq_state': 'RI', 'in_territory': True,
+            'revenue': 'Corp', 'revenue_amount_usd': 55_000_000,
+            'revenue_source': 'FDIC BankFind estimate — total assets $1.0B × 5.5%',
+            'too_small': False, 'zi_subindustry': 'Banking', 'industry': 'FDIC-insured state bank',
+            'size': None, 'url': 'https://www.zorblatbank.example', 'source': 'fdic',
+            'source_id': '23623', 'matched_name': 'Zorblat Trust Company', 'as_of': '2026-09-04',
+            'confidence': 0.95, 'candidates': []}
+TOO_SMALL_HIT = dict(BANK_HIT, revenue='LMM', revenue_amount_usd=3_300_000, too_small=True,
+                     revenue_source='FDIC BankFind estimate — total assets $60M × 5.5%')
+
+
+_LIVE_SEEN = []      # the `live` flag each stubbed registry call received (M9)
+
+
+def _oracle_stub(monkeypatch, answers):
+    """answers: list of hits/None handed out per call; records the hints."""
+    calls = []
+
+    def fake(name, hint, cache, live=None):
+        calls.append((name, dict(hint)))
+        _LIVE_SEEN.append(live)
+        ans = answers[min(len(calls) - 1, len(answers) - 1)] if answers else None
+        return copy.deepcopy(ans) if ans else None
+    monkeypatch.setattr(es, '_oracle_lookup', fake)
+    return calls
+
+
+def test_stage_a_oracle_hit_skips_article_llm_and_settles_stage_b(env, monkeypatch):
+    calls = _oracle_stub(monkeypatch, [BANK_HIT])
+    llm = LLMStub([], article={'zi_subindustry': 'OTHER', 'hq': 'Austin, TX',
+                               'classification_confidence': 'High'})
+    monkeypatch.setattr(es, 'llm_json', llm)
+    ev = _event(company_name='Zorblat Trust Company', matched_regions='["Westerly", "Rhode Island"]')
+    firm = es._stage_a_company(ev, {'name': 'Zorblat Trust Company', 'role': 'Hiring Company'},
+                               es._structured_verdict(ev), 'ctx', AccountCache(env.cache_path))
+    assert llm.count('article') == 0                       # registry answered zi + hq: no LLM
+    assert calls == [('Zorblat Trust Company', {'kind': 'auto', 'state': 'RI'})]
+    assert firm['hq'] == 'Westerly, RI' and firm['zi_subindustry'] == 'Banking'
+    assert firm['revenue'] == 'Corp' and firm['revenue_source'].startswith('FDIC BankFind')
+    assert firm['url'] == 'https://www.zorblatbank.example' and firm['industry'] == 'FDIC-insured state bank'
+    assert firm['classified_by'] == 'oracle' and firm['classification_confidence'] == 'High'
+    assert firm['_sources'] == {'hq': 'oracle', 'revenue': 'oracle', 'revenue_source': 'oracle',
+                                'zi_subindustry': 'oracle', 'url': 'oracle', 'industry': 'oracle'}
+    assert firm['no_search'] is False and 'too_small' not in firm
+    assert es.SEARCH_COUNTS['oracle'] == 1
+    # registry facts survive the pre-search view (only article guesses are blanked)
+    assert es._pre_search_view(firm)['hq'] == 'Westerly, RI'
+    # Stage B: everything fit-relevant is settled — only headcount is unknown → no search
+    called = []
+    monkeypatch.setattr(es, 'enrich_one_company', lambda *a, **k: called.append(a) or {})
+    es._BUDGET['obj'] = es.SearchBudget(1)
+    out = es._stage_b_company({'name': 'Zorblat Trust Company'}, firm, 'ctx', tier=1)
+    assert called == [] and out['hq'] == 'Westerly, RI' and out['deferred'] is False
+    # …but a search still fires when something fit-relevant is missing
+    es._BUDGET['obj'] = es.SearchBudget(1)
+    es._stage_b_company({'name': 'Zorblat Trust Company'}, dict(firm, revenue=None), 'ctx', tier=1)
+    assert len(called) == 1
+    # and the AccountCache remembers registry facts like seeds
+    es._remember_firmographics(AccountCache(env.cache_path), 'Zorblat Trust Company', firm)
+    stored = AccountCache(env.cache_path).get_firmographics('zorblat trust')
+    assert stored['hq'] == 'Westerly, RI' and stored['url'] == 'https://www.zorblatbank.example'
+    assert stored['zi_subindustry'] == 'Banking' and stored['classification_confidence'] == 'High'
+    assert stored['revenue'] == 'Corp' and stored['industry'] == 'FDIC-insured state bank'
+
+
+def test_stage_a_oracle_below_confidence_is_ignored(env, monkeypatch):
+    _oracle_stub(monkeypatch, [dict(BANK_HIT, confidence=0.7)])
+    llm = LLMStub([], article={'zi_subindustry': 'Banking', 'hq': 'Boston, MA',
+                               'classification_confidence': 'Medium'})
+    monkeypatch.setattr(es, 'llm_json', llm)
+    ev = _event()
+    firm = es._stage_a_company(ev, {'name': 'Zorblat Robotics Inc', 'role': 'Hiring Company'},
+                               es._structured_verdict(ev), 'ctx', AccountCache(env.cache_path))
+    assert llm.count('article') == 1 and firm['classified_by'] == 'article'
+    assert firm['hq'] == 'Boston, MA' and es.SEARCH_COUNTS['oracle'] == 0
+
+
+def test_oracle_too_small_fails_revenue_without_a_search(env, monkeypatch):
+    _oracle_stub(monkeypatch, [TOO_SMALL_HIT])
+    llm = LLMStub(COMPANIES, article={'zi_subindustry': 'Banking', 'hq': 'Boston, MA',
+                                      'classification_confidence': 'High'},
+                  search=SEARCH_BOSTON, grade=GRADE_B)
+    client = _run(monkeypatch, FakeClient([_event()], TYPED_COLS), llm)
+    assert env.fc.calls == [] and env.tv.calls == []          # decided for free
+    assert llm.count('article') == 0 and llm.count('search') == 0 and llm.count('grade') == 0
+    pl = client.payload_for('ev1')
+    assert pl['blocked_reason'].startswith('fit_gate:')
+    assert 'oracle_too_small: fdic est $3.3M' in pl['blocked_reason']
+    assert pl['verify_state'] == 'not_fit' and pl['fit_verdict'] == 'fail'
+    co = pl['companies_data'][0]
+    assert co['too_small'] == 'oracle_too_small: fdic est $3.3M'
+    assert co['fit']['revenue'] == 'out' and co['revenue'] == 'LMM'
+    assert co['classified_by'] == 'oracle' and co['field_sources']['revenue'] == 'oracle'
+
+
+def test_oracle_never_overrides_a_structured_seed(env, monkeypatch):
+    ev = _event(source_url='https://www.sec.gov/Archives/edgar/data/1/formd.htm',
+                title='Form D: Zorblat Robotics Inc',
+                description='Zorblat Robotics Inc (MA) filed a Form D. Form D industry '
+                            'group: Commercial Banking. Declared revenue: '
+                            '$5,000,001 - $25,000,000. Total offering: $12,000,000.')
+    sv = es._structured_verdict(ev)
+    calls = _oracle_stub(monkeypatch, [TOO_SMALL_HIT])
+    monkeypatch.setattr(es, 'llm_json', LLMStub([], article={'zi_subindustry': 'Banking',
+                                                             'classification_confidence': 'High'}))
+    firm = es._stage_a_company(ev, {'name': 'Zorblat Robotics Inc', 'role': 'Primary'}, sv, 'ctx',
+                               AccountCache(env.cache_path))
+    assert calls[0][1]['state'] == 'MA'                       # the seeded state anchors the lookup
+    assert firm['hq'] == 'MA' and firm['_sources']['hq'] == 'seed'
+    assert firm['revenue'] == 'LMM' and firm['_sources']['revenue'] == 'seed'
+    assert firm['revenue_source'] == 'SEC Form D declared revenue range'
+    assert 'too_small' not in firm                            # the declared range wins
+    assert firm['zi_subindustry'] == 'Banking' and firm['_sources']['zi_subindustry'] == 'oracle'
+    assert firm['url'] == 'https://www.zorblatbank.example' and firm['classified_by'] == 'oracle'
+
+
+def test_second_chance_dateline_anchor_needs_raw_score_and_state_agreement(env, monkeypatch):
+    """M2 (review 2026-09-08): with only the ARTICLE's hq to anchor on, the
+    second chance looks up with no state and accepts a hit only when its
+    raw name score clears the bar AND the registry puts it in the dateline's
+    state — the old anchored lookup confirmed a same-name firm in the
+    dateline's state and a pre-search tombstone followed."""
+    calls = _oracle_stub(monkeypatch, [None, BANK_HIT])              # the hit is in RI
+    llm = LLMStub([], article={'zi_subindustry': 'Banking', 'hq': 'Boston, MA', 'revenue': 'MM',
+                               'classification_confidence': 'Medium'})
+    monkeypatch.setattr(es, 'llm_json', llm)
+    ev = _event()
+    co = {'name': 'Zorblat Robotics Inc', 'role': 'Hiring Company'}
+    firm = es._stage_a_company(ev, co, es._structured_verdict(ev), 'ctx', AccountCache(env.cache_path))
+    assert llm.count('article') == 1
+    assert calls == [('Zorblat Robotics Inc', {'kind': 'auto', 'state': None}),
+                     ('Zorblat Robotics Inc', {'kind': 'auto', 'zi_guess': 'Banking',
+                                               'state': None, 'city': None})]
+    # RI ≠ the MA dateline: the article's facts stay the article's
+    assert firm['hq'] == 'Boston, MA' and firm['_sources']['hq'] == 'article'
+    assert firm['revenue'] == 'MM' and firm['_sources']['revenue'] == 'article'
+    assert firm['classified_by'] == 'article' and es.SEARCH_COUNTS['oracle'] == 0
+    assert es._pre_search_view(firm)['hq'] is None                    # still withheld from the gates
+    # same state, raw score at the bar → confirmed and applied
+    _oracle_stub(monkeypatch, [None, dict(BANK_HIT, hq='Boston, MA', hq_state='MA', raw_score=0.9)])
+    firm = es._stage_a_company(ev, co, es._structured_verdict(ev), 'ctx', AccountCache(env.cache_path))
+    assert firm['hq'] == 'Boston, MA' and firm['_sources']['hq'] == 'oracle'
+    assert firm['revenue'] == 'Corp' and firm['classified_by'] == 'oracle'
+    assert es.SEARCH_COUNTS['oracle'] == 1
+    # same state but the raw score (no bonus) is under the bar → not confirmed
+    _oracle_stub(monkeypatch, [None, dict(BANK_HIT, hq='Boston, MA', hq_state='MA',
+                                          confidence=0.9, raw_score=0.8)])
+    firm = es._stage_a_company(ev, co, es._structured_verdict(ev), 'ctx', AccountCache(env.cache_path))
+    assert firm['hq'] == 'Boston, MA' and firm['_sources']['hq'] == 'article'
+    # an EVENT anchor (the scraper's single matched region) still anchors the
+    # lookup itself and takes the registry's answer as before
+    calls3 = _oracle_stub(monkeypatch, [None, BANK_HIT])
+    ev_ri = _event(matched_regions='["Rhode Island"]')
+    firm = es._stage_a_company(ev_ri, co, es._structured_verdict(ev_ri), 'ctx', AccountCache(env.cache_path))
+    assert calls3[1][1] == {'kind': 'auto', 'zi_guess': 'Banking', 'state': 'RI', 'city': 'Boston'}
+    assert firm['hq'] == 'Westerly, RI' and firm['_sources']['hq'] == 'oracle'
+    # an article subindustry outside the second-chance set never asks twice
+    calls2 = _oracle_stub(monkeypatch, [None, BANK_HIT])
+    monkeypatch.setattr(es, 'llm_json', LLMStub([], article={'zi_subindustry': 'Real Estate',
+                                                             'classification_confidence': 'High'}))
+    es._stage_a_company(ev, co, es._structured_verdict(ev), 'ctx', AccountCache(env.cache_path))
+    assert len(calls2) == 1
+
+
+def test_oracle_other_from_registry_is_final(env, monkeypatch):
+    hospital = dict(BANK_HIT, zi_subindustry='OTHER', source='propublica', url=None,
+                    industry='Nonprofit (NTEE E22)', revenue='Enterprise', too_small=False)
+    _oracle_stub(monkeypatch, [hospital])
+    monkeypatch.setattr(es, 'llm_json', LLMStub([]))
+    ev = _event(description=SHORT_DESC)
+    firm = es._stage_a_company(ev, {'name': 'Zorblat Robotics Inc', 'role': 'Hiring Company'},
+                               es._structured_verdict(ev), 'ctx', AccountCache(env.cache_path))
+    assert firm['zi_subindustry'] == 'OTHER' and firm['no_search'] is True
+
+
+def test_event_state_hint_and_hq_city():
+    assert es._event_state_hint({'matched_regions': '["Boston", "Massachusetts"]'}, {}) == 'MA'
+    assert es._event_state_hint({'matched_regions': ['Rhode Island', 'RI', 'Westerly']}, {}) == 'RI'
+    assert es._event_state_hint({'matched_regions': '["Massachusetts", "Rhode Island"]'}, {}) is None
+    assert es._event_state_hint({'matched_regions': 'not json'}, {}) is None
+    assert es._event_state_hint({'matched_regions': None}, {}) is None
+    assert es._event_state_hint({}, {'hq': 'MA'}) == 'MA'
+    assert es._event_state_hint({'matched_regions': '["Rhode Island"]'}, {'hq': 'ON'}) == 'ON'
+    assert es._hq_city('Westerly, RI') == 'Westerly' and es._hq_city('MA') == ''
+    assert es._hq_city(None) == '' and es._hq_city('Boston') == 'Boston'
+
+
+def test_check_columns_probes_matched_regions(env):
+    assert es.check_columns(FakeClient([], TYPED_COLS))['matched_regions'] is False
+    reset_probe_cache()
+    assert es.check_columns(FakeClient([], TYPED_COLS | {'matched_regions'}))['matched_regions'] is True
+
+
+def test_domains_hook_absent_stub_and_errors_are_harmless(env, monkeypatch):
+    env.fc.result = HIT
+    llm = LLMStub(COMPANIES, article={'zi_subindustry': 'Banking', 'hq': None,
+                                      'classification_confidence': 'High'},
+                  search=SEARCH_BOSTON, grade=GRADE_B)
+    # 1. module absent → no domain, no error
+    monkeypatch.setattr(es, '_resolve_domain', None)
+    client = _run(monkeypatch, FakeClient([_event()], TYPED_COLS), llm)
+    co = client.payload_for('ev1')['companies_data'][0]
+    assert 'domain' not in co and client.payload_for('ev1')['verify_state'] == 'verified'
+    # 2. resolver answers → domain + method on the company record
+    seen = []
+
+    def resolver(name, hints=None, *, cache=None, now=None):
+        seen.append((name, dict(hints or {}), cache is not None))
+        return {'domain': 'zorblat.example', 'host': 'www.zorblat.example', 'method': 'clearbit',
+                'confidence': 'medium', 'aliases': [], 'evidence': {}}
+    monkeypatch.setattr(es, '_resolve_domain', resolver)
+    client = _run(monkeypatch, FakeClient([_event()], TYPED_COLS), llm)
+    co = client.payload_for('ev1')['companies_data'][0]
+    assert co['domain'] == 'zorblat.example' and co['domain_method'] == 'clearbit'
+    assert seen[0][0] == 'Zorblat Robotics Inc' and seen[0][2] is True
+    assert seen[0][1]['url'] == 'https://zorblat.example' and 'zi' not in seen[0][1]     # M4
+    # 3. a cache-served answer reports the method that originally found it
+    monkeypatch.setattr(es, '_resolve_domain', lambda *a, **k: {
+        'domain': 'zorblat.example', 'method': 'cache', 'evidence': {'cached_method': 'fdic'}})
+    client = _run(monkeypatch, FakeClient([_event()], TYPED_COLS), llm)
+    assert client.payload_for('ev1')['companies_data'][0]['domain_method'] == 'fdic'
+    # 4. a resolver that raises never breaks the run
+    def boom(*a, **k):
+        raise RuntimeError('resolver exploded')
+    monkeypatch.setattr(es, '_resolve_domain', boom)
+    client = _run(monkeypatch, FakeClient([_event()], TYPED_COLS), llm)
+    pl = client.payload_for('ev1')
+    assert 'domain' not in pl['companies_data'][0] and pl['verify_state'] == 'verified'
+    # 5. dry runs never resolve (the resolver may call keyless APIs)
+    seen.clear()
+    monkeypatch.setattr(es, '_resolve_domain', resolver)
+    _run(monkeypatch, FakeClient([_event()], TYPED_COLS), llm, dry_run=True)
+    assert seen == []
+
+
+def test_domains_hook_skips_confirmed_other_tombstones(env, monkeypatch):
+    seen = []
+    monkeypatch.setattr(es, '_resolve_domain', lambda name, hints=None, **k: seen.append(name) or {})
+    llm = LLMStub(COMPANIES, article={'zi_subindustry': 'OTHER', 'industry': 'Robotics',
+                                      'hq': 'Boston, MA', 'classification_confidence': 'High'})
+    _run(monkeypatch, FakeClient([_event()], TYPED_COLS), llm)
+    assert seen == []
+
+
+def _pp_resp(status, body):
+    return SimpleNamespace(status_code=status, json=lambda: body)
+
+
+def test_propublica_probe_zero_hit_is_cached_and_hit_builds_block(env, monkeypatch):
+    monkeypatch.setattr(es, '_propublica_990', _REAL_PROPUBLICA_990)
+    monkeypatch.setattr(es, 'ORACLES_LIVE_ENABLED', True)
+    monkeypatch.setattr(_oracles_mod, 'LIVE_MIN_INTERVAL', 0)
+    calls = []
+    zero = {'total_results': 0, 'organizations': [], 'api_version': 2}
+
+    def fake_get(url, params=None, **kw):
+        calls.append((url, dict(params or {})))
+        if 'search.json' in url:
+            return _pp_resp(404, zero)            # the real zero-hit answer: 404 + JSON
+        raise AssertionError(url)
+    monkeypatch.setattr(_oracles_mod.requests, 'get', fake_get)
+    # the account's remembered hq anchors the state filter
+    AccountCache(env.cache_path).set_firmographics('zorblatqx nonexistent foundation', {'hq': 'Boston, MA'})
+    assert es.probe_nonprofit_990('Zorblatqx Nonexistent Foundation') == ''
+    assert calls == [(_oracles_mod.PROPUBLICA_SEARCH_URL,
+                      {'q': 'Zorblatqx Nonexistent Foundation', 'state[id]': 'MA'})]
+    # confirmed zero → negative-cached at both layers: no HTTP on the next event
+    assert es.probe_nonprofit_990('Zorblatqx Nonexistent Foundation') == ''
+    assert len(calls) == 1 and es.SEARCH_COUNTS['negative_cache'] == 1
+    # an API failure is None → nothing cached → asked again next time
+    calls.clear()
+    monkeypatch.setattr(_oracles_mod.requests, 'get', lambda url, params=None, **kw: _pp_resp(500, None))
+    assert es._propublica_990('Broken Zorblat Society') is None
+    assert es.probe_nonprofit_990('Broken Zorblat Society') == ''
+    assert es.probe_nonprofit_990('Broken Zorblat Society') == ''
+    assert es.SEARCH_COUNTS['negative_cache'] == 1            # not negative-cached
+    # a real hit → the evidence block the grader reads, then served from cache
+    search = {'total_results': 1, 'organizations': [
+        {'ein': 42103607, 'name': 'Museum Of Fine Arts', 'city': 'Boston', 'state': 'MA',
+         'ntee_code': 'A510', 'subseccd': 3}]}
+    org = {'organization': {'ein': 42103607, 'name': 'Museum Of Fine Arts', 'city': 'Boston',
+                            'state': 'MA', 'ntee_code': 'A510', 'revenue_amount': 186630042},
+           'filings_with_data': [{'tax_prd_yr': 2023, 'totrevenue': 99573924,
+                                  'totfuncexpns': 123302516}]}
+
+    def fake_hit(url, params=None, **kw):
+        calls.append((url, dict(params or {})))
+        return _pp_resp(200, search if 'search.json' in url else org)
+    monkeypatch.setattr(_oracles_mod.requests, 'get', fake_hit)
+    block = es.probe_nonprofit_990('Museum of Fine Arts')
+    assert block.startswith('PROPUBLICA 990 ("Museum of Fine Arts"):')
+    assert '- Matched org: Museum Of Fine Arts (EIN 42103607), Boston, MA | ' in block
+    assert '- Latest 990 (2023): total revenue $99,573,924 · total expenses $123,302,516' in block
+    assert '- 990 filings on record: 1 years' in block
+    assert '- NTEE A510 → Museums & Art Galleries' in block
+    assert len(calls) == 2
+    assert es.probe_nonprofit_990('Museum of Fine Arts') == block and len(calls) == 2
+    assert es.SEARCH_COUNTS['cache'] == 1
+
+
+def test_summary_line_reports_oracle_hits(env, monkeypatch, caplog):
+    _oracle_stub(monkeypatch, [BANK_HIT])
+    llm = LLMStub(COMPANIES, grade=GRADE_B)
+    with caplog.at_level(logging.INFO):
+        client = _run(monkeypatch, FakeClient([_event()], TYPED_COLS), llm)
+    assert llm.count('article') == 0 and llm.count('search') == 0
+    # the only search allowed is the grader's free complexity probe — never
+    # the firmographic lookup (same contract as the account-cache test)
+    assert all(hint != 'robotics maker' for _, hint in env.fc.calls)
+    pl = client.payload_for('ev1')
+    assert pl['verify_state'] == 'verified' and pl['classified_by'] == 'oracle'
+    assert pl['hq_state'] == 'RI' and pl['companies_data'][0]['field_sources']['hq'] == 'oracle'
+    assert re.search(r'Registry hit \(fdic\): Zorblat Robotics Inc → Zorblat Trust Company', caplog.text)
+    assert re.search(r'Served without a search: .*oracle:1', caplog.text)
+    assert es.SEARCH_COUNTS['oracle'] == 1
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Review 2026-09-08 fixes
+# ═══════════════════════════════════════════════════════════════════════════
+IAPD_EVENT = dict(
+    id='ev1', company_name='Acme Capital Advisors, LP', event_type='expansion',
+    title='New SEC-registered investment adviser: Acme Capital Advisors, LP (Boston, MA)',
+    description=('Acme Capital Advisors, LP (MA) registered with the SEC as an investment adviser on '
+                 'August 29, 2026 (SEC file no. 801-123456; CRD 1001). Legal name: Acme Capital '
+                 'Advisors, LP. Regulatory assets under management: $2,000,000,000. Employees: 30. '
+                 'Website: https://www.acmecap.example. Estimated revenue about $12M (basis: the '
+                 'smaller of RAUM x 0.7% ($14M) and 30 employees x $400K ($12M)) — NetSuite segment '
+                 'MM. A new SEC registration means the firm either just formed or crossed $100M in '
+                 'regulatory assets — a growth milestone when new systems get bought. Structured '
+                 'facts: hq_state MA; registration 2026-08-29; firm type Registered.'),
+    source_url='https://adviserinfo.sec.gov/firm/summary/1001', source='sec_iapd',
+    fit=None, published_date='2026-08-29T00:00:00+00:00', discovered_at='2026-09-02T05:00:00+00:00')
+LP_COMPANY = [{'name': 'Acme Capital Advisors, LP', 'role': 'Primary', 'descriptor': 'investment adviser'}]
+SEARCH_LP = {'zi_subindustry': 'Lending & Brokerage', 'hq': 'Boston, MA', 'revenue': 'MM',
+             'industry': 'Registered investment adviser', 'size': '1-50',
+             'url': 'https://www.acmecap.example', 'classification_confidence': 'High'}
+
+
+def test_h3_registered_adviser_lp_is_the_management_company_not_a_fund_vehicle(env, monkeypatch):
+    # unit: the exemption is registry-scoped and kind-scoped
+    assert es._is_iapd_event({'source': 'sec_iapd'}) and es._is_iapd_event(IAPD_EVENT)
+    assert es._is_iapd_event({'source_url': 'https://adviserinfo.sec.gov/firm/summary/1'})
+    assert not es._is_iapd_event({'source': 'prnewswire', 'source_url': 'https://www.sec.gov/x'})
+    assert es._entity_shape('Acme Capital Advisors, LP', '', 'sec_iapd') == (False, '')
+    assert es._entity_shape('Acme Capital Advisors, LP', '', None) == (True, 'fund_vehicle')
+    assert es._entity_shape('Acme Horizon Fund Advisors LLC', '', 'sec_iapd') == (False, '')
+    assert es._entity_shape('Acme Acquisition Corp', '', 'sec_iapd') == (True, 'spac')     # only fund_vehicle
+    assert es._entity_shape('Acme Charter School Partners LP', '', 'sec_iapd')[1] == 'k12'
+    fit = es.company_fit({'name': 'Acme Capital Advisors, LP', 'registry_source': 'sec_iapd',
+                          'hq': 'Boston, MA', 'revenue': 'MM', 'zi_subindustry': 'Lending & Brokerage'})
+    assert fit['verdict'] == 'pass'
+    fit = es.company_fit({'name': 'Acme Capital Advisors, LP', 'hq': 'Boston, MA', 'revenue': 'MM',
+                          'zi_subindustry': 'Lending & Brokerage'})
+    assert fit['verdict'] == 'fail' and fit['reasons'] == ['entity_shape:fund_vehicle (Acme Capital Advisors, LP)']
+    # end to end: the sec_iapd event survives the entity gate and is researched
+    env.fc.result = HIT
+    llm = LLMStub(LP_COMPANY, article={'zi_subindustry': 'Lending & Brokerage', 'hq': 'Boston, MA',
+                                       'classification_confidence': 'High'},
+                  search=SEARCH_LP, grade=GRADE_B)
+    client = _run(monkeypatch, FakeClient([dict(IAPD_EVENT)], TYPED_COLS), llm)
+    pl = client.payload_for('ev1')
+    assert 'blocked_reason' not in pl and pl['fit']['verdict'] != 'fail'
+    co = pl['companies_data'][0]
+    assert co['registry_source'] == 'sec_iapd' and co['fit']['verdict'] != 'fail'
+    assert co['hq'] == 'MA' and co['field_sources']['hq'] == 'seed'          # the (MA) seed
+    # the same name from a NEWS source is still a fund vehicle
+    news = dict(IAPD_EVENT, source='businesswire',
+                source_url='https://www.businesswire.com/news/acme-capital-advisors-lp')
+    client = _run(monkeypatch, FakeClient([news], TYPED_COLS), LLMStub(LP_COMPANY, grade=GRADE_B))
+    assert client.payload_for('ev1')['blocked_reason'] == 'entity_shape:fund_vehicle'
+    # ria_trigger stamps the source the gate keys on
+    from scripts import ria_trigger as rt
+    assert rt.SOURCE == 'sec_iapd' and 'source' in rt.SEED_COLUMNS
+    assert rt.SOURCE_URL.startswith('https://adviserinfo.sec.gov/')
+
+
+def test_h2_domain_hook_passes_only_researched_url_and_hq_and_never_zi(env, monkeypatch):
+    seen = []
+    monkeypatch.setattr(es, '_resolve_domain', lambda name, hints=None, **k: seen.append(dict(hints or {})) or {})
+    env.fc.result = HIT
+    # the article invents a url; the search confirms hq but finds no url
+    llm = LLMStub(COMPANIES, article={'zi_subindustry': 'Banking', 'hq': 'Boston, MA',
+                                      'url': 'https://zorblatrobotics.example',
+                                      'classification_confidence': 'High'},
+                  search={'zi_subindustry': 'Banking', 'hq': 'Boston, MA', 'revenue': 'MM',
+                          'size': '51-200', 'classification_confidence': 'High'}, grade=GRADE_B)
+    _run(monkeypatch, FakeClient([_event()], TYPED_COLS), llm)
+    assert seen == [{'hq': 'Boston, MA'}]                              # no article url, no zi
+    # a search-found url is passed
+    seen.clear()
+    llm = LLMStub(COMPANIES, article={'zi_subindustry': 'Banking', 'hq': 'Boston, MA',
+                                      'classification_confidence': 'High'},
+                  search=SEARCH_BOSTON, grade=GRADE_B)
+    _run(monkeypatch, FakeClient([_event()], TYPED_COLS), llm)
+    assert seen == [{'url': 'https://zorblat.example', 'hq': 'Boston, MA'}]
+    # unit: an article-only hq / linkedin never reaches the resolver either
+    seen.clear()
+    firm = {'url': 'https://made-up.example', 'hq': 'Boston, MA', 'linkedin': 'https://linkedin.com/company/x',
+            'zi_subindustry': 'Banking',
+            '_sources': {'url': 'article', 'hq': 'article', 'linkedin': 'article', 'zi_subindustry': 'search'}}
+    es._resolve_company_domain(firm, 'Zorblat Robotics Inc', AccountCache(env.cache_path))
+    assert seen == [{}]
+    seen.clear()
+    firm['_sources'] = {'url': 'oracle', 'hq': 'cache', 'linkedin': 'search'}
+    es._resolve_company_domain(firm, 'Zorblat Robotics Inc', AccountCache(env.cache_path))
+    assert seen == [{'url': 'https://made-up.example', 'hq': 'Boston, MA',
+                     'linkedin': 'https://linkedin.com/company/x'}]
+
+
+def test_m6_account_cache_fills_before_the_registry_and_keeps_researched_facts(env, monkeypatch):
+    cache = AccountCache(env.cache_path)
+    cache.set_firmographics('zorblat robotics', {'hq': 'Boston, MA', 'revenue': 'MM',
+                                                 'zi_subindustry': 'Banking',
+                                                 'classification_confidence': 'High'})
+    stamped = cache._load_payload('zorblat robotics')['hq']['t']
+    calls = _oracle_stub(monkeypatch, [BANK_HIT])                     # Westerly RI, Corp, url, industry
+    monkeypatch.setattr(es, 'llm_json', LLMStub([]))
+    ev = _event()
+    firm = es._stage_a_company(ev, {'name': 'Zorblat Robotics Inc', 'role': 'Hiring Company'},
+                               es._structured_verdict(ev), 'ctx', cache)
+    # the cached (search-established) facts win; the registry fills only the gaps
+    assert firm['hq'] == 'Boston, MA' and firm['_sources']['hq'] == 'cache'
+    assert firm['revenue'] == 'MM' and firm['_sources']['revenue'] == 'cache'
+    assert firm['zi_subindustry'] == 'Banking' and firm['_sources']['zi_subindustry'] == 'cache'
+    assert firm['url'] == 'https://www.zorblatbank.example' and firm['_sources']['url'] == 'oracle'
+    assert firm['industry'] == 'FDIC-insured state bank' and firm['_sources']['industry'] == 'oracle'
+    assert firm['classified_by'] == 'cache' and firm['classification_confidence'] == 'High'
+    assert 'too_small' not in firm
+    # the cached hq anchored the registry lookup
+    assert calls == [('Zorblat Robotics Inc', {'kind': 'auto', 'state': 'MA'})]
+    # remembering the firm re-stamps nothing that came from the cache
+    es._remember_firmographics(cache, 'Zorblat Robotics Inc', firm)
+    assert cache._load_payload('zorblat robotics')['hq']['t'] == stamped
+    assert cache.get_firmographics('zorblat robotics')['url'] == 'https://www.zorblatbank.example'
+
+
+def test_m9_dry_run_keeps_the_registry_on_the_local_tables(env, monkeypatch):
+    seen = []
+
+    def fake_lookup(name, hint=None, *, db_path=None, cache=None, live=True, now=None):
+        seen.append(live)
+        return None
+    monkeypatch.setattr(es._oracles, 'lookup', fake_lookup)
+    monkeypatch.setattr(es, 'ORACLES_LIVE_ENABLED', True)
+    monkeypatch.setattr(es, 'llm_json', LLMStub([], article={'zi_subindustry': 'Banking', 'hq': 'Boston, MA',
+                                                             'classification_confidence': 'High'}))
+    ev = _event()
+    co = {'name': 'Zorblat Robotics Inc', 'role': 'Hiring Company'}
+    cache = AccountCache(env.cache_path)
+    es._stage_a_company(ev, co, es._structured_verdict(ev), 'ctx', cache, dry_run=True)
+    assert seen and set(seen) == {False}                                # first look + second chance
+    seen.clear()
+    es._stage_a_company(ev, co, es._structured_verdict(ev), 'ctx', cache)
+    assert seen and set(seen) == {True}
+    monkeypatch.setattr(es, 'ORACLES_LIVE_ENABLED', False)
+    seen.clear()
+    es._stage_a_company(ev, co, es._structured_verdict(ev), 'ctx', cache)
+    assert set(seen) == {False}
+    # end to end: a --dry-run enrichment never lets the live adapters run
+    monkeypatch.setattr(es, 'ORACLES_LIVE_ENABLED', True)
+    seen.clear()
+    llm = LLMStub(COMPANIES, article={'zi_subindustry': 'Banking', 'hq': 'Boston, MA',
+                                      'classification_confidence': 'High'}, grade=GRADE_B)
+    _run(monkeypatch, FakeClient([_event()], TYPED_COLS), llm, dry_run=True)
+    assert seen and set(seen) == {False}
+    assert AccountCache(env.cache_path).stats() == {'search_cache': 0, 'account_firmographics': 0,
+                                                    'negative_cache': 0, 'negative_active': 0}
+
+
+def test_l6_domain_hook_runs_only_for_companies_that_survived_the_fit_gates(env, monkeypatch):
+    seen = []
+    monkeypatch.setattr(es, '_resolve_domain', lambda name, hints=None, **k: seen.append(name) or {
+        'domain': 'zorblat.example', 'method': 'clearbit', 'confidence': 'medium'})
+    env.fc.result = HIT
+    # post-search territory FAIL: tombstoned, no Clearbit/FDIC call for it
+    # (its own company name: the searched facts land in the AccountCache)
+    texas = [{'name': 'Zorblat Texas Inc', 'role': 'Hiring Company', 'descriptor': 'robotics maker'}]
+    llm = LLMStub(texas, article={'zi_subindustry': 'Banking', 'hq': None,
+                                  'classification_confidence': 'High'},
+                  search=dict(SEARCH_BOSTON, hq='Austin, TX'), grade=GRADE_B)
+    client = _run(monkeypatch, FakeClient([_event(company_name='Zorblat Texas Inc')], TYPED_COLS), llm)
+    assert client.payload_for('ev1')['blocked_reason'].startswith('fit_gate:') and seen == []
+    # a survivor gets its domain, after the gates, once
+    llm = LLMStub(COMPANIES, article={'zi_subindustry': 'Banking', 'hq': None,
+                                      'classification_confidence': 'High'},
+                  search=SEARCH_BOSTON, grade=GRADE_B)
+    client = _run(monkeypatch, FakeClient([_event()], TYPED_COLS), llm)
+    pl = client.payload_for('ev1')
+    assert seen == ['Zorblat Robotics Inc'] and pl['companies_data'][0]['domain'] == 'zorblat.example'
+    assert pl['verify_state'] == 'verified'
+    # in a surviving event, a company whose OWN fit failed is skipped
+    seen.clear()
+    two = [{'name': 'Zorblat Robotics Inc', 'role': 'Target', 'descriptor': 'robotics maker'},
+           {'name': 'Giant Zorblat Holdings', 'role': 'Acquirer', 'descriptor': 'conglomerate'}]
+    llm = LLMStub(two, article={'zi_subindustry': 'Banking', 'hq': None,
+                                'classification_confidence': 'High'},
+                  search=SEARCH_BOSTON, grade=GRADE_B)
+    monkeypatch.setattr(es, 'enrich_one_company', lambda name, *a, **k: dict(
+        SEARCH_BOSTON, hq='Austin, TX') if name.startswith('Giant') else dict(SEARCH_BOSTON))
+    client = _run(monkeypatch, FakeClient([_event(event_type='acquisition',
+                                                  title='Giant Zorblat Holdings acquires Zorblat Robotics Inc')],
+                                          TYPED_COLS), llm)
+    pl = client.payload_for('ev1')
+    assert 'blocked_reason' not in pl and seen == ['Zorblat Robotics Inc']
+    fits = {c['name']: c['fit']['verdict'] for c in pl['companies_data']}
+    assert fits['Giant Zorblat Holdings'] == 'fail'
+
+
+def test_p2_k12_label_fails_the_vertical_gate_but_only_on_settled_evidence(env, monkeypatch):
+    assert 'K-12 Schools' in es.ZI_SUBINDUSTRIES and 'K-12 Schools' not in es.ZI_IN_VERTICAL
+    assert es.ZI_NOT_A_FIT == {'K-12 Schools'} and 'Libraries' in es.ZI_IN_VERTICAL
+    fit = es.company_fit({'name': 'Zorblat Learning Trust', 'hq': 'Boston, MA',
+                          'revenue': 'MM', 'zi_subindustry': 'K-12 Schools'})
+    assert fit['verdict'] == 'fail' and fit['vertical'] == 'out'
+    assert fit['reasons'] == ['subindustry K-12 Schools (A.J. 2026-09-04: all K-12 not a fit)']
+    # the article pass alone, below High, is a hunch: reset to unknown, no tombstone
+    firm, no_search = es._article_other_decision({'zi_subindustry': 'K-12 Schools', 'classified_by': 'article',
+                                                  'classification_confidence': 'Medium'}, article_chars=500)
+    assert firm['zi_subindustry'] is None and no_search is False
+    # registry-confirmed (NTEE B2x → the label) → decided for free
+    k12 = dict(BANK_HIT, zi_subindustry='K-12 Schools', source='propublica', url=None,
+               industry='Nonprofit (NTEE B24), 501(c)(3)', revenue='MM', too_small=False)
+    _oracle_stub(monkeypatch, [k12])
+    llm = LLMStub([{'name': 'Zorblat Learning Trust', 'role': 'Hiring Company', 'descriptor': 'nonprofit'}],
+                  grade=GRADE_B)
+    client = _run(monkeypatch, FakeClient([_event(company_name='Zorblat Learning Trust')], TYPED_COLS), llm)
+    assert env.fc.calls == [] and env.tv.calls == [] and llm.count('search') == 0
+    pl = client.payload_for('ev1')
+    assert 'subindustry K-12 Schools' in pl['blocked_reason'] and pl['verify_state'] == 'not_fit'

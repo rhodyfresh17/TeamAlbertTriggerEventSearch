@@ -99,17 +99,258 @@ def resolve_state_token(token: Optional[str]) -> Optional[str]:
     return None
 
 
-def _compile_whole_word(terms: List[str]) -> List[tuple]:
+# Trailing corporate suffixes of an exclusion term accept their long form:
+# whole-word matching (research 2026-09-08) had silently lost "Barrick Gold
+# Corporation" for "gold corp", "Acme Resources Incorporated" for
+# "resources inc", "Acme Mining Limited" for "mining ltd" (review 2026-09-08).
+_CORPORATE_SUFFIXES = {
+    'corp': r'corp(?:oration)?',
+    'inc': r'inc(?:orporated)?',
+    'ltd': r'(?:ltd|limited)',
+    'co': r'co(?:mpany)?',
+}
+
+
+def _compile_whole_word(terms: List[str], plural: bool = False) -> List[tuple]:
     """[(term, compiled_regex)] — whole-word, case-insensitive. Lookarounds
-    instead of \b so terms ending in punctuation ("St. Louis") still work."""
+    instead of \b so terms ending in punctuation ("St. Louis") still work.
+
+    The words of a multi-word term may be separated by any whitespace or by
+    NONE: the bank spells itself "JPMorganChase" in its own headlines, which
+    the "JPMorgan Chase" entry missed while whole-word "JPMorgan" was blocked
+    by the trailing "C" (review 2026-09-08). Concatenated forms of city and
+    industry terms ("datacenter") are the same thing, never a new word.
+
+    plural=True also accepts the plain English plural of the last word
+    ("hotel" → hotels, "data center" → data centers, "refinery" →
+    refineries) so an exclusion list written in the singular keeps its
+    recall — but never a different word: "mining" no longer fires inside
+    "determining"/"examining", "apple" inside "pineapple" (research
+    2026-09-08). A trailing corporate suffix (_CORPORATE_SUFFIXES) is
+    expanded to its long form instead of pluralised."""
     out = []
     for term in terms:
         term = (term or '').strip()
         if not term:
             continue
-        out.append((term, re.compile(r'(?<!\w)' + re.escape(term) + r'(?!\w)',
+        words = term.split()
+        last = words[-1]
+        if plural and last.lower() in _CORPORATE_SUFFIXES:
+            tail = _CORPORATE_SUFFIXES[last.lower()]
+        else:
+            tail = re.escape(last)
+            if plural:
+                if last[-1].lower() == 'y' and last[-2:-1].lower() not in 'aeiou':
+                    tail = tail[:-1] + r'(?:y|ies)'
+                else:
+                    tail += r'(?:e?s)?'
+        pattern = r'\s*'.join([re.escape(w) for w in words[:-1]] + [tail])
+        out.append((term, re.compile(r'(?<!\w)' + pattern + r'(?!\w)',
                                      re.IGNORECASE)))
     return out
+
+
+# ── Hire typing — decided from the TITLE (review 2026-09-08) ─────────────
+#
+# Phase 3 typed "any role mention + any of 24 indicator words" over the whole
+# text, so an earnings release ("… today announced … said Jane Doe, CFO")
+# became a cfo_hire and was admitted with unknown territory, a product launch
+# ("Announces Launch of Wireless Game Controller") an executive_hire, and
+# "Names Jane Doe Corporate Controller … will report to Chief Financial
+# Officer John Smith" a cfo_hire — the exact #NewCFO / #NewController
+# double-count the grader is built to prevent. The rules now:
+#
+#   * a finance-leader hire needs a finance ROLE in the title AND either a
+#     STRONG hire verb in the title (HIRE_VERBS) or a hire NOUN PHRASE next
+#     to the role ("new CFO", "incoming CFO", "as CFO", "to CFO", "CFO
+#     transition", "appointment of … CFO", "names Jane Doe CFO");
+#   * announced / announces / adds / transition / appointment alone never
+#     make a hire — they are the vocabulary of every release;
+#   * the role in the title decides the type: CFO / chief financial officer
+#     → CFO_HIRE; controller, VP finance, treasurer, finance director, head
+#     of finance, chief accounting officer → EXECUTIVE_HIRE even when the
+#     body mentions the CFO (#NewController +3, never #NewCFO +5);
+#   * the bare word "controller" is a finance role only after a finance
+#     qualifier (corporate / financial / assistant / division / plant /
+#     group / regional) or inside a hire-verb pattern ("names X controller",
+#     "as controller") — never a game / motor / traffic controller;
+#   * the body is consulted only when the title names no role at all, and
+#     then only its head (BODY_HEAD_CHARS) and only in the verb-then-role
+#     shape ("has named Jane Doe Controller", "joined Acme as CFO").
+#
+# Whole words throughout ("disappointed" is not "appointed"); a bare 'hire'
+# is deliberately absent because it is a substring of "New Hampshire".
+HIRE_VERBS = (
+    'appoints', 'appointed', 'names', 'named', 'hires', 'hired', 'promotes',
+    'promoted', 'joins', 'joined', 'taps', 'tapped', 'welcomes', 'elevates',
+    'elevated',
+)
+_HIRE_VERB = r'(?:' + '|'.join(HIRE_VERBS) + r')'
+_HIRE_VERB_RE = re.compile(r'(?<!\w)' + _HIRE_VERB + r'(?!\w)', re.IGNORECASE)
+
+# Wire bodies open with a dateline and a boilerplate clause before the news
+# ("ARLINGTON, Va., Feb. 10, 2026 /PRNewswire/ -- Acme, a leading provider
+# of widgets, today announced the appointment of …"), so the head window
+# is a little over the ~200 chars the review asked for.
+BODY_HEAD_CHARS = 250
+
+_CFO_ROLE = r'(?:cfo|chief\s+financ(?:ial|e)\s+officer|finance\s+chief)'
+# "controller" as a device, not a seat: never preceded by these words …
+_DEVICE_BEFORE = ''.join(
+    rf'(?<!{w}\s)' for w in (
+        'game', 'motor', 'traffic', 'flight', 'remote', 'wireless', 'charge',
+        'logic', 'domain', 'network', 'memory', 'storage', 'pest', 'speed',
+        'lighting', 'drone', 'robot', 'pump', 'solar', 'battery', 'hvac',
+        'temperature', 'irrigation', 'gaming',
+    ))
+# … nor followed by these.
+_DEVICE_AFTER = (r'(?!\s+(?:chips?|boards?|units?|modules?|software|firmware|cards?|'
+                 r'hubs?|apps?|line|lineup|series|market|products?|technology|'
+                 r'systems?|devices?)(?!\w))')
+_CONTROLLER = _DEVICE_BEFORE + r'controller' + _DEVICE_AFTER
+_SUB_CFO_ROLE = (
+    r'(?:corporate|financial|assistant|division|divisional|plant|group|regional)'
+    r'\s+controller|comptroller|treasurer|'
+    r'(?:[se]?vp|(?:senior |executive )?vice[ -]president)[\s,\-–—]+(?:of\s+)?finance|'
+    r'finance\s+director|director\s+of\s+finance|head\s+of\s+finance|'
+    r'chief\s+accounting\s+officer'
+)
+_ANY_FINANCE_ROLE = r'(?:' + _CFO_ROLE + r'|' + _SUB_CFO_ROLE + r'|' + _CONTROLLER + r')'
+# Words allowed between "as"/"to" and the role: "as the company's new CFO".
+_FILLER = (r"(?:(?:the|its|our|a|an|new|interim|acting|incoming|permanent|first|"
+           r"next|senior|executive|global|group|corporate|company'?s|firm'?s)\s+){0,3}")
+
+CFO_ROLE = re.compile(r'(?<!\w)' + _CFO_ROLE + r'(?!\w)', re.IGNORECASE)
+# Finance-leader roles BELOW the CFO seat (a hire into one is EXECUTIVE_HIRE,
+# never CFO_HIRE). Bare "controller" is deliberately absent — see
+# _CONTROLLER_HIRED_RE.
+FINANCE_LEADER_TITLE = re.compile(r'(?<!\w)(?:' + _SUB_CFO_ROLE + r')(?!\w)', re.IGNORECASE)
+# Bare "controller" inside a hire pattern: a hire verb, "as" or "to", then at
+# most four words, then the seat ("names Jane Doe Controller", "promoted to
+# controller", "joins as controller").
+_CONTROLLER_HIRED_RE = re.compile(
+    r'(?<!\w)(?:' + _HIRE_VERB + r'|as|to)\s+(?:[^\s;:]+\s+){0,4}?' + _CONTROLLER + r'(?!\w)',
+    re.IGNORECASE)
+# The hire noun phrases, plus the verb-then-role shape without a comma in
+# between ("Appoints Jane Doe, CFO of Beta, to its board" does NOT qualify —
+# the comma-free rule is what keeps board seats out).
+_HIRE_PHRASE_RE = re.compile(
+    r'(?<!\w)(?:'
+    r'(?:new|incoming)\s+' + _ANY_FINANCE_ROLE + r'|'
+    r'as\s+' + _FILLER + _ANY_FINANCE_ROLE + r'|'
+    r'to\s+' + _FILLER + r'(?:(?:the\s+)?(?:role|position|post|seat|title)\s+of\s+)?'
+    + _ANY_FINANCE_ROLE + r'|'
+    + _ANY_FINANCE_ROLE + r'\s+(?:leadership\s+)?transition|'
+    r'appointment\s+of\s+(?:[^\s;:]+\s+){0,6}?(?:as\s+)?' + _FILLER + _ANY_FINANCE_ROLE + r'|'
+    + _HIRE_VERB + r'\s+(?:[^\s,;:]+\s+){0,5}?(?:(?:as|to)\s+)?' + _FILLER + _ANY_FINANCE_ROLE
+    + r')(?!\w)',
+    re.IGNORECASE)
+# A title about a board seat, an award or a speaking slot quotes the role the
+# person ALREADY holds ("Jane Doe, CFO of Acme, Appointed to Beta Board",
+# "Acme CFO Named CFO of the Year"): a strong verb alone is not a hire there,
+# a hire noun phrase still is ("Appoints Jane Doe as CFO and Board Member").
+_NOT_A_SEAT_RE = re.compile(
+    r'(?<!\w)(?:board\s+of\s+(?:directors|trustees|advisors|advisers|governors|managers)|'
+    r'board\s+members?|advisory\s+board|(?:to|joins?|joined)\s+(?:the\s+|its\s+|their\s+)?board|'
+    r'of\s+the\s+(?:year|decade)|top\s+\d+|\d+\s+under\s+\d+|power\s+\d+|hall\s+of\s+fame|'
+    r'honou?r(?:s|ed|ee|ees)?|awards?|awarded|panel(?:ist)?s?|keynote|webinar|podcast)(?!\w)',
+    re.IGNORECASE)
+# Role mentions that are NOT the seat being filled, blanked before the scan:
+# the person's past seat ("Former Fortune 50 Chief Accounting Officer Patti
+# Humble Joins …"), the boss ("… Corporate Controller. Doe will report to
+# Chief Financial Officer John Smith") and an award ("Named CFO of the Year").
+_NOT_THE_SEAT_RES = (
+    re.compile(r'(?<!\w)report(?:s|ing|ed)?\s+(?:directly\s+)?to\s+(?:the\s+)?'
+               r"(?:company'?s\s+)?(?:[^\s;:]+\s+){0,2}?" + _ANY_FINANCE_ROLE + r'(?!\w)',
+               re.IGNORECASE),
+    re.compile(r'(?<!\w)(?:former|ex|previous|past|retired|outgoing|veteran|longtime|'
+               r'long-time|then)[\s\-]+(?:[^\s,;:]+\s+){0,4}?' + _ANY_FINANCE_ROLE + r'(?!\w)',
+               re.IGNORECASE),
+    re.compile(r'(?<!\w)(?:top|best|leading|outstanding|rising|award-winning)\s+(?:\d+\s+)?'
+               + _ANY_FINANCE_ROLE + r's?(?!\w)|(?<!\w)' + _ANY_FINANCE_ROLE
+               + r'\s+of\s+the\s+(?:year|decade)(?!\w)', re.IGNORECASE),
+)
+# Device controllers blanked before the CONFIGURED keyword scan of the generic
+# executive-hire path, which substring-matches "Controller".
+_DEVICE_CONTROLLER_RE = re.compile(
+    r'(?<!\w)(?:game|gaming|motor|traffic|flight|remote|wireless|charge|logic|domain|'
+    r'network|memory|storage|pest|speed|lighting|drone|robot|pump|solar|battery|hvac|'
+    r'temperature|irrigation)\s+controllers?(?!\w)|'
+    r'(?<!\w)controllers?\s+(?:chips?|boards?|units?|modules?|software|firmware|cards?|'
+    r'hubs?|apps?|line|lineup|series|market|products?|technology|systems?|devices?)(?!\w)',
+    re.IGNORECASE)
+# "New controller" as a product, not a seat ("Launches New Controller for
+# Smart Homes") — guards the generic path's "new <role>" indicator only.
+_PRODUCT_LAUNCH_RE = re.compile(
+    r'(?<!\w)(?:launch(?:es|ed)?|unveil(?:s|ed)?|introduc(?:es|ed)|debuts?|releases?|'
+    r'ships?|showcas(?:es|ed)|rolls?\s+out)(?!\w)', re.IGNORECASE)
+
+
+def has_hire_indicator(text: str) -> bool:
+    """True when the text carries a STRONG hire verb (HIRE_VERBS) as a whole
+    word. announced / announces / adds / transition / appointment are not
+    indicators — an earnings release "today announced" too."""
+    if not text:
+        return False
+    return bool(_HIRE_VERB_RE.search(text))
+
+
+def _hire_window(text: str) -> str:
+    """The text with the role mentions that are not the seat being filled
+    blanked out (_NOT_THE_SEAT_RES)."""
+    for rx in _NOT_THE_SEAT_RES:
+        text = rx.sub(' ', text)
+    return text
+
+
+def _finance_role_kind(window: str) -> Optional[str]:
+    """'cfo' | 'exec' | None — the finance seat the window names. The CFO
+    seat wins when both appear ("as President & Chief Financial Officer")."""
+    if CFO_ROLE.search(window):
+        return 'cfo'
+    if FINANCE_LEADER_TITLE.search(window) or _CONTROLLER_HIRED_RE.search(window):
+        return 'exec'
+    return None
+
+
+def finance_leader_hire_kind(title: str, body: str = '') -> Optional[str]:
+    """'cfo' | 'exec' | None — is this a seated finance-leader hire, and into
+    which seat? Decided from the TITLE (rules in the comment block above);
+    the head of the body counts only when the title names no finance role,
+    and only in the verb-then-role / noun-phrase shape. rss_scraper's
+    unknown-territory admission calls this on the title alone.
+
+        'Acme Names Jane Doe CFO'                                → 'cfo'
+        'Acme Names Jane Doe Corporate Controller' (+ CFO body)  → 'exec'
+        'Acme Reports Q2 Results' + '… said Jane Doe, CFO'       → None
+        'Acme Announces Launch of Wireless Game Controller'      → None
+    """
+    window = _hire_window(title or '')
+    kind = _finance_role_kind(window)
+    if kind:
+        if _HIRE_PHRASE_RE.search(window):
+            return kind
+        if has_hire_indicator(window) and not _NOT_A_SEAT_RE.search(title or ''):
+            return kind
+        return None
+    head = _hire_window((body or '')[:BODY_HEAD_CHARS])
+    kind = _finance_role_kind(head)
+    if kind and _HIRE_PHRASE_RE.search(head):
+        return kind
+    return None
+
+
+# Public-company indicators that count only in the TITLE (see __init__).
+# Lower-case, compared against the configured public_company_indicators.
+TITLE_ONLY_PUBLIC_INDICATORS = ('fortune 500', 'fortune 100')
+
+# Product/platform phrases that carry a mega-cap's name without the release
+# being about that company (see is_public_company). Lower-case.
+_PLATFORM_PHRASES = (
+    'oracle netsuite', 'netsuite by oracle', 'amazon web services',
+    'microsoft azure', 'microsoft dynamics', 'microsoft 365', 'google cloud',
+    'google workspace',
+)
 
 
 class BaseScraper(ABC):
@@ -138,12 +379,40 @@ class BaseScraper(ABC):
         self.target_companies = [c.lower() for c in (self.territory.get('target_companies') or []) if c]
         self.industries = [i.lower() for i in (self.territory.get('industries') or [])]
         self.excluded_industries = [i.lower() for i in (self.territory.get('excluded_industries') or [])]
+        # Whole-word (+ plural) — substring matching killed "determining" /
+        # "examining" as "mining" and Vermont Business Magazine's in-territory
+        # triggers with it (research 2026-09-08). Target industries stay
+        # substring-matched: they only add relevance, never reject.
+        self._excluded_industry_res = _compile_whole_word(self.excluded_industries, plural=True)
 
         # Load keywords
         self.keywords = config.get('keywords', {})
         self.exec_hire_keywords = [k.lower() for k in self.keywords.get('executive_hires', [])]
         self.ma_keywords = [k.lower() for k in self.keywords.get('mergers_acquisitions', [])]
         self.funding_keywords = [k.lower() for k in self.keywords.get('funding_events', [])]
+        # The generic executive-hire path needs a ROLE keyword: the config
+        # lists hire-signal phrases ("appoints", "named as", "promoted to")
+        # under executive_hires too, and a keyword that IS the verb made
+        # "appoints Beta as software vendor" an executive hire (review
+        # 2026-09-08). Keywords whose first word is a hire verb are
+        # indicators, never roles.
+        self._role_keywords = [
+            kw for kw in self.exec_hire_keywords
+            if kw.split() and not _HIRE_VERB_RE.match(kw.split()[0])
+        ]
+        # Generic executive-hire indicators built from the configured roles
+        # (review 2026-09-08): "new <role>" and "<hire verb> … <role>". The
+        # bare "controller" keyword takes the device guards — "new controller
+        # chip" is not a seat.
+        role_alt = '|'.join(
+            _CONTROLLER if kw == 'controller' else re.escape(kw)
+            for kw in self._role_keywords
+        ) or r'(?!x)x'                                  # no keywords: never matches
+        self._new_role_re = re.compile(r'(?<!\w)new\s+(?:' + role_alt + r')(?!\w)',
+                                       re.IGNORECASE)
+        self._verb_then_role_re = re.compile(
+            r'(?<!\w)' + _HIRE_VERB + r'\s+(?:[^\s,;:]+\s+){0,5}?(?:(?:as|to)\s+)?'
+            + _FILLER + r'(?:' + role_alt + r')(?!\w)', re.IGNORECASE)
 
         # Load company filters (for mid-market private companies)
         self.company_filters = self.territory.get('company_filters', {})
@@ -151,9 +420,24 @@ class BaseScraper(ABC):
         self.public_indicators = [
             i.lower() for i in (self.company_filters.get('public_company_indicators') or [])
         ]
+        # "Fortune 500" / "Fortune 100" fire from the TITLE only (review
+        # 2026-09-08): a private company's release calls its new CFO a
+        # "Fortune 500 executive" (Lotlinx, live 2026-09-08) — that is the
+        # hire's résumé, not the company's listing. Tickers and exchange
+        # phrases stay body-wide.
+        self._title_only_public_indicators = [
+            i for i in self.public_indicators if i in TITLE_ONLY_PUBLIC_INDICATORS
+        ]
+        self._body_public_indicators = [
+            i for i in self.public_indicators if i not in TITLE_ONLY_PUBLIC_INDICATORS
+        ]
         self.excluded_public_companies = [
             c.lower() for c in (self.company_filters.get('excluded_public_companies') or [])
         ]
+        # Whole words/phrases only — "apple" must not fire inside "pineapple",
+        # "us bank" inside "various banks" (research 2026-09-08). The ticker
+        # indicators below stay substrings ("(NYSE:") — that policy stands.
+        self._excluded_public_company_res = _compile_whole_word(self.excluded_public_companies)
         self.target_size_indicators = [
             i.lower() for i in (self.company_filters.get('target_size_indicators') or [])
         ]
@@ -194,27 +478,47 @@ class BaseScraper(ABC):
                 return True
         return False
 
-    def detect_event_type(self, text: str) -> Optional[EventType]:
-        """Detect the type of trigger event from text."""
+    def detect_event_type(self, text: str, title: Optional[str] = None) -> Optional[EventType]:
+        """Detect the type of trigger event from text.
+
+        `title` is the headline when the caller has one (text is then
+        "<title> <body>"); without it the whole text is read as the
+        headline. The hire type is decided from the title — see the hire
+        typing block above finance_leader_hire_kind (review 2026-09-08).
+        """
         text_lower = text.lower()
 
         # First check if this is excluded content (concerts, sports, etc.)
         if self.is_excluded_content(text):
             return None
 
-        # Check for CFO specifically first
-        cfo_patterns = ['cfo', 'chief financial officer']
-        if any(pattern in text_lower for pattern in cfo_patterns):
-            # Make sure it's about hiring, not just mentioning CFO
-            hire_indicators = ['named', 'appointed', 'hired', 'joins', 'new cfo', 'promoted', 'announces']
-            if any(ind in text_lower for ind in hire_indicators):
-                return EventType.CFO_HIRE
+        if title is None:
+            title, body = text, ''
+        else:
+            body = text[len(title):] if text.startswith(title) else text
 
-        # Check for executive hires
-        if any(kw in text_lower for kw in self.exec_hire_keywords):
-            hire_indicators = ['named', 'appointed', 'hired', 'joins', 'promoted', 'announces', 'welcomes']
-            if any(ind in text_lower for ind in hire_indicators):
-                return EventType.EXECUTIVE_HIRE
+        # Finance-leader hires first: a role mention alone is not a hire —
+        # an earnings release quoting the CFO, an M&A release quoting the
+        # CFO, a launch of a "game controller" must not type as one. The
+        # role in the TITLE decides the seat: a Controller reporting to the
+        # CFO is EXECUTIVE_HIRE (#NewController +3), never CFO_HIRE (+5).
+        kind = finance_leader_hire_kind(title, body)
+        if kind == 'cfo':
+            return EventType.CFO_HIRE
+        if kind == 'exec':
+            return EventType.EXECUTIVE_HIRE
+
+        # Generic executive hires (President / CEO / COO …): a configured
+        # ROLE keyword anywhere in the text, as before Phase 3, but the
+        # indicator must be a strong hire verb or "new <role>" — and it must
+        # sit in the title, or in the head of the body when the title names
+        # no role (review 2026-09-08). The scan skips role mentions that are
+        # not a seat being filled ("Former Fortune 50 Chief Accounting
+        # Officer … Joins the Alliance") and device controllers.
+        keyword_text = _DEVICE_CONTROLLER_RE.sub(' ', _hire_window(text).lower())
+        if (any(kw in keyword_text for kw in self._role_keywords)
+                and self._generic_hire_signal(title, body)):
+            return EventType.EXECUTIVE_HIRE
 
         # Check for M&A
         if any(kw in text_lower for kw in self.ma_keywords):
@@ -228,6 +532,28 @@ class BaseScraper(ABC):
             return EventType.FUNDING
 
         return None
+
+    def _generic_hire_signal(self, title: str, body: str) -> bool:
+        """Hire indicator for the generic executive-hire path. In the title
+        (when it names a configured role): a strong hire verb, or "new
+        <role>" outside a product launch; a board / award title needs the
+        verb-then-role shape. In the head of the body (title names no
+        role): verb-then-role or "new <role>" only."""
+        raw_title = title or ''
+        title = _hire_window(raw_title)               # blank "CFO of the Year" etc.
+        title_lower = _DEVICE_CONTROLLER_RE.sub(' ', title.lower())
+        if any(kw in title_lower for kw in self._role_keywords):
+            if self._new_role_re.search(title) and not _PRODUCT_LAUNCH_RE.search(title):
+                return True
+            if not has_hire_indicator(title):
+                return False
+            if _NOT_A_SEAT_RE.search(raw_title):
+                return bool(self._verb_then_role_re.search(title))
+            return True
+        head = _hire_window((body or '')[:BODY_HEAD_CHARS])
+        if self._verb_then_role_re.search(head):
+            return True
+        return bool(self._new_role_re.search(head) and not _PRODUCT_LAUNCH_RE.search(head))
 
     def is_excluded_location(self, text: str) -> bool:
         """True when the text mentions an excluded (out-of-territory) location
@@ -395,10 +721,9 @@ class BaseScraper(ABC):
         """
         text_lower = text.lower()
 
-        # Check exclusions first
-        for excluded in self.excluded_industries:
-            if excluded in text_lower:
-                return False, True
+        # Check exclusions first — whole words (+ plural), see __init__
+        if any(rx.search(text) for _term, rx in self._excluded_industry_res):
+            return False, True
 
         # Check target industries
         for industry in self.industries:
@@ -407,20 +732,36 @@ class BaseScraper(ABC):
 
         return False, False
 
-    def is_public_company(self, text: str) -> bool:
-        """Check if text indicates a public company (to exclude)."""
+    def is_public_company(self, text: str, title: Optional[str] = None) -> bool:
+        """Check if text indicates a public company (to exclude).
+
+        `title` is the headline when the caller has one: the title-only
+        indicators ("Fortune 500" / "Fortune 100") are looked for there and
+        nowhere else. Without a title they are looked for in the text, as
+        before (review 2026-09-08)."""
         if not self.exclude_public:
             return False
 
         text_lower = text.lower()
+        head_lower = text_lower if title is None else title.lower()
+        if any(indicator in head_lower for indicator in self._title_only_public_indicators):
+            return True
 
-        # Check for known large public companies by name
-        for company in self.excluded_public_companies:
-            if company in text_lower:
-                return True
+        # Check for known large public companies by NAME (whole words). A
+        # platform phrase that embeds a mega-cap's name is not that company:
+        # an "Oracle NetSuite partner" is a NetSuite partner — NetSuite being
+        # what the team sells, that mention must never exclude a release
+        # (research 2026-09-08). Those phrases are blanked before the scan.
+        name_text = text
+        for phrase in _PLATFORM_PHRASES:
+            if phrase in text_lower:
+                name_text = re.sub(re.escape(phrase), ' ', name_text, flags=re.IGNORECASE)
+        if any(rx.search(name_text) for _term, rx in self._excluded_public_company_res):
+            return True
 
-        # Check for public company indicators
-        for indicator in self.public_indicators:
+        # Check for public company indicators (tickers, exchange phrases —
+        # substrings, body-wide)
+        for indicator in self._body_public_indicators:
             if indicator in text_lower:
                 return True
 

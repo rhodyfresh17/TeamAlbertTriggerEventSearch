@@ -8,8 +8,16 @@ from typing import List, Dict, Any, Optional
 from email.utils import parsedate_to_datetime
 from requests.exceptions import Timeout, ReadTimeout, ConnectTimeout
 
-from .base import BaseScraper
+from .base import BaseScraper, finance_leader_hire_kind
 from ..models import TriggerEvent, EventType, EventSource
+
+
+# Seconds to wait before the single retry of a timed-out feed. Was 60s: with
+# 45 feeds and 69 Google News queries in one GitHub Actions job under
+# timeout-minutes: 15, one hung feed cost 30s + 60s + 30s of the budget
+# (review 2026-09-08). A feed that is still down 15s later is reported as
+# an error and the run moves on.
+RETRY_SLEEP_SECONDS = 15
 
 
 # Standard URIs for common RSS namespace prefixes. Many feeds use these
@@ -101,6 +109,9 @@ class RSSScraper(BaseScraper):
         'wired': EventSource.OTHER,
         'fox business': EventSource.OTHER,
         'cnbc': EventSource.OTHER,
+        # PRWeb (Cision's small-business wire, added 2026-09-08) deliberately
+        # stays OTHER: no wire relevance boost, and pipeline.sources gives it
+        # its own 'PRWeb' label instead of folding it into PR Newswire.
     }
 
     def __init__(self, config: Dict[str, Any]):
@@ -123,7 +134,7 @@ class RSSScraper(BaseScraper):
             if not feed_url:
                 continue
 
-            feed_events, error_msg, items_fetched = self._scrape_feed(feed_url, feed_name)
+            feed_events, error_msg, items_fetched = self._scrape_feed(feed_url, feed_name, feed_config)
             events.extend(feed_events)
 
             # items_fetched = entries parsed from the feed XML, before any
@@ -143,8 +154,13 @@ class RSSScraper(BaseScraper):
 
         return events
 
-    def _scrape_feed(self, url: str, feed_name: str, retry_count: int = 0) -> tuple:
+    def _scrape_feed(self, url: str, feed_name: str,
+                     feed_config: Optional[Dict[str, Any]] = None,
+                     retry_count: int = 0) -> tuple:
         """Scrape a single RSS feed with retry on timeout.
+
+        feed_config is the rss_feeds entry (v2 Phase 3, 2026-09-08): its
+        optional `default_region` is handed to _process_entry.
 
         Returns: (events, error_message, items_fetched) - error_message is
         None on success; items_fetched is the number of feed entries parsed
@@ -154,6 +170,7 @@ class RSSScraper(BaseScraper):
         max_retries = 1  # Retry once on timeout
         error_msg = None
         items_fetched = 0
+        default_region = (feed_config or {}).get('default_region')
 
         try:
             response = self.session.get(url, timeout=self.timeout)
@@ -181,15 +198,15 @@ class RSSScraper(BaseScraper):
 
             items_fetched = len(items)
             for item in items:
-                event = self._process_entry(item, feed_name)
+                event = self._process_entry(item, feed_name, default_region)
                 if event:
                     events.append(event)
 
         except (Timeout, ReadTimeout, ConnectTimeout) as e:
             if retry_count < max_retries:
-                print(f"Timeout on {feed_name}, waiting 60s and retrying...")
-                time.sleep(60)
-                return self._scrape_feed(url, feed_name, retry_count + 1)
+                print(f"Timeout on {feed_name}, waiting {RETRY_SLEEP_SECONDS}s and retrying...")
+                time.sleep(RETRY_SLEEP_SECONDS)
+                return self._scrape_feed(url, feed_name, feed_config, retry_count + 1)
             else:
                 error_msg = f"Timeout: {e}"
                 print(f"Error parsing feed {feed_name}: {e} (after retry)")
@@ -202,8 +219,14 @@ class RSSScraper(BaseScraper):
             items_fetched = 0
         return events, error_msg, items_fetched
 
-    def _process_entry(self, item: ET.Element, feed_name: str) -> Optional[TriggerEvent]:
-        """Process a single feed entry."""
+    def _process_entry(self, item: ET.Element, feed_name: str,
+                       default_region: Optional[str] = None) -> Optional[TriggerEvent]:
+        """Process a single feed entry.
+
+        default_region (rss_feeds entry, optional): the feed's home state,
+        an ADMISSION-ONLY hint used when the text places the story nowhere
+        — see the default block below.
+        """
         # Extract fields (handle both RSS and Atom)
         title = self._get_text(item, 'title') or ''
         link = self._get_text(item, 'link') or self._get_attr(item, 'link', 'href') or ''
@@ -241,20 +264,58 @@ class RSSScraper(BaseScraper):
         # Check territory match in body text
         in_territory, matched_regions = self.matches_territory(full_text)
 
+        # A dateline that resolves to a state/province outside the territory
+        # is KNOWN out, not unknown ("DENVER, Colo.", "CALGARY, Alberta"):
+        # it vetoes both the feed default below and the unknown-territory
+        # admission further down.
+        dateline_known_out = any(
+            state and state not in self.regions
+            for _city, state in dateline_locations
+        )
+        # A dateline that names ANY place we did not match — an out-of-
+        # territory state ("TOPEKA, Kan."), a province, or a bare foreign
+        # city ("MANILA") — places the story somewhere, so a feed default
+        # must not stand in for it (review 2026-09-08).
+        dateline_elsewhere = dateline_known_out or (
+            bool(dateline_locations) and not dateline_in_territory)
+
+        # Feed-level default_region (v2 Phase 3, research 2026-09-08): a
+        # regional business journal writes "Bedford-based" and "CT", never
+        # "New Hampshire" / "Connecticut", so its own-state stories carry no
+        # state token — NH Business Review's "Hometown Financial Group to
+        # acquire Primary Bank" (a Bedford NH bank) died at the territory
+        # gate. When the text places the story NOWHERE (no in-territory hit,
+        # no dateline elsewhere, no excluded location) the feed's home
+        # region ADMITS the story past the territory gate — and does nothing
+        # else (review 2026-09-08): matched_regions stays empty, so the
+        # default earns no relevance points and never reaches enrichment's
+        # oracle anchor (_event_state_hint) or the dashboard's HQ column as
+        # if the text had named the state; a real trigger is still required
+        # (no PE-backed stable target on a defaulted region); the industry /
+        # public hard blocks still apply; the enrichment HQ gate re-verifies.
+        region_default = (default_region or '').strip().lower()
+        region_defaulted = bool(
+            not in_territory and region_default and region_default in self.regions
+            and not dateline_elsewhere and not self.is_excluded_location(full_text)
+        )
+
         # Check target company
         matches_company, company_name = self.matches_target_company(full_text)
 
         # STEP 2: Detect event type (trigger events like M&A, CFO hire, funding)
-        event_type = self.detect_event_type(full_text)
+        # — the hire type is decided from the title (review 2026-09-08)
+        event_type = self.detect_event_type(full_text, title=title)
 
         # Track recommendation reasoning for stable targets
         recommendation_reasoning = None
 
-        # Always hard-block excluded industries and public companies
+        # Always hard-block excluded industries and public companies (the
+        # "Fortune 500" indicators count in the title only)
         matches_target_industry, matches_excluded = self.matches_industry(full_text)
         if matches_excluded:
             return None
-        if self.is_public_company(full_text):
+        if (self.is_public_company(full_text, title=title)
+                or self._has_stock_ticker_category(item)):
             return None
 
         # STEP 3: Apply territory + trigger filtering
@@ -283,7 +344,9 @@ class RSSScraper(BaseScraper):
             if not in_territory and self.is_excluded_location(full_text):
                 return None
 
-            # If no trigger event, skip
+            # If no trigger event, skip. in_territory here is the REAL text
+            # match — a feed default never makes a PE-backed "portfolio
+            # company opens office" story a stable target (review 2026-09-08).
             if not event_type:
                 is_pe_backed = self._is_pe_backed(full_text)
                 if not (matches_company or (is_pe_backed and in_territory)):
@@ -295,8 +358,21 @@ class RSSScraper(BaseScraper):
             is_ma_event = event_type == EventType.MERGER_ACQUISITION
 
             if self.require_territory_match:
-                if not (in_territory or matches_company):
-                    return None
+                if not (in_territory or matches_company or region_defaulted):
+                    # UNKNOWN territory — no dateline, no in-territory word, no
+                    # excluded location (the excluded-location check above
+                    # already returned) — used to be a hard reject, which
+                    # killed every GlobeNewswire CFO hire: GlobeNewswire RSS
+                    # carries no datelines at all (research 2026-09-08). Admit
+                    # the finance-leader hires ONLY — a hire whose TITLE names
+                    # a finance-leader seat in a hire shape — and let
+                    # enrichment verify territory: a false admit costs one
+                    # local-LLM pass, a false reject is lost forever. A
+                    # dateline that resolves to an out-of-territory state is
+                    # KNOWN out, not unknown. M&A / funding are never admitted
+                    # this way (volume).
+                    if dateline_known_out or not self._is_finance_leader_hire(event_type, title):
+                        return None
 
         # Get industry match info (may not be set for dateline-in-territory)
         matched_industries = self.get_matched_industries(full_text)
@@ -358,6 +434,33 @@ class RSSScraper(BaseScraper):
             matched_regions=matched_regions,
             relevance_score=relevance
         )
+
+    def _has_stock_ticker_category(self, item: ET.Element) -> bool:
+        """GlobeNewswire tags listed issuers with
+        <category domain=".../rss/stock">Nasdaq:CARG</category> and keeps the
+        ticker OUT of the title and description, so the "(NASDAQ:" substring
+        indicators never see it (research 2026-09-08: 9 of the 20 items in the
+        CFO keyword feed, every one a listed company). Honour
+        exclude_public_companies here too — otherwise the unknown-territory
+        admission below would hand enrichment a stream of public-company CFO
+        hires."""
+        if not self.exclude_public:
+            return False
+        for cat in item.findall('category'):
+            if '/rss/stock' in (cat.get('domain') or '').lower():
+                return True
+        return False
+
+    @staticmethod
+    def _is_finance_leader_hire(event_type: Optional[EventType], title: str) -> bool:
+        """The events worth admitting without a known territory: a hire
+        whose TITLE names a finance-leader seat in a hire shape — the same
+        title-based test that typed the event (base.finance_leader_hire_kind
+        on the title alone, review 2026-09-08). Never on the body alone: an
+        event typed from the body's head ("… strengthens its leadership
+        team" + "has named Jane Doe Controller") needs a known territory."""
+        return (event_type in (EventType.CFO_HIRE, EventType.EXECUTIVE_HIRE)
+                and finance_leader_hire_kind(title or '') is not None)
 
     def _get_text(self, elem: ET.Element, tag: str) -> Optional[str]:
         """Get text content of a child element."""

@@ -45,7 +45,7 @@ ALTER TABLE public.events ADD COLUMN IF NOT EXISTS formd_is_spac BOOLEAN;
 ALTER TABLE public.events ADD COLUMN IF NOT EXISTS enrich_attempts INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE public.events ADD COLUMN IF NOT EXISTS retry_after TIMESTAMPTZ;          -- do not re-process before this
 ALTER TABLE public.events ADD COLUMN IF NOT EXISTS classification_confidence TEXT;   -- High | Medium | Low
-ALTER TABLE public.events ADD COLUMN IF NOT EXISTS classified_by TEXT;               -- structured | cache | article | search
+ALTER TABLE public.events ADD COLUMN IF NOT EXISTS classified_by TEXT;               -- structured | cache | article | search | oracle
 
 -- ============================================
 -- 2. source_status: raw-vs-kept counters

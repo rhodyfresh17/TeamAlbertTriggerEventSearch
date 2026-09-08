@@ -1,5 +1,6 @@
 """Google News RSS scraper for trigger events."""
 
+import re
 import urllib.parse
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
@@ -7,7 +8,22 @@ from typing import List, Dict, Any, Optional
 from email.utils import parsedate_to_datetime
 
 from .base import BaseScraper
+from .rss_scraper import strip_html
 from ..models import TriggerEvent, EventType, EventSource
+
+
+# Google's hard limit is 32 words; past ~32 it silently drops `when:` and
+# returns years-old items (research 2026-09-08). Every query is built to stay
+# within this many TERMS as query_term_count counts them — far under the cap.
+MAX_QUERY_TERMS = 12
+RECENCY = 'when:7d'      # scraper.max_age_hours is 168 anyway — older hits die downstream
+
+
+def query_term_count(query: str) -> int:
+    """Search terms in a Google News query: a quoted phrase is ONE term, `OR`
+    and parentheses are operators (not counted), `when:7d` is one term."""
+    collapsed = re.sub(r'"[^"]*"', 'PHRASE', query or '')
+    return len([t for t in re.findall(r'[^\s()]+', collapsed) if t.upper() != 'OR'])
 
 
 class GoogleNewsScraper(BaseScraper):
@@ -22,6 +38,9 @@ class GoogleNewsScraper(BaseScraper):
         self.enabled = google_config.get('enabled', True)
         self.base_url = google_config.get('base_url', self.BASE_URL)
         self.source_statuses = []  # Track status
+        # query → lower-case state names, filled by _build_search_queries for
+        # the region-grouped queries (the hint _process_entry falls back on)
+        self._region_hints: Dict[str, List[str]] = {}
 
     def scrape(self) -> List[TriggerEvent]:
         """Scrape Google News for trigger events in territory."""
@@ -75,6 +94,35 @@ class GoogleNewsScraper(BaseScraper):
 
         return events
 
+    # Territory state groups for the region-grouped queries (research
+    # 2026-09-08). Groups are 3-4 states so every query stays within
+    # MAX_QUERY_TERMS; the group is also the ADMISSION hint handed to
+    # _process_entry for items whose text names no location at all (it
+    # never lands in matched_regions — review 2026-09-08).
+    REGION_GROUPS = (
+        ('Florida', 'Georgia', 'Alabama'),
+        ('North Carolina', 'South Carolina', 'Tennessee', 'Kentucky'),
+        ('Virginia', 'Maryland', 'West Virginia', 'Delaware'),
+        ('Pennsylvania', 'New Jersey', 'New York'),
+        ('Massachusetts', 'Connecticut', 'Rhode Island'),
+        ('Maine', 'New Hampshire', 'Vermont'),
+        ('Ohio', 'Michigan', 'Indiana'),
+        ('Ontario', 'Quebec', 'Nova Scotia', 'New Brunswick'),
+    )
+    # (template, hint) — {states} becomes `("North Carolina" OR Tennessee …)`.
+    # CFO hires plus the two Consumer Services deal shapes Google News
+    # actually surfaces (dealership and home-care/home-health M&A).
+    # Funeral-home queries are deliberately absent: no yield in 20 years of
+    # results (research 2026-09-08).
+    REGION_QUERY_TEMPLATES = (
+        ('CFO (names OR appoints OR appointed) ({states}) ' + RECENCY,
+         EventType.CFO_HIRE),
+        ('dealership (acquires OR acquired) ({states}) ' + RECENCY,
+         EventType.MERGER_ACQUISITION),
+        ('("home care" OR "home health") (acquires OR acquired) ({states}) ' + RECENCY,
+         EventType.MERGER_ACQUISITION),
+    )
+
     def _build_search_queries(self) -> List[tuple[str, Optional[EventType]]]:
         """Build search queries combining keywords with territory.
 
@@ -84,11 +132,24 @@ class GoogleNewsScraper(BaseScraper):
         in-territory accounts only, and out-of-territory hits only cost
         research downstream.
 
+        Every query carries `when:7d` (2026-09-08): scraper.max_age_hours
+        drops anything older anyway, so the old undated queries only spent
+        their 10-item cap on stale hits. The region-grouped queries also
+        register their state group in self._region_hints.
+
         The hint is informational: `_process_entry` requires
         `detect_event_type()` to positively classify the article and never
         falls back to the hint.
         """
         queries = []
+        self._region_hints = {}
+
+        def add(query: str, hint: Optional[EventType], regions=None) -> None:
+            if RECENCY not in query:
+                query = f'{query} {RECENCY}'
+            queries.append((query, hint))
+            if regions:
+                self._region_hints[query] = [r.lower() for r in regions]
 
         # Key regions to search (limit to avoid too many requests)
         key_regions = ['New York', 'Boston', 'Toronto', 'Philadelphia', 'Charlotte']
@@ -96,13 +157,13 @@ class GoogleNewsScraper(BaseScraper):
         # CFO hire queries
         cfo_terms = ['CFO appointed', 'new CFO', 'names CFO', 'CFO hire']
         for term in cfo_terms:
-            queries.append((term, EventType.CFO_HIRE))
+            add(term, EventType.CFO_HIRE)
 
         # M&A queries with region
         ma_terms = ['acquisition announced', 'company acquired', 'merger agreement']
         for term in ma_terms:
             for region in key_regions[:3]:  # Limit regions
-                queries.append((f'{term} {region}', EventType.MERGER_ACQUISITION))
+                add(f'{term} {region}', EventType.MERGER_ACQUISITION)
 
         # Industry-specific queries — TARGET verticals only (Financial Services,
         # Nonprofits, Consumer Services). Previously queried healthcare/hospital/
@@ -112,11 +173,11 @@ class GoogleNewsScraper(BaseScraper):
                       'private equity', 'nonprofit', 'foundation',
                       'auto dealership', 'real estate brokerage']
         for industry in industries:
-            queries.append((f'{industry} CFO', EventType.CFO_HIRE))
-            queries.append((f'{industry} acquisition', EventType.MERGER_ACQUISITION))
+            add(f'{industry} CFO', EventType.CFO_HIRE)
+            add(f'{industry} acquisition', EventType.MERGER_ACQUISITION)
         # New-Controller trigger — a stated top trigger with no query until now
-        queries.append(('new controller appointed', EventType.CFO_HIRE))
-        queries.append(('"VP of Finance" appointed', EventType.CFO_HIRE))
+        add('new controller appointed', EventType.CFO_HIRE)
+        add('"VP of Finance" appointed', EventType.CFO_HIRE)
 
         # Crunchbase-sourced news (funding rounds, acquisitions)
         crunchbase_queries = [
@@ -125,7 +186,8 @@ class GoogleNewsScraper(BaseScraper):
             ('site:news.crunchbase.com raises', EventType.FUNDING),
             ('site:news.crunchbase.com acquired', EventType.MERGER_ACQUISITION),
         ]
-        queries.extend(crunchbase_queries)
+        for query, hint in crunchbase_queries:
+            add(query, hint)
 
         # Private equity portfolio company moves
         pe_queries = [
@@ -135,7 +197,8 @@ class GoogleNewsScraper(BaseScraper):
             ('"add-on acquisition"', EventType.MERGER_ACQUISITION),
             ('"bolt-on acquisition"', EventType.MERGER_ACQUISITION),
         ]
-        queries.extend(pe_queries)
+        for query, hint in pe_queries:
+            add(query, hint)
 
         # Companies in transition (interim/fractional = opportunity)
         transition_queries = [
@@ -145,7 +208,15 @@ class GoogleNewsScraper(BaseScraper):
             ('"CFO transition"', EventType.CFO_HIRE),
             ('"CFO search"', EventType.CFO_HIRE),
         ]
-        queries.extend(transition_queries)
+        for query, hint in transition_queries:
+            add(query, hint)
+
+        # Region-grouped queries (2026-09-08): one per state group and
+        # template, each carrying its group as the territory hint.
+        for group in self.REGION_GROUPS:
+            states = ' OR '.join(f'"{s}"' if ' ' in s else s for s in group)
+            for template, hint in self.REGION_QUERY_TEMPLATES:
+                add(template.format(states=states), hint, group)
 
         return queries
 
@@ -170,7 +241,8 @@ class GoogleNewsScraper(BaseScraper):
             self._items_fetched = getattr(self, '_items_fetched', 0) + len(items)
 
             for item in items:
-                event = self._process_entry(item, event_type_hint)
+                event = self._process_entry(item, event_type_hint,
+                                            self._region_hints.get(query))
                 if event:
                     events.append(event)
 
@@ -183,15 +255,27 @@ class GoogleNewsScraper(BaseScraper):
         self,
         item: ET.Element,
         event_type_hint: Optional[EventType],
+        region_hint: Optional[List[str]] = None,
     ) -> Optional[TriggerEvent]:
-        """Process a single news entry."""
+        """Process a single news entry.
+
+        region_hint: the query's state group (lower-case names), an
+        ADMISSION-ONLY hint used when the article text names no location at
+        all — see below.
+        """
         title_elem = item.find('title')
         link_elem = item.find('link')
         desc_elem = item.find('description')
 
         title = title_elem.text if title_elem is not None else ''
         link = link_elem.text if link_elem is not None else ''
-        summary = desc_elem.text if desc_elem is not None else ''
+        # Google News descriptions are HTML: <a href="https://news.google.com/
+        # rss/articles/…">headline</a>&nbsp;&nbsp;<font>source</font>. Read
+        # RAW, that link put "google" into every item and — "Google" being on
+        # excluded_public_companies — 100% of items were rejected as public
+        # companies: zero Google News events since 2026-02-05 (research
+        # 2026-09-08). Strip the HTML BEFORE any gate sees the text.
+        summary = strip_html(desc_elem.text if desc_elem is not None else '')
 
         # Google News titles often have source appended
         # Format: "Article Title - Source Name"
@@ -201,6 +285,11 @@ class GoogleNewsScraper(BaseScraper):
             if len(parts) == 2:
                 title = parts[0]
                 source_name = parts[1]
+        # The same publisher name trails the stripped description; drop it so
+        # a publisher ("Casino.org", "Stock Titan") never gates the article
+        # it merely reported.
+        if source_name and summary.endswith(source_name):
+            summary = summary[:-len(source_name)].rstrip()
 
         full_text = f"{title} {summary}"
 
@@ -209,7 +298,8 @@ class GoogleNewsScraper(BaseScraper):
         # M&A / funding event is not a trigger, whatever query found it.
         # (detect_event_type returns a single type, so there is no tie for
         # the hint to break; it stays in the signature for that purpose.)
-        event_type = self.detect_event_type(full_text)
+        # The hire type is decided from the headline (review 2026-09-08).
+        event_type = self.detect_event_type(full_text, title=title)
         if not event_type:
             return None
 
@@ -222,16 +312,35 @@ class GoogleNewsScraper(BaseScraper):
         if matches_excluded:
             return None
 
-        # Skip public companies (we target mid-market private)
-        if self.is_public_company(full_text):
+        # Skip public companies (we target mid-market private); the
+        # "Fortune 500" indicators count in the headline only
+        if self.is_public_company(full_text, title=title):
             return None
 
         # Check target company
         matches_company, company_name = self.matches_target_company(full_text)
 
-        # Check for excluded international locations
-        if self.is_excluded_location(full_text):
+        # Excluded (out-of-territory) locations — ONLY when the text carries
+        # no in-territory signal, mirroring rss_scraper (v2 ordering
+        # contract, base.py::matches_territory). Until 2026-09-08 an article
+        # naming Chicago AND Florida was dropped here; a false admit is
+        # caught by the enrichment HQ gate, a false reject is lost forever.
+        if not in_territory and self.is_excluded_location(full_text):
             return None
+
+        # Region-grouped query hint (research 2026-09-08): Google matched the
+        # query's states somewhere in the article, but all we see is the
+        # headline, which often names no place ("Boys & Girls Homes names new
+        # chief financial officer"). With no location in the text at all —
+        # nothing in territory, nothing excluded — the query's state group
+        # ADMITS the item past the territory gate, and does nothing else
+        # (review 2026-09-08): matched_regions stays EMPTY. A 3-4 state list
+        # there earned relevance points, showed its FIRST state as the HQ on
+        # the dashboard for unenriched rows, and anchored enrichment's
+        # oracle lookup on a guess. The enrichment HQ gate verifies the
+        # headquarters; until then the territory is honestly unknown.
+        if not in_territory and region_hint:
+            in_territory = True
 
         # TERRITORY FILTERING (applies to every query — no bypass)
         # STRICT FILTERING: Require territory match OR target company
@@ -244,7 +353,8 @@ class GoogleNewsScraper(BaseScraper):
             if not (in_territory or matches_target_industry or matches_company):
                 return None
 
-        # Calculate relevance
+        # Calculate relevance (a hinted item has no matched_regions, so it
+        # earns no territory points)
         relevance = self.calculate_relevance_score(
             event_type,
             matched_regions,

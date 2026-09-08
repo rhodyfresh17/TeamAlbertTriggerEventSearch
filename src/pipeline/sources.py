@@ -25,15 +25,27 @@ from urllib.parse import urlparse
 # tests, and the owner learns to recognise them).
 SEC_8K = 'SEC 8-K'
 SEC_FORM_D = 'SEC Form D'
+SEC_IAPD = 'SEC IAPD'       # new SEC-registered advisers, scripts/ria_trigger.py (Phase 3, 2026-09-08)
 ADZUNA = 'Adzuna'
 GOOGLE_NEWS = 'Google News'
 PR_NEWSWIRE = 'PR Newswire'
 GLOBE_NEWSWIRE = 'GlobeNewswire'
 BUSINESS_WIRE = 'Business Wire'
 LINKEDIN = 'LinkedIn'
+# Phase 3 supply feeds (2026-09-08) — one label per feed so the yield table,
+# the went-quiet check and the accounts table bucket them the same way.
+PRWEB = 'PRWeb'
+HOMECARE_MAG = 'HomeCare Magazine'
+PERFORMANCE_BROKERAGE = 'Performance Brokerage'
+BODYSHOP_BUSINESS = 'BodyShop Business'
+VIRGINIA_BUSINESS = 'Virginia Business'
+VERMONT_BUSINESS = 'Vermont Business'
+NH_BUSINESS_REVIEW = 'NH Business Review'
+PROVIDENCE_BUSINESS_NEWS = 'Providence Business News'
+HARTFORD_BUSINESS_JOURNAL = 'Hartford Business Journal'
 OTHER = 'other'
 
-HOST_MAX_LEN = 28   # matches dashboard._scorecard_src so the two agree
+HOST_MAX_LEN = 28   # dashboard._scorecard_src delegates here (review 2026-09-08), so the two agree by construction
 
 # Every label a feed can be folded onto. Anything else source_label() returns
 # is a bare URL host (or 'other') — one small feed that never got a canonical
@@ -41,13 +53,17 @@ HOST_MAX_LEN = 28   # matches dashboard._scorecard_src so the two agree
 # but never raises the went-quiet WARN on them alone; canonical labels carry
 # the alert.
 CANONICAL_LABELS = frozenset({
-    SEC_8K, SEC_FORM_D, ADZUNA, GOOGLE_NEWS, PR_NEWSWIRE, GLOBE_NEWSWIRE,
+    SEC_8K, SEC_FORM_D, SEC_IAPD, ADZUNA, GOOGLE_NEWS, PR_NEWSWIRE, GLOBE_NEWSWIRE,
     BUSINESS_WIRE, LINKEDIN,
+    PRWEB, HOMECARE_MAG, PERFORMANCE_BROKERAGE, BODYSHOP_BUSINESS,
+    VIRGINIA_BUSINESS, VERMONT_BUSINESS, NH_BUSINESS_REVIEW,
+    PROVIDENCE_BUSINESS_NEWS, HARTFORD_BUSINESS_JOURNAL,
 })
 
 # Typed `source` column values (SQLite events.source enum) → label.
 # 'sec_edgar' is split by title (8-K vs Form D) — see source_label().
 _TYPED_LABELS = {
+    'sec_iapd': SEC_IAPD,       # RIA registrations (adviserinfo.sec.gov) — never an 8-K
     'adzuna': ADZUNA,
     'google_news': GOOGLE_NEWS,
     'pr_newswire': PR_NEWSWIRE,
@@ -65,6 +81,16 @@ _HOST_LABELS = (
     ('globenewswire', GLOBE_NEWSWIRE),
     ('businesswire', BUSINESS_WIRE),
     ('linkedin', LINKEDIN),
+    # Phase 3 feeds (2026-09-08): the release/article hosts
+    ('prweb', PRWEB),
+    ('homecaremag', HOMECARE_MAG),
+    ('performancebrokerageservices', PERFORMANCE_BROKERAGE),
+    ('bodyshopbusiness', BODYSHOP_BUSINESS),
+    ('virginiabusiness', VIRGINIA_BUSINESS),
+    ('vermontbiz', VERMONT_BUSINESS),
+    ('nhbr.com', NH_BUSINESS_REVIEW),
+    ('pbn.com', PROVIDENCE_BUSINESS_NEWS),
+    ('hartfordbusiness', HARTFORD_BUSINESS_JOURNAL),
 )
 
 # Feed-name substrings (source_status.source_name, lowercase) → label.
@@ -73,6 +99,7 @@ _FEED_LABELS = (
     ('form d', SEC_FORM_D),
     ('sec 8-k', SEC_8K),
     ('sec edgar', SEC_8K),
+    ('iapd', SEC_IAPD),                # "SEC IAPD …": the RIA trigger's own bucket (2026-09-08)
     ('adzuna', ADZUNA),
     ('google', GOOGLE_NEWS),           # "Google News", "Google Jobs", "Google Alert - …"
     ('pr newswire', PR_NEWSWIRE),
@@ -80,6 +107,18 @@ _FEED_LABELS = (
     ('globenewswire', GLOBE_NEWSWIRE),
     ('business wire', BUSINESS_WIRE),
     ('linkedin', LINKEDIN),
+    # Phase 3 feeds (2026-09-08). "Globe Newswire - CFO Keyword" and the
+    # other GlobeNewswire keyword/subject feeds already fold onto
+    # GLOBE_NEWSWIRE via the entries above.
+    ('prweb', PRWEB),
+    ('homecare magazine', HOMECARE_MAG),
+    ('performance brokerage', PERFORMANCE_BROKERAGE),
+    ('bodyshop business', BODYSHOP_BUSINESS),
+    ('virginia business', VIRGINIA_BUSINESS),
+    ('vermont business', VERMONT_BUSINESS),
+    ('nh business review', NH_BUSINESS_REVIEW),
+    ('providence business news', PROVIDENCE_BUSINESS_NEWS),
+    ('hartford business journal', HARTFORD_BUSINESS_JOURNAL),
 )
 
 # Words too generic to identify a feed on their own when matching a feed name
@@ -111,7 +150,8 @@ def source_label(row: Any) -> str:
 
     Precedence: the typed `source` column (scrape-owned enum, once
     supabase/migrations/002 has run) → URL host → 'other'. 'sec_edgar' and
-    sec.gov hosts split 8-K vs Form D by title. Unknown hosts are returned
+    sec.gov hosts split 8-K vs Form D by title; adviserinfo.sec.gov (RIA
+    registrations) is 'SEC IAPD'. Unknown hosts are returned
     as the bare host (no www., ≤ HOST_MAX_LEN chars) so a feed that never
     got a canonical name still shows up by itself in the yield table.
     """
@@ -127,6 +167,11 @@ def source_label(row: Any) -> str:
         return _TYPED_LABELS[typed]
 
     host = _host(url)
+    # adviserinfo.sec.gov is an sec.gov host too: the RIA rule must run
+    # BEFORE the generic 8-K / Form D split, or an untyped new-adviser row
+    # would bucket as SEC 8-K (2026-09-08).
+    if 'adviserinfo.sec.gov' in host:
+        return SEC_IAPD
     if 'sec.gov' in host:
         return _sec_label_from_title(title)
     for needle, label in _HOST_LABELS:
