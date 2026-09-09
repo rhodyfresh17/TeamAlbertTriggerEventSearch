@@ -91,47 +91,6 @@ jobs:
             echo "No existing database - first run"
           fi
 
-      # The recipient is injected from the ALERT_RECIPIENT secret at runtime —
-      # the repo is public, so config.example.yaml ships recipient_emails: []
-      # and no address is ever committed. Email is enabled ONLY when sender,
-      # password AND recipient are all present; otherwise file alerts only.
-      - name: Configure email
-        env:
-          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
-          ALERT_RECIPIENT: ${{ secrets.ALERT_RECIPIENT }}
-        run: |
-          python3 -c "
-          import yaml
-          import os
-
-          with open('config.yaml', 'r') as f:
-              config = yaml.safe_load(f)
-
-          sender = os.environ.get('SENDER_EMAIL', '').strip()
-          password = os.environ.get('EMAIL_PASSWORD', '')
-          recipient = os.environ.get('ALERT_RECIPIENT', '').strip()
-
-          email = config.setdefault('alerts', {}).setdefault('email', {})
-          email['recipient_emails'] = [recipient] if recipient else []
-
-          if sender and password and recipient:
-              email['enabled'] = True
-              email['sender_email'] = sender
-              email['sender_password'] = password
-              print('Email alerts enabled (sender + recipient set)')
-          else:
-              email['enabled'] = False
-              missing = [n for n, v in (('SENDER_EMAIL', sender),
-                                        ('EMAIL_PASSWORD', password),
-                                        ('ALERT_RECIPIENT', recipient)) if not v]
-              print('Email alerts disabled - missing secret(s):', ', '.join(missing),
-                    '- using file alerts only')
-
-          with open('config.yaml', 'w') as f:
-              yaml.dump(config, f, default_flow_style=False)
-          "
-
       - name: Verify module loads
         run: |
           python3 -c "from src.main import TriggerEventMonitor; print('Module OK')"

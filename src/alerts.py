@@ -1,12 +1,9 @@
 """Alert notification system for trigger events."""
 
 import json
-import smtplib
 import os
 from abc import ABC, abstractmethod
 from datetime import datetime
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
@@ -117,333 +114,10 @@ class FileAlertHandler(AlertHandler):
             return False
 
 
-class EmailAlertHandler(AlertHandler):
-    """Handler that sends email alerts."""
-
-    def __init__(
-        self,
-        smtp_server: str,
-        smtp_port: int,
-        sender_email: str,
-        sender_password: str,
-        recipient_emails: List[str]
-    ):
-        self.smtp_server = smtp_server
-        self.smtp_port = smtp_port
-        self.sender_email = sender_email
-        self.sender_password = sender_password
-        self.recipient_emails = recipient_emails
-
-    def send_alert(self, event: TriggerEvent) -> bool:
-        """Send single email alert."""
-        subject = f"[Trigger Alert] {event.event_type.value}: {event.company_name or 'New Event'}"
-        body = event.format_alert()
-        return self._send_email(subject, body)
-
-    def send_batch_alert(self, events: List[TriggerEvent]) -> bool:
-        """Send batch email alert."""
-        if not events:
-            return True
-
-        subject = f"[Trigger Alert] {len(events)} New Events in Your Territory"
-
-        # Build HTML email
-        html = self._build_html_email(events)
-        return self._send_email(subject, html, is_html=True)
-
-    def _build_html_email(self, events: List[TriggerEvent]) -> str:
-        """Build HTML email body."""
-        html = f"""
-        <html>
-        <head>
-            <style>
-                body {{ font-family: Arial, sans-serif; }}
-                .event {{ border: 1px solid #ddd; padding: 15px; margin: 10px 0; border-radius: 5px; }}
-                .cfo-hire {{ border-left: 4px solid #28a745; }}
-                .executive-hire {{ border-left: 4px solid #9370DB; }}
-                .merger-acquisition {{ border-left: 4px solid #1E90FF; }}
-                .funding {{ border-left: 4px solid #ffc107; }}
-                .stable-target {{ border-left: 4px solid #FF8C00; }}
-                .event-title {{ font-size: 16px; font-weight: bold; margin-bottom: 10px; }}
-                .event-meta {{ color: #666; font-size: 12px; }}
-                .event-company {{ color: #333; font-weight: bold; }}
-                h1 {{ color: #333; }}
-                h2 {{ color: #666; border-bottom: 1px solid #eee; padding-bottom: 10px; }}
-            </style>
-        </head>
-        <body>
-            <h1>Sales Territory Trigger Events</h1>
-            <p>Found {len(events)} new events in your territory.</p>
-        """
-
-        # Group by type
-        by_type: Dict[EventType, List[TriggerEvent]] = {}
-        for event in events:
-            if event.event_type not in by_type:
-                by_type[event.event_type] = []
-            by_type[event.event_type].append(event)
-
-        # Priority order for display
-        type_order = [
-            EventType.CFO_HIRE,
-            EventType.FUNDING,
-            EventType.EXECUTIVE_HIRE,
-            EventType.MERGER_ACQUISITION,
-            EventType.STABLE_TARGET,
-            EventType.OTHER,
-        ]
-
-        for event_type in type_order:
-            if event_type not in by_type:
-                continue
-            type_events = by_type[event_type]
-
-            # Custom labels for event types
-            type_labels = {
-                EventType.CFO_HIRE: "CFO Hires",
-                EventType.FUNDING: "PE/VC Funding",
-                EventType.EXECUTIVE_HIRE: "Executive Hires",
-                EventType.MERGER_ACQUISITION: "Mergers & Acquisitions",
-                EventType.STABLE_TARGET: "Target Recommendations",
-                EventType.OTHER: "Other Events",
-            }
-            label = type_labels.get(event_type, event_type.value.replace('_', ' ').title())
-            html += f"<h2>{label} ({len(type_events)})</h2>"
-
-            # Sort by most recent first
-            for event in sorted(type_events, key=lambda e: e.published_date, reverse=True):
-                css_class = event_type.value.replace('_', '-')
-
-                # Calculate age
-                from datetime import datetime, timezone
-                now = datetime.now(timezone.utc)
-                event_date = event.published_date
-                if event_date.tzinfo is None:
-                    event_date = event_date.replace(tzinfo=timezone.utc)
-                age = now - event_date
-
-                if age.total_seconds() < 3600:
-                    age_str = f"{int(age.total_seconds() / 60)} min ago"
-                elif age.total_seconds() < 86400:
-                    age_str = f"{int(age.total_seconds() / 3600)} hours ago"
-                else:
-                    age_str = f"{int(age.days)} days ago"
-
-                html += f"""
-                <div class="event {css_class}">
-                    <div class="event-title">
-                        <a href="{event.url}">{event.title}</a>
-                    </div>
-                    <div class="event-company">{event.company_name or 'Unknown Company'}</div>
-                    <div class="event-meta">
-                        <strong>{age_str}</strong> |
-                        Source: {event.source_name or event.source.value.replace('_', ' ').title()} |
-                        {event.published_date.strftime('%Y-%m-%d %H:%M')} |
-                        Relevance: {event.relevance_score:.0f}%
-                    </div>
-                    {f'<p>{event.description[:200]}...</p>' if event.description else ''}
-                </div>
-                """
-
-        html += "</body></html>"
-        return html
-
-    def _send_email(self, subject: str, body: str, is_html: bool = False) -> bool:
-        """Send an email."""
-        try:
-            msg = MIMEMultipart('alternative')
-            msg['Subject'] = subject
-            msg['From'] = self.sender_email
-            msg['To'] = ', '.join(self.recipient_emails)
-
-            content_type = 'html' if is_html else 'plain'
-            msg.attach(MIMEText(body, content_type))
-
-            with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
-                server.starttls()
-                server.login(self.sender_email, self.sender_password)
-                server.sendmail(
-                    self.sender_email,
-                    self.recipient_emails,
-                    msg.as_string()
-                )
-
-            return True
-        except Exception as e:
-            print(f"Error sending email: {e}")
-            return False
 
 
-class SlackAlertHandler(AlertHandler):
-    """Handler that sends Slack alerts."""
-
-    def __init__(self, webhook_url: str):
-        self.webhook_url = webhook_url
-
-    def send_alert(self, event: TriggerEvent) -> bool:
-        """Send single Slack alert."""
-        message = self._format_slack_message(event)
-        return self._post_to_slack(message)
-
-    def send_batch_alert(self, events: List[TriggerEvent]) -> bool:
-        """Send batch Slack alert."""
-        if not events:
-            return True
-
-        blocks = [
-            {
-                "type": "header",
-                "text": {
-                    "type": "plain_text",
-                    "text": f"🎯 {len(events)} New Trigger Events"
-                }
-            },
-            {"type": "divider"}
-        ]
-
-        # Group by type and add summaries
-        by_type: Dict[EventType, List[TriggerEvent]] = {}
-        for event in events:
-            if event.event_type not in by_type:
-                by_type[event.event_type] = []
-            by_type[event.event_type].append(event)
-
-        type_emojis = {
-            EventType.CFO_HIRE: "💼",
-            EventType.EXECUTIVE_HIRE: "👔",
-            EventType.MERGER_ACQUISITION: "🤝",
-            EventType.FUNDING: "💰",
-        }
-
-        for event_type, type_events in by_type.items():
-            emoji = type_emojis.get(event_type, "📌")
-            blocks.append({
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f"*{emoji} {event_type.value.replace('_', ' ').title()}* ({len(type_events)})"
-                }
-            })
-
-            # Top 3 events per type
-            for event in sorted(type_events, key=lambda e: e.relevance_score, reverse=True)[:3]:
-                blocks.append({
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"• <{event.url}|{event.title[:50]}...>\n  _{event.company_name or 'Unknown'}_ | Score: {event.relevance_score:.0f}"
-                    }
-                })
-
-        return self._post_to_slack({"blocks": blocks})
-
-    def _format_slack_message(self, event: TriggerEvent) -> dict:
-        """Format single event as Slack message."""
-        type_emojis = {
-            EventType.CFO_HIRE: "💼",
-            EventType.EXECUTIVE_HIRE: "👔",
-            EventType.MERGER_ACQUISITION: "🤝",
-            EventType.FUNDING: "💰",
-        }
-        emoji = type_emojis.get(event.event_type, "📌")
-
-        return {
-            "blocks": [
-                {
-                    "type": "header",
-                    "text": {
-                        "type": "plain_text",
-                        "text": f"{emoji} {event.event_type.value.replace('_', ' ').title()}"
-                    }
-                },
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"*<{event.url}|{event.title}>*"
-                    }
-                },
-                {
-                    "type": "section",
-                    "fields": [
-                        {"type": "mrkdwn", "text": f"*Company:*\n{event.company_name or 'Unknown'}"},
-                        {"type": "mrkdwn", "text": f"*Source:*\n{event.source_name or event.source.value.replace('_', ' ').title()}"},
-                        {"type": "mrkdwn", "text": f"*Relevance:*\n{event.relevance_score:.0f}%"},
-                        {"type": "mrkdwn", "text": f"*Date:*\n{event.published_date.strftime('%Y-%m-%d')}"},
-                    ]
-                }
-            ]
-        }
-
-    def _post_to_slack(self, message: dict) -> bool:
-        """Post message to Slack webhook."""
-        try:
-            response = requests.post(
-                self.webhook_url,
-                json=message,
-                headers={'Content-Type': 'application/json'}
-            )
-            return response.status_code == 200
-        except Exception as e:
-            print(f"Error posting to Slack: {e}")
-            return False
 
 
-class DesktopAlertHandler(AlertHandler):
-    """Handler that shows desktop notifications."""
-
-    def send_alert(self, event: TriggerEvent) -> bool:
-        """Show desktop notification."""
-        try:
-            # Try using OS-specific notification
-            title = f"Trigger Event: {event.event_type.value.replace('_', ' ').title()}"
-            message = f"{event.company_name or 'New Event'}: {event.title[:50]}"
-
-            # Try different notification methods
-            if self._try_notify_send(title, message):
-                return True
-            if self._try_osascript(title, message):
-                return True
-
-            print(f"Desktop notification: {title} - {message}")
-            return True
-        except Exception as e:
-            print(f"Error showing desktop notification: {e}")
-            return False
-
-    def send_batch_alert(self, events: List[TriggerEvent]) -> bool:
-        """Show batch desktop notification."""
-        if not events:
-            return True
-
-        title = f"{len(events)} New Trigger Events"
-        message = f"CFO: {sum(1 for e in events if e.event_type == EventType.CFO_HIRE)}, M&A: {sum(1 for e in events if e.event_type == EventType.MERGER_ACQUISITION)}"
-
-        return self.send_alert(TriggerEvent(
-            id="batch",
-            title=message,
-            event_type=EventType.OTHER,
-            source=events[0].source,
-            url="",
-            published_date=datetime.now(),
-            company_name=title
-        ))
-
-    def _try_notify_send(self, title: str, message: str) -> bool:
-        """Try Linux notify-send."""
-        try:
-            os.system(f'notify-send "{title}" "{message}" 2>/dev/null')
-            return True
-        except Exception:
-            return False
-
-    def _try_osascript(self, title: str, message: str) -> bool:
-        """Try macOS osascript."""
-        try:
-            os.system(f'''osascript -e 'display notification "{message}" with title "{title}"' 2>/dev/null''')
-            return True
-        except Exception:
-            return False
 
 
 class AlertManager:
@@ -463,28 +137,18 @@ class AlertManager:
             output_dir = file_config.get('output_dir', 'alerts')
             self.handlers.append(FileAlertHandler(output_dir))
 
-        # Email alerts
-        email_config = alerts_config.get('email', {})
-        if email_config.get('enabled', False):
-            self.handlers.append(EmailAlertHandler(
-                smtp_server=email_config.get('smtp_server', 'smtp.gmail.com'),
-                smtp_port=email_config.get('smtp_port', 587),
-                sender_email=email_config.get('sender_email', ''),
-                sender_password=email_config.get('sender_password', ''),
-                recipient_emails=email_config.get('recipient_emails', [])
-            ))
+        # Email alerts REMOVED 2026-09-08 (A.J.): the fleet has ONE notification
+        # pathway and it is Mattermost. An `alerts.email` block in config is now
+        # inert — nothing reads it. Do not re-add an SMTP handler here.
 
-        # Slack alerts
-        slack_config = alerts_config.get('slack', {})
-        if slack_config.get('enabled', False) and slack_config.get('webhook_url'):
-            self.handlers.append(SlackAlertHandler(
-                webhook_url=slack_config.get('webhook_url')
-            ))
-
-        # Desktop alerts
-        desktop_config = alerts_config.get('desktop', {})
-        if desktop_config.get('enabled', True):
-            self.handlers.append(DesktopAlertHandler())
+        # Slack + Desktop handlers REMOVED 2026-09-08 (A.J.), same call as email:
+        # the fleet has ONE notification pathway and it is Mattermost. Any
+        # `alerts.slack` / `alerts.desktop` block in config is now inert.
+        #
+        # Desktop mattered more than it looked: its handler defaulted to
+        # enabled=True when no `desktop` block existed, so deleting that block
+        # during a config tidy would have switched notifications back ON. Removing
+        # the handler makes that impossible rather than merely unlikely.
 
     def send_alerts(self, events: List[TriggerEvent]) -> int:
         """Send alerts for events through all handlers."""

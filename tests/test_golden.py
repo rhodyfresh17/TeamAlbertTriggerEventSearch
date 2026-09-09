@@ -413,9 +413,14 @@ def test_ci_shape():
     scrape_runs = ' '.join(s.get('run') or '' for s in scrape['steps'])
     assert 'pytest' not in scrape_runs, 'the scrape job must never run the test suite'
     names = [s.get('name') or s['uses'].split('@')[0] for s in scrape['steps']]
+    # 'Configure email' removed 2026-09-08 (A.J.): Mattermost is the fleet's only
+    # notification pathway, so the workflow no longer injects SMTP secrets. This
+    # assertion is deliberately exact — a step appearing or vanishing unnoticed is
+    # how the config.example.yaml indentation break went unseen for a full day.
     assert names == ['actions/checkout', 'actions/setup-python', 'Cache database', 'Install dependencies',
-                     'Setup config', 'Configure email', 'Verify module loads', 'Run scraper',
+                     'Setup config', 'Verify module loads', 'Run scraper',
                      'Show database status', 'Sync to Supabase', 'actions/upload-artifact']
+    assert not any('mail' in n.lower() for n in names), 'no email step may return'
 
 
 # ── the exporter itself (no Supabase: a tiny in-memory query builder) ───────

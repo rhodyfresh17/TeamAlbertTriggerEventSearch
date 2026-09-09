@@ -26,5 +26,22 @@ if [ -f "$PROJECT/state/PAUSE" ]; then
 fi
 source "$PROJECT/venv/bin/activate"
 python enrichment_scout.py >> "$LOG" 2>&1
+RC=$?
 
-echo "Exit code: $?" >> "$LOG"
+echo "Exit code: $RC" >> "$LOG"
+
+# Report a failed run. Until 2026-09-08 the last line of this script was
+# `echo "Exit code: $?"` — the echo SUCCEEDS, so the script always exited 0 no
+# matter what enrichment did. Six runs a day, no alert, and launchd saw success
+# every time. The daily health check would catch the CONSEQUENCE (stale events)
+# the next morning, but the job itself said nothing.
+if [ "$RC" -ne 0 ]; then
+    ALERT_ENV="${HOME}/Shared/AI-BOTS/hermes-scout-data/.env"
+    source "${HOME}/Shared/AI-BOTS/utils/mattermost_notify.sh" 2>/dev/null || true
+    TAIL="$(tail -5 "$LOG" 2>/dev/null)"
+    mattermost_notify "$ALERT_ENV" \
+        "$(printf '\xf0\x9f\x94\xb4 Lead-sourcing enrichment FAILED (exit %s)\n%s\nFull log: logs/enrichment.log' "$RC" "$TAIL")" \
+        scout-engine 2>>"$LOG" || true
+fi
+
+exit $RC

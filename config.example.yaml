@@ -1267,23 +1267,10 @@ sources:
     base_url: "https://news.google.com/rss/search?q="
 
 alerts:
-  email:
-    enabled: false
-    smtp_server: "smtp.gmail.com"
-    smtp_port: 587
-    sender_email: "your-email@gmail.com"
-    sender_password: ""
-    # Recipient is injected at CI runtime from the ALERT_RECIPIENT GitHub
-    # secret (the repo is public — never commit a personal address here).
-    recipient_emails: []
-
-  slack:
-    enabled: false
-    webhook_url: ""
-
-  desktop:
-    enabled: false
-
+  # email: REMOVED 2026-09-08 (A.J.) — Mattermost is the only notification
+  # pathway. Nothing emails anyone. Do not re-add an email block.
+  # slack/desktop: REMOVED 2026-09-08 (A.J.) — Mattermost is the only
+  # notification pathway. Do not re-add them.
   file:
     enabled: true
     output_dir: "alerts"
