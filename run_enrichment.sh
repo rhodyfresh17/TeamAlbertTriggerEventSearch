@@ -35,7 +35,19 @@ echo "Exit code: $RC" >> "$LOG"
 # matter what enrichment did. Six runs a day, no alert, and launchd saw success
 # every time. The daily health check would catch the CONSEQUENCE (stale events)
 # the next morning, but the job itself said nothing.
-if [ "$RC" -ne 0 ]; then
+if [ "$RC" -eq 2 ]; then
+    # Exit 2 = enrichment_scout could not PROBE Supabase (timeout / network),
+    # so it did nothing and will retry in four hours. A soft notice, not the
+    # red FAILED: on 2026-09-11 one slow Supabase minute was reported as a
+    # missing column with the migration SQL pasted into the alert. Two in a
+    # row is a real outage — monitor_health WARNs from the state counter.
+    ALERT_ENV="${HOME}/Shared/AI-BOTS/hermes-scout-data/.env"
+    source "${HOME}/Shared/AI-BOTS/utils/mattermost_notify.sh" 2>/dev/null || true
+    STREAK="$(cat "$PROJECT/state/enrichment_transport_aborts" 2>/dev/null || echo 1)"
+    mattermost_notify "$ALERT_ENV" \
+        "$(printf '\xe2\x9a\xa0\xef\xb8\x8f Lead-sourcing enrichment skipped this cycle — Supabase unreachable or too slow to answer (%s in a row). Nothing processed; retries in 4h. Log: logs/enrichment.log' "$STREAK")" \
+        scout-engine 2>>"$LOG" || true
+elif [ "$RC" -ne 0 ]; then
     ALERT_ENV="${HOME}/Shared/AI-BOTS/hermes-scout-data/.env"
     source "${HOME}/Shared/AI-BOTS/utils/mattermost_notify.sh" 2>/dev/null || true
     TAIL="$(tail -5 "$LOG" 2>/dev/null)"

@@ -790,6 +790,16 @@ source venv/bin/activate
 
 ## 6. Known issues, gotchas, and "we've been here before"
 
+**A Supabase timeout is NOT a missing column (2026-09-11).** The 20:30 enrichment run's schema
+probes timed out, the code read that as "companies_data column missing", printed the migration
+SQL and exited 1 → red alert for a column that has existed since June. Now: schema errors (42703 /
+42P01 / PGRST204 / "does not exist") are the only thing that reads as absent; any other probe
+failure exits **2** ("Supabase unreachable or too slow — nothing processed, retries in 4h"),
+`run_enrichment.sh` posts a soft ⚠️ notice instead of 🔴 FAILED, `state/enrichment_transport_aborts`
+counts consecutive skips (a normal run resets it), and the health check line "Enrichment ↔
+Supabase" WARNs at 2. If you ever see the migration SQL in an alert again, the column really is
+gone — check Supabase before doing anything else.
+
 ### Architectural quirks
 - **`config.yaml` is gitignored** — always edit `config.example.yaml`, then `cp` locally. GitHub Actions does this `cp` automatically in the workflow.
 - **SQLite is cached between GitHub Actions runs** via `actions/cache@v4` with key `trigger-events-db-v2-*`. URL + title dedup history lives there. If the cache expires (24h TTL), the next run starts with empty dedup history — some duplicates may slip through. Rare.

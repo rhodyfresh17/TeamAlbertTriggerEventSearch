@@ -79,7 +79,7 @@ from src.pipeline.runlock import RunLock  # noqa: E402
 from src.pipeline.typed import (  # noqa: E402
     TYPED_EVENT_COLUMNS, probe_columns, verify_state_for, retry_after_for,
     llm_retry_after, typed_payload, not_fit_payload, MAX_ENRICH_ATTEMPTS,
-    LLM_RETRY_HOURS, parse_ts,
+    LLM_RETRY_HOURS, parse_ts, ProbeUnavailable, is_schema_error,
 )
 # Phase 3 slice B2 (2026-09-08): free registries — SEC IAPD advisers, FDIC
 # banks, ProPublica nonprofits — settle territory / vertical / revenue / url
@@ -933,8 +933,15 @@ def check_columns(client):
         try:
             client.table('events').select(col).limit(1).execute()
             exists[col] = True
-        except Exception:
-            exists[col] = False
+        except Exception as e:      # noqa: BLE001 — classified below
+            if is_schema_error(e):
+                exists[col] = False
+            else:
+                # A timeout is not a missing column. 2026-09-11: a slow
+                # Supabase made these probes fail, the run printed the
+                # migration SQL for columns that exist and exited 1.
+                raise ProbeUnavailable(f'events.{col}: '
+                                       f'{" ".join(str(e).split())[:160]}') from e
     if not exists.get('fit'):
         log.warning(
             'fit column missing — fit-gate details (⚠️ verify flags) will '
@@ -944,7 +951,7 @@ def check_columns(client):
     # Phase 2 typed columns (002_v2_typed_columns.sql). A.J. runs the
     # migration by hand later, so every writer filters its typed payload to
     # this set and the JSON-only path is untouched until then.
-    exists['typed'] = probe_columns(client, 'events', TYPED_EVENT_COLUMNS)
+    exists['typed'] = probe_columns(client, 'events', TYPED_EVENT_COLUMNS, strict=True)
     if exists['typed']:
         log.info(f'typed columns present: {len(exists["typed"])}/{len(TYPED_EVENT_COLUMNS)}')
     else:
@@ -1404,6 +1411,47 @@ def _scrape_budget_ok(record: bool = False) -> bool:
 
 
 _STATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'state')
+
+
+TRANSPORT_ABORT_EXIT = 2   # distinct from 1 (real failure): "could not reach Supabase"
+_TRANSPORT_ABORT_FILE = 'enrichment_transport_aborts'
+
+
+def _transport_aborts(bump: bool = False, reset: bool = False) -> int:
+    """Consecutive runs that ended before doing anything because Supabase
+    could not be probed (state/enrichment_transport_aborts). The launchd
+    wrapper posts a soft notice on exit 2; monitor_health WARNs when the
+    count reaches 2 — one blip self-heals in four hours, two in a row is a
+    real outage (2026-09-11)."""
+    path = os.path.join(_STATE_DIR, _TRANSPORT_ABORT_FILE)
+    try:
+        n = int(open(path).read().strip() or 0) if os.path.exists(path) else 0
+    except Exception:
+        n = 0
+    if reset:
+        n = 0
+    elif bump:
+        n += 1
+    if bump or reset:
+        try:
+            os.makedirs(_STATE_DIR, exist_ok=True)
+            with open(path, 'w') as fh:
+                fh.write(str(n))
+        except Exception as e:
+            log.debug(f'  transport-abort counter not written: {e}')
+    return n
+
+
+def _abort_transport(err: Exception) -> None:
+    """Supabase could not be probed: say so plainly, count it, exit 2.
+    Nothing was processed and nothing was stamped, so the next cycle simply
+    retries. Never print the migration SQL here — the schema is not the
+    problem."""
+    n = _transport_aborts(bump=True)
+    log.error(f'Supabase unreachable or too slow to answer the schema probe '
+              f'({err}) — nothing processed, nothing stamped; the next run '
+              f'retries (consecutive: {n}). Not a missing column.')
+    sys.exit(TRANSPORT_ABORT_EXIT)
 
 
 def _search_mode_defer() -> bool:
@@ -3641,10 +3689,15 @@ def enrich_events(
 ):
     check_required_keys()
     client  = get_supabase()
-    col_ok  = check_columns(client)
+    try:
+        col_ok = check_columns(client)
+    except ProbeUnavailable as e:
+        _abort_transport(e)
+    _transport_aborts(reset=True)
     backend = _llm_backend()
 
     if not col_ok.get('companies_data'):
+        # Only reachable when Postgres itself said the column is absent.
         log.warning(f'companies_data column missing. {MIGRATION_SQL}')
         if not dry_run:
             sys.exit(1)
@@ -4343,7 +4396,11 @@ def regrade_only_events(limit: int = None, dry_run: bool = False,
     """
     check_required_keys()  # not strictly needed (no Tavily) — but harmless
     client = get_supabase()
-    col_ok = check_columns(client)
+    try:
+        col_ok = check_columns(client)
+    except ProbeUnavailable as e:
+        _abort_transport(e)
+    _transport_aborts(reset=True)
     typed_cols = col_ok.get('typed') or set()
     _acct_on = _accounts_present(client)        # Phase 4: one grade per account
     _acct_counts = {'upserted': 0, 'touched': 0}

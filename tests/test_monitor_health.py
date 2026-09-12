@@ -1309,3 +1309,27 @@ def test_run_oracles_failure_post_says_rerun_and_log_is_trimmed():
     assert 're-run run_oracles.sh before next month — the ledger makes it idempotent' in src
     assert 'tail -2000 "$LOG"' in src and '-gt 3000' in src                     # like run_reverify.sh
     assert 'SUMMARY="$(oracle_summary < "$TMP_OUT")"' in src                    # the function is what runs
+
+
+# ── 2026-09-11: consecutive enrichment transport aborts ─────────────────────
+def test_enrichment_transport_check_levels(state_dir):
+    assert mh.check_enrichment_transport()[0] == mh.PASS            # no file yet
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / mh.TRANSPORT_ABORT_FILE).write_text('1')
+    status, msg = mh.check_enrichment_transport()
+    assert status == mh.PASS and 'retries' in msg
+    (state_dir / mh.TRANSPORT_ABORT_FILE).write_text('2')
+    status, msg = mh.check_enrichment_transport()
+    assert status == mh.WARN and '2 consecutive' in msg and 'not a missing column' in msg
+    (state_dir / mh.TRANSPORT_ABORT_FILE).write_text('0')
+    assert mh.check_enrichment_transport()[0] == mh.PASS
+
+
+def test_run_enrichment_sh_soft_notice_on_exit_2():
+    src = (Path(mh.PROJECT_DIR) / 'run_enrichment.sh').read_text()
+    assert 'if [ "$RC" -eq 2 ]; then' in src
+    assert 'skipped this cycle' in src and 'retries in 4h' in src
+    assert 'elif [ "$RC" -ne 0 ]; then' in src                    # real failures still go red
+    assert 'FAILED (exit %s)' in src
+    import subprocess
+    assert subprocess.run(['bash', '-n', str(Path(mh.PROJECT_DIR) / 'run_enrichment.sh')]).returncode == 0

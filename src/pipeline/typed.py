@@ -76,25 +76,65 @@ def reset_probe_cache() -> None:
     _probe_cache.clear()
 
 
-def probe_columns(client, table: str, columns) -> set:
+class ProbeUnavailable(RuntimeError):
+    """The schema probe could not get an ANSWER — timeout, network, 5xx,
+    auth — as opposed to Postgres saying the column does not exist. The two
+    must never be confused: on 2026-09-11 a slow Supabase made every probe
+    time out, the run concluded "companies_data column missing", printed the
+    migration SQL and exited 1, and the alert pipe woke A.J. for a column that
+    has existed since June. Callers that act on 'absent' (enrichment exits;
+    dashboards switch to legacy paths) either pass strict=True and handle this
+    exception, or accept that a transport failure reads as 'absent for this
+    call only' (never memoized)."""
+
+
+# Postgres / PostgREST markers that mean "the schema really lacks this":
+# 42703 undefined column, 42P01 undefined table, PGRST204 unknown column in a
+# write payload, and PostgREST's own "... does not exist" phrasing.
+_SCHEMA_ERROR_MARKERS = ('42703', '42P01', 'PGRST204', 'does not exist')
+
+
+def is_schema_error(exc) -> bool:
+    """True when the exception says the column/table is absent (a fact about
+    the schema); False for timeouts, connection errors, 5xx, auth failures."""
+    text = str(exc)
+    return any(m in text for m in _SCHEMA_ERROR_MARKERS)
+
+
+def _short_error(exc) -> str:
+    return ' '.join(str(exc).split())[:160] or type(exc).__name__
+
+
+def probe_columns(client, table: str, columns, *, strict: bool = False) -> set:
     """Set of `columns` that exist on `table`. One cheap select per column,
     memoized per table for the life of the process (the migration is a
-    one-time manual step, so re-probing every row would be waste). Any
-    failure of the client itself → empty set → JSON-only mode."""
+    one-time manual step, so re-probing every row would be waste).
+
+    Only a schema error (is_schema_error) is memoized as absent. A transport
+    failure is NOT a fact about the schema: with strict=True it raises
+    ProbeUnavailable; without, the column counts as absent for this call only
+    and the next probe asks again (2026-09-11)."""
     known = _probe_cache.setdefault(table, {})
     present = set()
     for col in columns:
         if col not in known:
             try:
                 q = client.table(table)
-            except Exception:           # no client / dead client → JSON-only mode
-                return set()
+            except Exception as e:      # no client / dead client
+                if strict:
+                    raise ProbeUnavailable(_short_error(e)) from e
+                return set()            # JSON-only mode for this call
             try:
                 q.select(col).limit(1).execute()
                 known[col] = True
-            except Exception:
-                known[col] = False
-        if known[col]:
+            except Exception as e:      # noqa: BLE001 — classified below
+                if is_schema_error(e):
+                    known[col] = False
+                elif strict:
+                    raise ProbeUnavailable(f'{table}.{col}: {_short_error(e)}') from e
+                else:
+                    continue            # absent for THIS call; never memoized
+        if known.get(col):
             present.add(col)
     return present
 

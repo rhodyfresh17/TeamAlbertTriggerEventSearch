@@ -2565,3 +2565,59 @@ def test_b_entity_shape_tombstone_carries_the_company_names(env, monkeypatch):
     assert pl['companies_data'] == [{'name': 'Acme Growth Fund III, L.P.', 'role': 'Hiring Company',
                                      'descriptor': 'private equity fund'}]
     assert env.fc.calls == [] and llm.count('article') == 0 and llm.count('grade') == 0
+
+
+# ── 2026-09-11: Supabase timeouts must not read as "column missing" ─────────
+class _ColClient:
+    def __init__(self, errors):
+        self.errors = errors
+
+    def table(self, name):
+        errors = self.errors
+
+        class _Q:
+            def select(self_q, col):
+                class _E:
+                    def limit(self_e, n):
+                        return self_e
+
+                    def execute(self_e):
+                        if col in errors:
+                            raise errors[col]
+                        return type('R', (), {'data': []})()
+                return _E()
+        return _Q()
+
+
+def test_check_columns_transport_failure_raises_not_missing(monkeypatch):
+    from src.pipeline import typed
+    typed.reset_probe_cache()
+    with pytest.raises(es.ProbeUnavailable) as ei:
+        es.check_columns(_ColClient({'companies_data': TimeoutError('The read operation timed out')}))
+    assert 'companies_data' in str(ei.value)
+
+
+def test_check_columns_schema_error_still_reads_missing(monkeypatch):
+    from src.pipeline import typed
+    typed.reset_probe_cache()
+    ok = es.check_columns(_ColClient({'fit': Exception('column events.fit does not exist (42703)')}))
+    assert ok['companies_data'] is True and ok['fit'] is False
+
+
+def test_enrich_events_exits_2_and_counts_when_supabase_cannot_be_probed(env, monkeypatch, tmp_path):
+    def boom(client):
+        raise es.ProbeUnavailable('events.companies_data: timed out')
+    monkeypatch.setattr(es, 'check_columns', boom)
+    counter = os.path.join(es._STATE_DIR, es._TRANSPORT_ABORT_FILE)
+    with pytest.raises(SystemExit) as ei:
+        es.enrich_events(limit=1)
+    assert ei.value.code == es.TRANSPORT_ABORT_EXIT == 2
+    assert open(counter).read().strip() == '1'
+    with pytest.raises(SystemExit):
+        es.enrich_events(limit=1)
+    assert open(counter).read().strip() == '2'      # consecutive
+    # a run whose probe succeeds resets the streak
+    monkeypatch.setattr(es, 'check_columns', lambda c: {'companies_data': True, 'enriched_at': True,
+                                                        'fit': True, 'matched_regions': True, 'typed': set()})
+    es.enrich_events(limit=1)                        # empty fake queue → returns after the probe
+    assert open(counter).read().strip() == '0'

@@ -573,6 +573,26 @@ def check_local_sqlite(db_path=None):
     )
 
 
+TRANSPORT_ABORT_WARN_AT = 2
+TRANSPORT_ABORT_FILE = 'enrichment_transport_aborts'
+
+
+def check_enrichment_transport():
+    """Consecutive enrichment cycles that ended at the schema probe because
+    Supabase could not be reached (enrichment_scout exits 2 and counts them
+    in state/enrichment_transport_aborts; a normal run resets the count).
+    One is a blip that already retried; two in a row is an outage worth a
+    human (2026-09-11)."""
+    n = _state_int(TRANSPORT_ABORT_FILE, 0)
+    if n >= TRANSPORT_ABORT_WARN_AT:
+        return WARN, (f'Enrichment could not reach Supabase for {n} consecutive '
+                      f'cycles (~{4 * n}h) — probe timeouts, not a missing column. '
+                      f'Check Supabase status / the Mac\'s network; the job keeps retrying every 4h.')
+    if n == 1:
+        return PASS, 'One enrichment cycle skipped on a Supabase timeout — it retries next cycle'
+    return PASS, 'Enrichment reached Supabase on its last run'
+
+
 def check_launchd_job():
     """Verify the enrichment launchd job is loaded (Mac-only)."""
     if sys.platform != 'darwin':
@@ -1484,6 +1504,7 @@ def run_checks(mode: str):
         ('Rep state intact',            check_rep_state_intact),
         ('Local SQLite DB',             check_local_sqlite),
         ('launchd enrichment job',      check_launchd_job),
+        ('Enrichment ↔ Supabase',       check_enrichment_transport),
     ]
     if mode in ('daily', 'weekly'):
         checks += [

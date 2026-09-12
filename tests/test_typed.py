@@ -339,3 +339,72 @@ def test_backfill_structured_fn_failures_are_ignored():
     p = row_payload(_row(), ALL, now=NOW, structured_fn=boom)
     assert p['sic'] == '6211'                  # description parse still fills SEC facts
     assert p['revenue_segment'] == 'LMM'       # from the account dict
+
+
+# ── 2026-09-11: a timeout is not a missing column ───────────────────────────
+class _ProbeClient:
+    """select(col) raises `errors[col]` when present, else answers."""
+    def __init__(self, errors):
+        self.errors, self.calls = errors, []
+
+    def table(self, name):
+        client = self
+
+        class _Q:
+            def select(self_inner, col):
+                client.calls.append(col)
+                err = client.errors.get(col)
+
+                class _E:
+                    def limit(self_e, n):
+                        return self_e
+
+                    def execute(self_e):
+                        if err:
+                            raise err
+                        return type('R', (), {'data': []})()
+                return _E()
+        return _Q()
+
+
+def test_is_schema_error_classifies_postgres_markers():
+    from src.pipeline.typed import is_schema_error
+    assert is_schema_error(Exception("{'message': 'column events.foo does not exist', 'code': '42703'}"))
+    assert is_schema_error(Exception('PGRST204: Could not find the foo column'))
+    assert is_schema_error(Exception("relation \"public.accounts\" does not exist (42P01)"))
+    assert not is_schema_error(TimeoutError('The read operation timed out'))
+    assert not is_schema_error(Exception('Server error 502 Bad Gateway'))
+    assert not is_schema_error(ConnectionError('connection refused'))
+
+
+def test_probe_columns_transport_failure_is_absent_for_this_call_only(monkeypatch):
+    from src.pipeline import typed
+    typed.reset_probe_cache()
+    slow = _ProbeClient({'fit': TimeoutError('timed out')})
+    assert typed.probe_columns(slow, 'events', ('fit', 'grade')) == {'grade'}
+    # not memoized: a healthy client on the next call finds it
+    ok = _ProbeClient({})
+    assert typed.probe_columns(ok, 'events', ('fit', 'grade')) == {'fit', 'grade'}
+    assert 'fit' in ok.calls
+
+
+def test_probe_columns_schema_error_is_memoized_as_absent():
+    from src.pipeline import typed
+    typed.reset_probe_cache()
+    missing = _ProbeClient({'fit': Exception("column events.fit does not exist (42703)")})
+    assert typed.probe_columns(missing, 'events', ('fit', 'grade')) == {'grade'}
+    ok = _ProbeClient({})
+    assert typed.probe_columns(ok, 'events', ('fit', 'grade')) == {'grade'}   # remembered
+    assert 'fit' not in ok.calls
+
+
+def test_probe_columns_strict_raises_on_transport_only():
+    from src.pipeline import typed
+    typed.reset_probe_cache()
+    slow = _ProbeClient({'fit': TimeoutError('The read operation timed out')})
+    with pytest.raises(typed.ProbeUnavailable) as ei:
+        typed.probe_columns(slow, 'events', ('grade', 'fit'), strict=True)
+    assert 'events.fit' in str(ei.value) and 'timed out' in str(ei.value)
+    typed.reset_probe_cache()
+    missing = _ProbeClient({'fit': Exception('42703 does not exist')})
+    assert typed.probe_columns(missing, 'events', ('grade', 'fit'), strict=True) == {'grade'}
