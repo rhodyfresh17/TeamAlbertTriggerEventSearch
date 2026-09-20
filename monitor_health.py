@@ -677,6 +677,13 @@ def _streak(rows):
     return max((r.get('consecutive_failures') or 1) for r in rows)
 
 
+def _recorded(rows):
+    """False while no row of the upstream carries a streak: the columns exist
+    but the feed has not been saved since (or never will be again — a feed
+    disabled in the config keeps its last row until it ages out)."""
+    return any(r.get('consecutive_failures') is not None for r in rows)
+
+
 def _describe_upstream(upstream, rows, now, measurable):
     names = sorted(r.get('source_name') or '?' for r in rows)
     head = upstream if names == [upstream] else (
@@ -684,6 +691,8 @@ def _describe_upstream(upstream, rows, now, measurable):
     error = Counter(_short_error(r.get('error_message')) for r in rows).most_common(1)[0][0]
     if not measurable:
         return f'{head}: {error}'
+    if not _recorded(rows):
+        return f'{head}: {error} — streak not recorded yet'
     n = _streak(rows)
     oks = [dt for dt in (_parse_ts(r.get('last_success')) for r in rows) if dt is not None]
     last_ok = f'last OK {_ago(max(oks), now)}' if oks else 'no success on record'
@@ -765,7 +774,7 @@ def check_source_health(now=None):
     persistent = {up: rows for up, rows in groups.items() if _streak(rows) >= SOURCE_FAIL_STREAK}
     producing = _producing_upstreams(persistent, now) if persistent else set()
 
-    down, repeating, blips = [], [], []
+    down, repeating, blips, unrecorded = [], [], [], []
     for up, rows in sorted(groups.items(), key=lambda kv: (-_streak(kv[1]), kv[0])):
         line = _describe_upstream(up, rows, now, measurable)
         n = _streak(rows)
@@ -776,6 +785,8 @@ def check_source_health(now=None):
                                      else ' (never produced a lead here — fix its URL or disable the feed)'))
         elif n >= SOURCE_WARN_STREAK:
             repeating.append(line)
+        elif measurable and not _recorded(rows):
+            unrecorded.append(line)
         else:
             blips.append(line)
 
@@ -784,12 +795,14 @@ def check_source_health(now=None):
 
     also = ('Failing repeatedly: ' + _join_capped(repeating) + '.') if repeating else ''
     once = ('Failed the latest run only (retried next run): ' + _join_capped(blips) + '.') if blips else ''
+    if unrecorded:
+        once = _tail(once, 'Errored when last checked: ' + _join_capped(unrecorded) + '.')
 
     if len(groups) > SOURCE_FAIL_UPSTREAMS:
         return FAIL, _tail(
             f'{len(groups)} different upstreams failed in the same run — that many at once points at '
             f'the scraper\'s side (network or a bad deploy), not theirs: '
-            + _join_capped(down + repeating + blips) + '.', counts + note)
+            + _join_capped(down + repeating + blips + unrecorded) + '.', counts + note)
     if down:
         return FAIL, _tail(f'DOWN {SOURCE_FAIL_STREAK}+ runs in a row: ' + _join_capped(down) + '.',
                            also, once, counts + note)
@@ -797,11 +810,14 @@ def check_source_health(now=None):
         return WARN, _tail(also, once, counts + note)
     if len(productive) < 2:
         return WARN, _tail(counts + ' — very few productive sources.', once) + note
+    text = counts
     if blips:
         lead = (' · failed the latest run only (retried next run, nothing lost): ' if measurable
                 else ' · errored in the latest run, for how long is unknown: ')
-        return PASS, counts + lead + _join_capped(blips) + note
-    return PASS, counts
+        text += lead + _join_capped(blips)
+    if unrecorded:
+        text += ' · errored when last checked: ' + _join_capped(unrecorded)
+    return PASS, text + note
 
 
 def check_event_volume_trend():

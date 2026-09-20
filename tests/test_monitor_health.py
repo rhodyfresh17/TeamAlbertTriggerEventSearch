@@ -1460,6 +1460,20 @@ def test_source_health_before_migration_counts_upstreams_not_rows(monkeypatch):
     assert msg.endswith(mh.STREAK_NOTE)
 
 
+def test_source_health_does_not_invent_a_streak_for_a_row_never_re_saved(monkeypatch):
+    """Columns live, value still NULL (a feed disabled right after the
+    migration keeps such a row until it ages out): say so, claim nothing."""
+    never = _fresh_status(source_name='Trade Journal A', source_type='rss', status='error',
+                          consecutive_failures=None, last_success=None,
+                          error_message='403 Client Error: Forbidden for url: https://example.test/a')
+    _status(monkeypatch, _healthy() + [never] + _sec_errors(streak=1)[:1])
+    status, msg = mh.check_source_health(now=NOW)
+    assert status == mh.PASS
+    assert 'errored when last checked: Trade Journal A: HTTP 403 — streak not recorded yet' in msg
+    assert 'Trade Journal A: HTTP 403 — 1 run' not in msg
+    assert 'failed the latest run only (retried next run, nothing lost): SEC search [SEC 8-K Item 1.01]' in msg
+
+
 def test_source_health_ignores_rows_of_retired_feeds(monkeypatch):
     retired = _fresh_status(source_name='Old Feed', source_type='rss', status='error', consecutive_failures=40,
                             last_check=(NOW - timedelta(days=5)).isoformat())
