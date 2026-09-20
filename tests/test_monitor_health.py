@@ -1333,3 +1333,191 @@ def test_run_enrichment_sh_soft_notice_on_exit_2():
     assert 'FAILED (exit %s)' in src
     import subprocess
     assert subprocess.run(['bash', '-n', str(Path(mh.PROJECT_DIR) / 'run_enrichment.sh')]).returncode == 0
+
+
+# ── source health: persistence per upstream, not a one-run row count ─────────
+
+SEC_FEEDS = ('SEC 8-K Item 1.01', 'SEC 8-K Item 2.01', 'SEC 8-K Item 5.02', 'SEC Form D (private raises)')
+SEC_DOWN = 'SEC search unavailable this run (HTTP 500 after 3 tries)'
+
+
+def _sec_errors(streak, ok_hours_ago=6, **over):
+    rows = []
+    for name in SEC_FEEDS:
+        r = _fresh_status(source_name=name, source_type='sec_edgar', status='error', events_found=0,
+                          items_fetched=0, error_message=SEC_DOWN, consecutive_failures=streak,
+                          last_success=(NOW - timedelta(hours=ok_hours_ago)).isoformat())
+        r.update(over)
+        rows.append(r)
+    return rows
+
+
+def _healthy(n=3):
+    return [_fresh_status(source_name=f'Feed {i}', source_type='rss', events_found=2, items_fetched=10,
+                          consecutive_failures=0, last_success=(NOW - timedelta(hours=3)).isoformat())
+            for i in range(n)]
+
+
+def _status(monkeypatch, rows):
+    monkeypatch.setattr(mh, '_fetch_source_status', lambda client=None: rows)
+
+
+def test_source_health_one_failed_run_is_information_not_an_alert(monkeypatch):
+    _status(monkeypatch, _healthy() + _sec_errors(streak=1))
+    _events(monkeypatch, [_row(1, SEC8K, 'SEC 8-K Item 5.02 — Co')])
+    status, msg = mh.check_source_health(now=NOW)
+    assert status == mh.PASS
+    assert msg.startswith('3 producing · 0 silent · 4 errored in 1 upstream (of 7 feeds in the latest run)')
+    assert 'failed the latest run only (retried next run, nothing lost): ' in msg
+    assert 'SEC search (4 feeds): HTTP 500 after 3 tries — 1 run in a row, last OK 6h ago' in msg
+
+
+def test_source_health_two_runs_in_a_row_warns(monkeypatch):
+    _status(monkeypatch, _healthy() + _sec_errors(streak=2, ok_hours_ago=9))
+    status, msg = mh.check_source_health(now=NOW)
+    assert status == mh.WARN
+    assert msg.startswith('Failing repeatedly: SEC search (4 feeds): HTTP 500 after 3 tries — 2 runs in a row, '
+                          'last OK 9h ago.')
+
+
+def test_source_health_producing_upstream_down_three_runs_fails(monkeypatch):
+    blip = _fresh_status(source_name='NVCA', source_type='rss', status='error', consecutive_failures=1,
+                         error_message='503 Server Error: Service Unavailable for url: https://example.test/feed')
+    _status(monkeypatch, _healthy() + _sec_errors(streak=3, ok_hours_ago=14) + [blip])
+    _events(monkeypatch, [_row(2, SEC8K, 'SEC 8-K Item 5.02 — Co')])
+    status, msg = mh.check_source_health(now=NOW)
+    assert status == mh.FAIL
+    assert msg.startswith('DOWN 3+ runs in a row: SEC search (4 feeds): HTTP 500 after 3 tries — 3 runs in a row, '
+                          'last OK 14h ago.')
+    assert 'Failed the latest run only (retried next run): NVCA: HTTP 503 — 1 run in a row, no success on record.' in msg
+    assert 'example.test' not in msg                          # URLs never reach the alert text
+    assert '5 errored in 2 upstreams' in msg
+
+
+def test_source_health_feed_that_never_produced_stays_a_warn(monkeypatch):
+    dead = _fresh_status(source_name='Trade Journal A', source_type='rss', status='error',
+                         consecutive_failures=14, last_success=None,
+                         error_message='403 Client Error: Forbidden for url: https://example.test/rss.xml')
+    _status(monkeypatch, _healthy() + [dead])
+    _events(monkeypatch, [_row(2, SEC8K, 'SEC 8-K Item 5.02 — Co')])    # survivors, none from this feed
+    status, msg = mh.check_source_health(now=NOW)
+    assert status == mh.WARN
+    assert ('Trade Journal A: HTTP 403 — 14 runs in a row, no success on record '
+            '(never produced a lead here — fix its URL or disable the feed)') in msg
+
+
+def test_source_health_unreadable_yield_downgrades_fail_to_warn(monkeypatch):
+    _status(monkeypatch, _healthy() + _sec_errors(streak=5))
+
+    def boom(days=28, client=None):
+        raise RuntimeError('supabase slow')
+    monkeypatch.setattr(mh, '_fetch_recent_events', boom)
+    status, msg = mh.check_source_health(now=NOW)
+    assert status == mh.WARN
+    assert '(could not check whether it was producing)' in msg
+
+
+def test_source_health_many_upstreams_in_one_run_fails(monkeypatch):
+    broken = [_fresh_status(source_name=f'Journal {i}', source_type='rss', status='error',
+                            consecutive_failures=1, error_message='Timeout: read timed out')
+              for i in range(mh.SOURCE_FAIL_UPSTREAMS + 1)]
+    _status(monkeypatch, _healthy() + broken)
+    status, msg = mh.check_source_health(now=NOW)
+    assert status == mh.FAIL
+    assert msg.startswith(f'{mh.SOURCE_FAIL_UPSTREAMS + 1} different upstreams failed in the same run')
+
+
+def test_source_health_before_migration_counts_upstreams_not_rows(monkeypatch):
+    """Six errored ROWS used to be a FAIL. Four of them are one upstream; with
+    no streak columns yet the check says so and names the migration."""
+    rows = _sec_errors(streak=1) + [
+        _fresh_status(source_name='Trade Journal A', source_type='rss', status='error',
+                      error_message='403 Client Error: Forbidden for url: https://example.test/a'),
+        _fresh_status(source_name='Trade Journal B', source_type='rss', status='error',
+                      error_message='403 Client Error: Forbidden for url: https://example.test/b'),
+    ]
+    rows = _healthy() + rows
+    for r in rows:                                   # pre-migration: NO row carries the columns
+        r.pop('consecutive_failures', None)
+        r.pop('last_success', None)
+    _status(monkeypatch, rows)
+    status, msg = mh.check_source_health(now=NOW)
+    assert status == mh.PASS
+    assert '6 errored in 3 upstreams' in msg
+    assert 'SEC search (4 feeds): HTTP 500 after 3 tries' in msg and 'in a row' not in msg
+    assert 'for how long is unknown' in msg and 'nothing lost' not in msg   # no claim it cannot back
+    assert msg.endswith(mh.STREAK_NOTE)
+
+
+def test_source_health_ignores_rows_of_retired_feeds(monkeypatch):
+    retired = _fresh_status(source_name='Old Feed', source_type='rss', status='error', consecutive_failures=40,
+                            last_check=(NOW - timedelta(days=5)).isoformat())
+    _status(monkeypatch, _healthy() + [retired])
+    status, msg = mh.check_source_health(now=NOW)
+    assert status == mh.PASS
+    assert msg == '3 producing · 0 silent · 0 errored (of 3 feeds in the latest run; 1 retired/stale feeds ignored)'
+
+
+def test_source_health_no_rows_or_no_fresh_rows(monkeypatch):
+    _status(monkeypatch, [])
+    assert mh.check_source_health(now=NOW)[0] == mh.WARN
+    _status(monkeypatch, None)
+    assert mh.check_source_health(now=NOW)[0] == mh.WARN
+    _status(monkeypatch, [_fresh_status(last_check=(NOW - timedelta(days=4)).isoformat())])
+    status, msg = mh.check_source_health(now=NOW)
+    assert status == mh.WARN and 'Scrape freshness' in msg
+
+
+def test_source_health_few_productive_feeds_still_warns(monkeypatch):
+    _status(monkeypatch, [_fresh_status(events_found=1, consecutive_failures=0),
+                          _fresh_status(source_name='CoinDesk', source_type='rss', consecutive_failures=0)])
+    status, msg = mh.check_source_health(now=NOW)
+    assert status == mh.WARN and 'very few productive sources' in msg
+
+
+@pytest.mark.parametrize('raw, short', [
+    ('500 Server Error: Internal Server Error for url: https://example.test/x?q=1', 'HTTP 500'),
+    ('403 Client Error: Forbidden for url: https://example.test/rss.xml', 'HTTP 403'),
+    ('SEC search skipped — unavailable earlier this run (HTTP 500 after 3 tries)', 'HTTP 500 after 3 tries'),
+    ('content gate not built, item skipped this run — SEC search unavailable this run '
+     '(ConnectionError after 3 tries)', 'ConnectionError after 3 tries'),
+    ('Timeout: read timed out for url: https://example.test/feed', 'Timeout: read timed out'),
+    ('', 'no error text'),
+    (None, 'no error text'),
+])
+def test_short_error(raw, short):
+    assert mh._short_error(raw) == short
+
+
+def test_short_error_is_capped():
+    assert len(mh._short_error('x' * 500)) == 70
+
+
+def test_upstream_groups_sec_feeds_and_folds_alert_feeds():
+    assert {mh._upstream({'source_name': n, 'source_type': 'sec_edgar'}) for n in SEC_FEEDS} == {mh.SEC_UPSTREAM}
+    assert mh._upstream({'source_name': GOOGLE_ALERTS[0], 'source_type': 'rss'}) == 'Google News'
+    assert mh._upstream({'source_name': 'NVCA', 'source_type': 'rss'}) == 'NVCA'
+
+
+# ── fetched vs filtered leaves failed fetches to source health ───────────────
+
+def test_fetched_vs_filtered_does_not_call_a_failed_fetch_a_dead_feed(monkeypatch):
+    rows = _sec_errors(streak=1)[:3] + [
+        _fresh_status(source_name='Adzuna (US)', items_fetched=50, events_found=9)]
+    _status(monkeypatch, rows)
+    _events(monkeypatch, [_row(1, SEC8K, 'SEC 8-K Item 5.02 — Co'), _row(1, ADZ, 'Co hiring: Controller')])
+    status, msg = mh.check_fetched_vs_filtered(now=NOW)
+    assert status == mh.PASS
+    assert 'likely dead' not in msg
+    assert msg == ('1 producing · 0 all filtered · 0 fetched 0 · 3 errored (see Source health) '
+                   '(of 4 feeds in the latest run)')
+
+
+def test_fetched_vs_filtered_errored_feed_is_not_listed_as_an_empty_sibling(monkeypatch):
+    rows = _sec_errors(streak=1)[2:3] + [
+        _fresh_status(source_name='SEC 8-K Item 2.01', source_type='sec_edgar', items_fetched=13, events_found=2)]
+    _status(monkeypatch, rows)
+    _events(monkeypatch, [_row(1, SEC8K, 'SEC 8-K Item 2.01 — Co')])
+    status, msg = mh.check_fetched_vs_filtered(now=NOW)
+    assert status == mh.PASS
+    assert 'sibling' not in msg and '1 errored (see Source health)' in msg

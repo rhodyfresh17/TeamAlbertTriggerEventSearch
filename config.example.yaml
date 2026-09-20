@@ -1116,9 +1116,14 @@ sources:
       url: "https://nvca.org/feed/"
       enabled: true
 
+    # Disabled: the publisher's bot protection answers the hosted CI runner
+    # with HTTP 403 on every run (the same request succeeds from a
+    # non-datacenter address), so the feed never delivered an item. PEHub,
+    # Buyouts Insider and NVCA cover the same news. Re-enable only together
+    # with a fetch path that is not refused.
     - name: "Private Equity Insights"
       url: "https://pe-insights.com/feed/atom/"
-      enabled: true
+      enabled: false
 
     # Crypto / FinTech sources (Financial Services vertical)
     - name: "PYMNTS"
@@ -1194,9 +1199,14 @@ sources:
     # ── Consumer Services trade press (added 2026-09-08, live-verified) ──
     # Home care, auto-dealer and collision-repair verticals: operator M&A and
     # dealer transactions the general wires never carry.
+    # HomeCare Magazine is disabled for the same reason as Private Equity
+    # Insights above: HTTP 403 for the hosted CI runner on every run, never
+    # an item delivered. The Google News home-care M&A queries cover part of
+    # it. Kept in the file (not deleted) so the URL and label survive for a
+    # fetch path that is not refused.
     - name: "HomeCare Magazine"
       url: "https://www.homecaremag.com/rss.xml"
-      enabled: true
+      enabled: false
 
     - name: "Performance Brokerage Services - Dealer Transactions"
       url: "https://performancebrokerageservices.com/feed/"

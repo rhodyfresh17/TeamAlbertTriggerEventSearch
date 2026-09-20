@@ -271,6 +271,20 @@ fetched 0), `Retry backlog` (typed columns only). Weekly: `Finance-leader source
 only when the top source flips or moves >15 pts; baseline `state/finance_leader_mix.json`).
 `Local SQLite` now checks the AccountCache tables. The cleanup dry-run check is gone.
 
+**Source health judges persistence, per upstream (2026-09-20).** `source_status` is one row per
+feed, overwritten every run — "errored in the latest run" cannot tell one failed run from a dead
+source, and the old rule (`> 5 errored rows = FAIL`) counted the four SEC feeds, which share one
+search endpoint, as four failures. Now the scraper records `consecutive_failures` / `last_success`
+per feed (`src/database.py` → synced when the live columns exist,
+`supabase/migrations/004_source_status_streaks.sql`), and `check_source_health` groups errored
+feeds by upstream (`_upstream`: every `sec_edgar` feed = "SEC search"; otherwise the feed label):
+one failed run = a PASS note; ≥ `SOURCE_WARN_STREAK` (2) runs in a row = WARN (a feed that never
+produced stays a WARN — fix or disable it); ≥ `SOURCE_FAIL_STREAK` (3) on an upstream with
+survivors in the 28d window = FAIL; more than `SOURCE_FAIL_UPSTREAMS` (5) different upstreams in
+one run = FAIL (that is our side). Only feeds touched in the last 48h are judged. Before
+migration 004 streaks read as unknown and the text names the migration. `Fetched vs filtered`
+skips rows whose run ended in `error` — a failed fetch is not an empty feed.
+
 **Sync**: sends `events.source` and the counters only when the live columns exist (probe per
 run); legacy Adzuna rows are relabeled `finance_seat_open` at sync time (idempotent); stale
 `source_status` rows (>60d, never a name the scraper reported this window) are reaped with
@@ -414,7 +428,8 @@ removed" pivot (reason × source × subindustry), and `expansion` events render 
 **Operating posture (from 2026-09-09).** Nothing needs a human on a schedule. What to read:
 - `#scout-engine` daily: the 06:30 re-verify post (expiry line + `verified:N ambiguous:N staged:N
   not_fit:N`), the 07:00 health check (WARN/FAIL only; "Source yield … went quiet" is REAL — it
-  repeats until the feed recovers; Adzuna/Google News flags from Sept 8 should clear as the
+  repeats until the feed recovers; "Source health … DOWN 3+ runs in a row" is REAL too, while a
+  source that failed a single run never alerts; Adzuna/Google News flags from Sept 8 should clear as the
   Phase 3 scrapers run), Mondays the weekly lines (finance-leader share vs 30%, vertical mix,
   finance-leader source mix on change only).
 - The first weeks after 2026-09-08 carry a supply surge (first Phase 3 scrape: 112 events,
@@ -556,8 +571,9 @@ grades corrected in the one-off cleanup (incl. one fake A).
 involved in ERP decisions. Three layers: (1) SEC scraper only ingests Item
 5.02 filings whose full text mentions a finance-leader role — CFO set →
 cfo_hire, Controller/Chief Accounting set → executive_hire, everything else
-(board elections, CEO changes) skipped at the source (fails open if the
-EFTS prefetch errors); (2) `_board_only_event()` gate tombstones
+(board elections, CEO changes) skipped at the source (fails open only
+when the EFTS prefetch ANSWERS empty; a prefetch that FAILS skips the item
+for that run — see §3 sec_scraper); (2) `_board_only_event()` gate tombstones
 board-only executive_hire events in both enrich + regrade paths
 (`board_change_only` reason); (3) prompt rule.
 
@@ -594,7 +610,7 @@ loosen without A.J.
 ### Scrapers (`src/scrapers/`)
 - **`base.py`** — `BaseScraper` parent class. **`extract_company_name()`** (40+ verb patterns, case-insensitive) and **`matches_industry()`** live here. Both used heavily downstream.
 - **`rss_scraper.py`** — handles all RSS feeds in `config.sources.rss_feeds`
-- **`sec_scraper.py`** — SEC EDGAR EFTS search. Item 5.02 (officer changes), 2.01 (M&A completion), 1.01 (material agreements). **Pre-fetches CFO-related accession numbers in one extra EFTS call, paginated to 5 pages.**
+- **`sec_scraper.py`** — SEC EDGAR EFTS search. Item 5.02 (officer changes), 2.01 (M&A completion), 1.01 (material agreements). **Pre-fetches CFO-related accession numbers in one extra EFTS call, paginated to 5 pages.** Every EFTS request (8-K searches, the phrase prefetches, Form D pages) goes through `_efts_get`: `EFTS_MAX_TRIES` (3) with `EFTS_BACKOFF_SECONDS` on 5xx / 429 / connection errors / a non-JSON body; any other 4xx raises at once. Exhausted tries open a breaker shared by `SECScraper` and `FormDScraper` for `EFTS_BREAKER_SECONDS`, so an upstream outage costs one exhausted call per run and every SEC feed reports `error` ("SEC search unavailable this run"). A prefetch that FAILS skips its item for the run (a half-built CFO set would mistype filings, and a saved event is never re-typed); the next run re-reads the same lookback window, so nothing is lost. Tests: `tests/test_sec_efts.py`.
 - **`adzuna_scraper.py`** — Adzuna jobs API. Throttled to noon UTC; since
   2026-08-09 runs `title_only` queries ('controller','cfo') with
   sort_by=date (~3 calls/day ≈ 90/mo) — the old what_or matched loose
@@ -659,7 +675,7 @@ A single script — `monitor_health.py` — runs end-to-end diagnostics. Three m
 | Mode | Runtime | What it checks |
 |---|---|---|
 | `--quick` *(default)* | ~10s | env creds, Tavily budget counter (local — never spends a credit), Firecrawl usefulness canary (→ `state/search_mode`), rep-state intact, local LLM (llama.cpp :8091), Supabase reachable, scrape freshness, enrichment lag, local SQLite (checks the AccountCache tables; the scrape DB lives in the GHA cache by design), launchd job loaded |
-| `--daily` | ~30s | all of the above + source health + 7-day-vs-prior volume trend + **source yield** (survivors per source 7d vs prior 21d, quiet feeds remembered in `state/quiet_sources.json`) + fetched-vs-filtered + retry backlog |
+| `--daily` | ~30s | all of the above + **source health** (failure STREAKS per upstream — one failed run is a note, 2 in a row WARN, 3 in a row on a producing source FAIL; see §0b) + 7-day-vs-prior volume trend + **source yield** (survivors per source 7d vs prior 21d, quiet feeds remembered in `state/quiet_sources.json`) + fetched-vs-filtered + retry backlog |
 | `--weekly` | ~60s | all of the above + **finance-leader source mix** (WARNs only on a change vs `state/finance_leader_mix.json`) |
 
 Each check returns 🟢 PASS / 🟡 WARN / 🔴 FAIL with a one-liner. **Exit code is non-zero if any FAIL**, so cron and Elon can detect failures programmatically.
@@ -774,6 +790,7 @@ source venv/bin/activate
 | Daily re-verify job (06:30 ET, `com.teamalbert.reverify.plist` → `run_reverify.sh`, posts to #scout-engine) | `tail -f logs/reverify.log` · pause with `touch state/PAUSE` |
 | Refresh the free oracle tables (SEC advisers + FDIC banks; monthly job does this) | `python scripts/refresh_oracles.py --source all` |
 | **Accounts table (one-time, A.J.)** | paste `supabase/migrations/003_accounts.sql` into Supabase → SQL Editor → Run; then `python scripts/backfill_accounts.py` (dry-run / `--preflight`) and `--apply` (takes `state/enrichment.lock`; `--since` is preview-only and refuses `--apply`; refuses if it cannot read the existing rows) |
+| **Failure-streak columns (one-time, A.J.)** | paste `supabase/migrations/004_source_status_streaks.sql` into Supabase → SQL Editor → Run. No backfill: the next scrape fills them; until then Source health says "streaks not measurable yet" and still counts per upstream |
 | Expire stale triggers (nightly job does this) | `python scripts/expire_triggers.py` (dry-run) / `--apply` |
 | Regenerate the golden set (then review the diff — never to make a test pass) | `python scripts/build_golden_set.py --out tests/golden/accounts.json` |
 | New-adviser trigger events (dry-run default) | `python scripts/ria_trigger.py` / `--apply` (monthly job: `run_oracles.sh`, log `logs/oracles.log`) |
@@ -799,6 +816,17 @@ failure exits **2** ("Supabase unreachable or too slow — nothing processed, re
 counts consecutive skips (a normal run resets it), and the health check line "Enrichment ↔
 Supabase" WARNs at 2. If you ever see the migration SQL in an alert again, the column really is
 gone — check Supabase before doing anything else.
+
+**One failed run is NOT a dead source (2026-09-20).** `source_status` keeps only the latest run
+per feed, and the daily check reads whichever run came last. A transient upstream error on that
+one run used to read as "N errored sources" (and, in `Fetched vs filtered`, as "likely dead") —
+with several feeds behind one endpoint it crossed the FAIL bar on its own. Rules now: the SEC
+scraper retries EFTS and skips cleanly when it stays down; the monitor alerts on failure STREAKS
+per upstream (§0b); a failed fetch is never reported as an empty feed. If Source health says
+"DOWN 3+ runs in a row", that one is real. **New feeds must be verified from the CI runner, not
+only from a workstation** — a publisher's bot protection can refuse datacenter addresses while
+answering any other (two feeds refused this way are `enabled: false` in the config;
+`tests/test_scrapers.py::REFUSED_BY_PUBLISHER` pins them).
 
 ### Architectural quirks
 - **`config.yaml` is gitignored** — always edit `config.example.yaml`, then `cp` locally. GitHub Actions does this `cp` automatically in the workflow.
@@ -934,6 +962,7 @@ Newest first (v2 phases on top; the older rows are the v1 history):
 
 | Commit | What |
 |---|---|
+| 2026-09-20 | Source health on persistence: EFTS retry + shared breaker (`_efts_get`), failed prefetch skips its item, `consecutive_failures` / `last_success` per feed (migration 004), per-upstream alerting, `Fetched vs filtered` ignores errored rows, two publisher-refused feeds disabled |
 | `4a5f24b` | v2 Phase 4 (2026-09-08): accounts table + backfill, one grade per account, hashtag guards, hire-subject detection, nightly expiry, golden set in CI, orphans deleted — see §0b |
 | `b3bdfb9` | v2 Phase 3 (2026-09-08): finance-leader feeds + detector fixes, Google News revived, free oracles, sec_iapd trigger, domains, supply scorecard — see §0b |
 | `a57924d` / `c584331` | config.example.yaml indentation fix (had failed two Actions runs) · daily re-verify job |
@@ -1026,6 +1055,7 @@ These came up during today's session but were deferred. Surface them when releva
 | Medium | **Post-fit email digest** (Phase 2 offer to A.J.) | Today's alert email is the raw pre-fit scrape stream (~50% noise). A Mac-side digest of fit-confirmed Grade A/B accounts would replace it. Needs A.J.'s go-ahead. |
 | Medium | **More oracles** | DOL Form 5500 (state + NAICS for consumer services), NCUA credit unions, CRA T3010 (eastern Canada charities) — researched 2026-09-08, feasible as local SQLite tables like `state/oracles.db`. FDIC `/history` structure changes as a bank trigger. |
 | Medium | **Adzuna recruiter blacklist** | Vaco, Robert Half, Korn Ferry, Heidrick & Struggles, JM Search, McCracken Alliance post "Hiring: CFO" for unnamed clients. Judge from the accounts table after a few weeks. |
+| Low | **Fetch path for publisher-refused feeds** | Some trade publishers answer the hosted CI runner with HTTP 403 while serving non-datacenter addresses (HomeCare Magazine, Private Equity Insights — both `enabled: false`). A fetch path outside the CI runner for a config-flagged subset could revive them, and possibly some Phase 3 "blocked" rejects (re-test those from the runner first). Worth it only if Consumer Services stays the thinnest vertical. |
 | Low | **Hire-detector consolidation** | `src/scrapers/base.py` and `src/pipeline/hires.py` keep two regex sets; base.py still rejects "Former X named CFO" shapes. One shared module in `src/pipeline/` (importable by CI) would end the drift. |
 | Low | **Dashboard polish** | Kanban/pipeline view, hot-lead badges, saved filter presets per user, mobile responsive. |
 | Low | `sec_scraper.py:31-38` Canadian SEC state-code comments (A0–A5) look wrong; the standard ON/QC/NB/NS/PE/NL codes handle Canadian filings anyway. |
@@ -1076,7 +1106,7 @@ TeamAlbertTriggerEventSearch/
 │   ├── expire_triggers.py             # nightly trigger expiry
 │   ├── build_golden_set.py            # exports tests/golden/accounts.json
 │   └── check_feeds.py                 # feed health debug tool
-├── supabase/migrations/               # 001 RLS · 002 typed columns · 003 accounts (A.J. runs by hand)
+├── supabase/migrations/               # 001 RLS · 002 typed columns · 003 accounts · 004 source_status streaks (A.J. runs by hand)
 ├── src/
 │   ├── __init__.py
 │   ├── main.py                        # scrape orchestration

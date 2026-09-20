@@ -68,7 +68,8 @@ def test_fresh_db_has_counter_columns(tmp_path):
     db_path = tmp_path / 'new.db'
     DatabaseManager(str(db_path))
     cols = _columns(db_path, 'source_status')
-    assert cols[-2:] == ['items_fetched', 'filtered_out']
+    assert cols[-4:] == ['items_fetched', 'filtered_out',
+                         'consecutive_failures', 'last_success']
 
 
 def test_save_source_status_round_trips_counters(tmp_path):
@@ -87,3 +88,47 @@ def test_save_source_status_round_trips_counters(tmp_path):
                           items_fetched=0, filtered_out=0)
     assert len(db.get_source_statuses()) == 2
     assert {r['source_name']: r['items_fetched'] for r in db.get_source_statuses()}['Feed A'] == 0
+
+
+# ── failure streaks: one failed run vs a source that stays down ──────────────
+
+def test_streak_counts_consecutive_errors_and_any_other_status_resets_it(tmp_path):
+    db = DatabaseManager(str(tmp_path / 'fresh.db'))
+
+    def row():
+        return {r['source_name']: r for r in db.get_source_statuses()}['Feed A']
+
+    db.save_source_status('Feed A', 'rss_feed', 'success', events_found=1)
+    first_ok = row()['last_success']
+    assert row()['consecutive_failures'] == 0 and first_ok
+
+    for expected in (1, 2, 3):
+        db.save_source_status('Feed A', 'rss_feed', 'error', error_message='boom')
+        assert row()['consecutive_failures'] == expected
+        assert row()['last_success'] == first_ok          # kept across failures
+
+    db.save_source_status('Feed A', 'rss_feed', 'partial', error_message='nothing in territory')
+    assert row()['consecutive_failures'] == 0             # 'partial' answered — not a failure
+    assert row()['last_success'] >= first_ok
+
+
+def test_streaks_are_per_source(tmp_path):
+    db = DatabaseManager(str(tmp_path / 'fresh.db'))
+    db.save_source_status('Feed A', 'rss_feed', 'error', error_message='boom')
+    db.save_source_status('Feed A', 'rss_feed', 'error', error_message='boom')
+    db.save_source_status('Feed B', 'rss_feed', 'error', error_message='boom')
+    by_name = {r['source_name']: r for r in db.get_source_statuses()}
+    assert by_name['Feed A']['consecutive_failures'] == 2
+    assert by_name['Feed B']['consecutive_failures'] == 1
+    assert by_name['Feed B']['last_success'] is None      # never succeeded since tracking began
+
+
+def test_streak_columns_added_to_old_schema_and_start_unknown(tmp_path):
+    db_path = tmp_path / 'old.db'
+    _old_schema_db(db_path)
+    db = DatabaseManager(str(db_path))
+    assert {'consecutive_failures', 'last_success'} <= set(_columns(db_path, 'source_status'))
+    old_row = db.get_source_statuses()[0]
+    assert old_row['consecutive_failures'] is None and old_row['last_success'] is None
+    db.save_source_status(old_row['source_name'], old_row['source_type'], 'error', error_message='boom')
+    assert db.get_source_statuses()[0]['consecutive_failures'] == 1

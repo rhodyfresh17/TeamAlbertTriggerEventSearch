@@ -307,7 +307,8 @@ class FakeClientV2:
         typed = set(typed_columns)
         self.present = {
             'events': self.BASE_EVENT_COLS | ({'source'} & typed),
-            'source_status': self.BASE_STATUS_COLS | (set(ss.STATUS_COUNTER_COLUMNS) & typed),
+            'source_status': self.BASE_STATUS_COLS
+                             | ((set(ss.STATUS_COUNTER_COLUMNS) | set(ss.STATUS_STREAK_COLUMNS)) & typed),
         }
         self.rows = {'source_status': [dict(r) for r in status_rows]}
         self.calls, self.reads, self.deleted, self.delete_filters = [], [], [], []
@@ -468,6 +469,67 @@ def test_sync_with_only_one_counter_present_sends_just_that_one(tmp_path):
     status = [c for c in client.calls if c['table'] == 'source_status'][0]['data']
     assert 'items_fetched' not in status
     assert 'filtered_out' in status and status['filtered_out'] is None  # old local schema
+
+
+# ── failure streaks (migration 004): probe-then-send, never as NULL ──────────
+
+def _db_with_streaks(path, streak, last_success):
+    _make_db(path)
+    conn = sqlite3.connect(str(path))
+    for col in ('items_fetched INTEGER', 'filtered_out INTEGER',
+                'consecutive_failures INTEGER', 'last_success TEXT'):
+        conn.execute(f'ALTER TABLE source_status ADD COLUMN {col}')
+    conn.execute('UPDATE source_status SET consecutive_failures = ?, last_success = ?',
+                 (streak, last_success))
+    conn.commit(); conn.close()
+
+
+def test_get_source_statuses_reads_streaks_and_survives_a_counters_only_schema(tmp_path):
+    db = tmp_path / 'new.db'
+    _db_with_streaks(db, 3, '2026-09-05T09:00:00')
+    row = ss.get_source_statuses_from_db(str(db))[0]
+    assert (row['consecutive_failures'], row['last_success']) == (3, '2026-09-05T09:00:00')
+
+    mid = tmp_path / 'mid.db'                         # counters added, streaks not yet
+    _make_db(mid)
+    conn = sqlite3.connect(str(mid))
+    conn.execute('ALTER TABLE source_status ADD COLUMN items_fetched INTEGER')
+    conn.execute('ALTER TABLE source_status ADD COLUMN filtered_out INTEGER')
+    conn.execute('UPDATE source_status SET items_fetched = 7')
+    conn.commit(); conn.close()
+    row = ss.get_source_statuses_from_db(str(mid))[0]
+    assert row['items_fetched'] == 7 and 'consecutive_failures' not in row
+
+
+def test_sync_sends_streaks_when_live(tmp_path):
+    db = tmp_path / 't.db'
+    _db_with_streaks(db, 2, '2026-09-05T09:00:00')
+    client = FakeClientV2(typed_columns=('consecutive_failures', 'last_success'))
+    ss.sync_to_supabase(db_path=str(db), days=14, client=client, now=NOW)
+    status = [c for c in client.calls if c['table'] == 'source_status'][0]['data']
+    assert (status['consecutive_failures'], status['last_success']) == (2, '2026-09-05T09:00:00')
+    assert 'items_fetched' not in status              # counters are probed independently
+
+
+def test_sync_never_sends_a_null_streak_value(tmp_path):
+    """A source that has never succeeded locally (or a rebuilt SQLite file)
+    must not blank what Supabase already knows."""
+    db = tmp_path / 't.db'
+    _db_with_streaks(db, 4, None)
+    client = FakeClientV2(typed_columns=('consecutive_failures', 'last_success'))
+    ss.sync_to_supabase(db_path=str(db), days=14, client=client, now=NOW)
+    status = [c for c in client.calls if c['table'] == 'source_status'][0]['data']
+    assert status['consecutive_failures'] == 4
+    assert 'last_success' not in status
+
+
+def test_sync_sends_no_streaks_until_the_columns_are_live(tmp_path):
+    db = tmp_path / 't.db'
+    _db_with_streaks(db, 2, '2026-09-05T09:00:00')
+    client = FakeClientV2(typed_columns=('items_fetched', 'filtered_out'))
+    ss.sync_to_supabase(db_path=str(db), days=14, client=client, now=NOW)
+    status = [c for c in client.calls if c['table'] == 'source_status'][0]['data']
+    assert 'consecutive_failures' not in status and 'last_success' not in status
 
 
 # ── reaper ───────────────────────────────────────────────────────────────────

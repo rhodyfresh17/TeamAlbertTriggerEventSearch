@@ -34,6 +34,14 @@ dead for 9 days. Every WARN here is posted to Mattermost by
 run_health_check.sh, so a check must not WARN for a condition that is
 expected every day — that is noise the owner learns to ignore.
 
+Persistence rule (2026-09-20): source_status keeps ONE row per feed, rewritten
+every run, so a check that reads "status == error" judges whichever run came
+last. Source health therefore reads the failure STREAK the scraper records
+per feed (consecutive_failures / last_success) and counts failures per
+upstream service, not per row: a single failed run is information, a source
+that stays down is the alert. A failed fetch is never reported as an empty
+feed (check_fetched_vs_filtered skips errored rows).
+
 Manual runs (review 2026-09-08): the weekly checks compare against what the
 LAST run wrote under state/ — the Monday baseline. A --weekly run by hand
 would overwrite that baseline (and the daily state: search_mode, the
@@ -614,27 +622,180 @@ def check_launchd_job():
 
 # ── --daily checks ──────────────────────────────────────────────────────────
 
-def check_source_health():
-    """How many sources are productive vs silent?"""
-    client = get_supabase()
-    if not client:
-        return WARN, 'Supabase unavailable — cannot check'
+# Source health judges PERSISTENCE, not one snapshot. source_status holds one
+# row per feed, overwritten on every run, so "errored in the latest run" says
+# nothing about whether a source is down — a transient upstream 5xx on the run
+# before this check looks exactly like a dead feed. The scraper records
+# consecutive_failures / last_success per feed (src/database.py, synced once
+# supabase/migrations/004_source_status_streaks.sql has run) and the verdict
+# reads those. Failures are counted per UPSTREAM, not per row: several feeds
+# behind one endpoint are one failure.
+SOURCE_WARN_STREAK = 2       # failed this many runs in a row → WARN
+SOURCE_FAIL_STREAK = 3       # …this many (about half a day at the 4-hourly cadence) AND it was producing → FAIL
+SOURCE_FAIL_UPSTREAMS = 5    # more than this many DIFFERENT upstreams failing in one run → FAIL (our side, not theirs)
+SEC_UPSTREAM = 'SEC search'  # every sec_edgar feed rides on the same search endpoint
+STREAK_NOTE = ('(failure streaks not measurable yet — run '
+               'supabase/migrations/004_source_status_streaks.sql)')
+
+
+def _upstream(row):
+    """The service a feed depends on — the thing that actually fails. Every
+    SEC feed shares one search endpoint; feeds that fold onto one label
+    (Google Alerts → Google News, the wire's several feeds) share that
+    label; any other feed is its own upstream."""
+    if (row.get('source_type') or '').lower() == 'sec_edgar':
+        return SEC_UPSTREAM
+    return feed_label(row.get('source_name'), row.get('source_type'))
+
+
+def _short_error(msg, limit=70):
+    """A stored error_message cut down to what a person needs:
+    '500 Server Error: Internal Server Error for url: https://…' → 'HTTP 500';
+    '… (HTTP 500 after 3 tries)' → 'HTTP 500 after 3 tries'."""
+    text = ' '.join(str(msg or '').split())
+    m = re.match(r'(\d{3}) (?:Client|Server) Error', text)
+    if m:
+        return f'HTTP {m.group(1)}'
+    m = re.search(r'\(([^()]*after \d+ tries)\)', text)
+    if m:
+        return m.group(1)
+    text = re.sub(r'\s*for url: \S+', '', text).strip()
+    if not text:
+        return 'no error text'
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + '…'
+
+
+def _ago(dt, now):
+    hours = max((now - dt).total_seconds() / 3600, 0)
+    return f'{hours:.0f}h ago' if hours < 48 else f'{hours / 24:.0f}d ago'
+
+
+def _streak(rows):
+    """Worst streak in an upstream's errored rows. A row that was never
+    measured (pre-migration, or not re-saved since) counts as this one run."""
+    return max((r.get('consecutive_failures') or 1) for r in rows)
+
+
+def _describe_upstream(upstream, rows, now, measurable):
+    names = sorted(r.get('source_name') or '?' for r in rows)
+    head = upstream if names == [upstream] else (
+        f'{upstream} ({len(rows)} feeds)' if len(rows) > 1 else f'{upstream} [{names[0]}]')
+    error = Counter(_short_error(r.get('error_message')) for r in rows).most_common(1)[0][0]
+    if not measurable:
+        return f'{head}: {error}'
+    n = _streak(rows)
+    oks = [dt for dt in (_parse_ts(r.get('last_success')) for r in rows) if dt is not None]
+    last_ok = f'last OK {_ago(max(oks), now)}' if oks else 'no success on record'
+    return f'{head}: {error} — {n} run{"s" if n != 1 else ""} in a row, {last_ok}'
+
+
+def _producing_upstreams(groups, now):
+    """Which of these upstreams had survivors in the yield window — the
+    difference between "a source that feeds leads is down" and "a feed that
+    never produced is still broken". None when the events read fails."""
     try:
-        ss = client.table('source_status').select('*').execute()
-        if not ss.data:
-            return WARN, 'No source_status rows — has scraper ever run?'
-        productive = [s for s in ss.data if (s.get('events_found') or 0) > 0]
-        silent = [s for s in ss.data if (s.get('events_found') or 0) == 0
-                  and s.get('status') == 'success']
-        errored = [s for s in ss.data if s.get('status') == 'error']
-        msg = f'{len(productive)} producing · {len(silent)} silent · {len(errored)} errored (of {len(ss.data)} total)'
-        if len(errored) > 5:
-            return FAIL, msg + ' — too many errored sources'
-        if len(productive) < 2:
-            return WARN, msg + ' — very few productive sources'
-        return PASS, msg
+        yielded = {k for k, b in _yield_by_source(_fetch_recent_events(YIELD_WINDOW_DAYS), now).items()
+                   if b['recent'] + b['prior'] > 0}
+    except Exception:
+        return None
+    return {up for up, rows in groups.items()
+            if any(feed_matches_label(r.get('source_name'), lab, r.get('source_type'))
+                   for r in rows for lab in yielded)}
+
+
+def check_source_health(now=None):
+    """Are the scraper's sources answering — judged on persistence.
+
+    FAIL  an upstream that produced survivors in the 28d yield window has
+          failed ≥ SOURCE_FAIL_STREAK runs in a row; or more than
+          SOURCE_FAIL_UPSTREAMS different upstreams failed in the same run
+          (that many at once is the scraper's side — network, a bad deploy).
+    WARN  any upstream at ≥ SOURCE_WARN_STREAK runs in a row — a feed that
+          never produced stays a WARN however long it fails (fix its URL or
+          disable it); fewer than two productive feeds.
+    PASS  the counts. An upstream that failed only the latest run is listed
+          as information: the next run retries it, and every source re-reads
+          a lookback window, so one missed run loses nothing.
+
+    Only feeds the cron touched in the last FEED_ACTIVE_HOURS are judged —
+    the row of a retired or disabled feed keeps its last status forever.
+    Before migration 004 every streak reads as unknown (one run): the
+    per-upstream count and the breadth FAIL still work and the text names
+    the migration."""
+    now = now or datetime.now(timezone.utc)
+    try:
+        status_rows = _fetch_source_status()
     except Exception as e:
         return WARN, f'Could not check source health: {e}'
+    if status_rows is None:
+        return WARN, 'Supabase unavailable — cannot check'
+    if not status_rows:
+        return WARN, 'No source_status rows — has scraper ever run?'
+
+    active_cut = now - timedelta(hours=FEED_ACTIVE_HOURS)
+    fresh = [r for r in status_rows
+             if (_parse_ts(r.get('last_check')) or datetime.min.replace(tzinfo=timezone.utc)) >= active_cut]
+    stale = len(status_rows) - len(fresh)
+    if not fresh:
+        return WARN, (f'No feed was checked in the last {FEED_ACTIVE_HOURS}h '
+                      f'({stale} older rows ignored) — see Scrape freshness')
+
+    productive = [r for r in fresh if (r.get('events_found') or 0) > 0]
+    errored = [r for r in fresh if r.get('status') == 'error']
+    silent = [r for r in fresh if r.get('status') != 'error' and (r.get('events_found') or 0) == 0]
+    measurable = any('consecutive_failures' in r for r in status_rows)
+
+    groups = {}
+    for r in errored:
+        groups.setdefault(_upstream(r), []).append(r)
+
+    counts = f'{len(productive)} producing · {len(silent)} silent · {len(errored)} errored'
+    if errored:
+        counts += f' in {len(groups)} upstream{"s" if len(groups) != 1 else ""}'
+    counts += (f' (of {len(fresh)} feeds in the latest run'
+               + (f'; {stale} retired/stale feeds ignored' if stale else '') + ')')
+    note = f' {STREAK_NOTE}' if errored and not measurable else ''
+
+    persistent = {up: rows for up, rows in groups.items() if _streak(rows) >= SOURCE_FAIL_STREAK}
+    producing = _producing_upstreams(persistent, now) if persistent else set()
+
+    down, repeating, blips = [], [], []
+    for up, rows in sorted(groups.items(), key=lambda kv: (-_streak(kv[1]), kv[0])):
+        line = _describe_upstream(up, rows, now, measurable)
+        n = _streak(rows)
+        if n >= SOURCE_FAIL_STREAK and producing is not None and up in producing:
+            down.append(line)
+        elif n >= SOURCE_FAIL_STREAK:
+            repeating.append(line + (' (could not check whether it was producing)' if producing is None
+                                     else ' (never produced a lead here — fix its URL or disable the feed)'))
+        elif n >= SOURCE_WARN_STREAK:
+            repeating.append(line)
+        else:
+            blips.append(line)
+
+    def _tail(*parts):
+        return ' '.join(p for p in parts if p)
+
+    also = ('Failing repeatedly: ' + '; '.join(repeating) + '.') if repeating else ''
+    once = ('Failed the latest run only (retried next run): ' + '; '.join(blips) + '.') if blips else ''
+
+    if len(groups) > SOURCE_FAIL_UPSTREAMS:
+        return FAIL, _tail(
+            f'{len(groups)} different upstreams failed in the same run — that many at once points at '
+            f'the scraper\'s side (network or a bad deploy), not theirs: '
+            + '; '.join(down + repeating + blips) + '.', counts + note)
+    if down:
+        return FAIL, _tail(f'DOWN {SOURCE_FAIL_STREAK}+ runs in a row: ' + '; '.join(down) + '.',
+                           also, once, counts + note)
+    if repeating:
+        return WARN, _tail(also, once, counts + note)
+    if len(productive) < 2:
+        return WARN, _tail(counts + ' — very few productive sources.', once) + note
+    if blips:
+        lead = (' · failed the latest run only (retried next run, nothing lost): ' if measurable
+                else ' · errored in the latest run, for how long is unknown: ')
+        return PASS, counts + lead + '; '.join(blips) + note
+    return PASS, counts
 
 
 def check_event_volume_trend():
@@ -937,7 +1098,12 @@ def check_fetched_vs_filtered(now=None):
           returning nothing = dead feed; distinct from "fetched plenty, all
           filtered", which is a gate-tuning question).
     PASS  producing / all-filtered / fetched-0 counts; a feed that fetched 0
-          while a sibling under its label fetched is listed as information."""
+          while a sibling under its label fetched is listed as information.
+
+    A feed whose run ended in status 'error' is NOT an empty feed: its fetch
+    failed, so items_fetched = 0 says nothing about the source. Those rows
+    are counted and left to check_source_health, which knows how long each
+    has been failing — one root cause, one alert line."""
     now = now or datetime.now(timezone.utc)
     try:
         status_rows = _fetch_source_status()
@@ -955,9 +1121,12 @@ def check_fetched_vs_filtered(now=None):
               if (_parse_ts(r.get('last_check')) or datetime.min.replace(tzinfo=timezone.utc)) >= active_cut]
     stale = len(status_rows) - len(latest)
 
-    fetched0, filtered, producing, unknown = [], [], [], 0
+    fetched0, filtered, producing, unknown, errored = [], [], [], 0, 0
     groups = {}               # feed_label → fresh feeds with a measured items_fetched
     for r in latest:
+        if r.get('status') == 'error':
+            errored += 1      # a failed fetch, not an empty feed — Source health owns it
+            continue
         fetched = r.get('items_fetched')
         if fetched is None:
             unknown += 1          # row written before the column existed
@@ -991,7 +1160,9 @@ def check_fetched_vs_filtered(now=None):
             dead.append(label if names == [label] else f'{label} [{", ".join(names)}]')
 
     counts = (f'{len(producing)} producing · {len(filtered)} all filtered · '
-              f'{len(fetched0)} fetched 0 (of {len(latest)} feeds in the latest run'
+              f'{len(fetched0)} fetched 0'
+              + (f' · {errored} errored (see Source health)' if errored else '')
+              + f' (of {len(latest)} feeds in the latest run'
               + (f'; {unknown} not yet measured' if unknown else '')
               + (f'; {stale} retired/stale feeds ignored' if stale else '') + ')')
     info = (f' · fetched 0 while a sibling feed under the same label fetched: '

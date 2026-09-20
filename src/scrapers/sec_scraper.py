@@ -11,6 +11,8 @@ Docs: https://www.sec.gov/os/accessing-edgar-data
 import html
 import re
 import time
+
+import requests
 from datetime import datetime, timedelta, timezone, date
 from typing import List, Dict, Any, Optional, Set, Tuple
 
@@ -79,11 +81,34 @@ MA_AGREEMENT_PHRASES = (
 )
 
 
+# ── EFTS resilience ─────────────────────────────────────────────────────────
+# A full-text search request can fail transiently (5xx, 429, a dropped
+# connection, an error page served as HTML). Every EFTS call goes through
+# SECScraper._efts_get: a few tries with a short pause, then a breaker, so a
+# real upstream outage costs ONE exhausted call per run instead of one per
+# query. A skipped run loses nothing: the next run re-reads the same lookback
+# window and URL dedup drops the repeats.
+EFTS_MAX_TRIES = 3
+EFTS_BACKOFF_SECONDS = (2, 6)     # pause before try 2 and before try 3
+EFTS_BREAKER_SECONDS = 600        # after an exhausted call, skip EFTS this long
+
+
+class EFTSUnavailable(RuntimeError):
+    """SEC full-text search could not be used this run: retries exhausted,
+    the breaker is open, or an item's content gate could not be built."""
+
+
 class SECScraper(BaseScraper):
     """Scraper for SEC EDGAR 8-K filings (officer changes + M&A)."""
 
     EFTS_URL = 'https://efts.sec.gov/LATEST/search-index'
     SUBMISSIONS_URL = 'https://data.sec.gov/submissions/CIK{cik:010d}.json'
+
+    # Shared by every SEC scraper in the process (FormDScraper subclasses this
+    # class and never rebinds it): once one query exhausts its retries, the
+    # remaining queries of the run skip the network. Time-based so a
+    # long-lived process (--daemon) tries again on a later cycle.
+    _efts_breaker: Dict[str, Any] = {'open_until': 0.0, 'reason': ''}
 
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
@@ -137,6 +162,9 @@ class SECScraper(BaseScraper):
         self._ma_adsh_set: set = set()
         self._ma_prefetch_ok: bool = False
         self._ma_skipped_count: int = 0
+        # item_code → why its content gate could not be built this run. An
+        # item listed here is skipped (status 'error'), never ingested ungated.
+        self._prefetch_error: Dict[str, str] = {}
         # gates.py policy counters (per kind / per verdict), reset per run
         self._entity_skipped: Dict[str, int] = {}
         self._sic_verdict_skipped: Dict[str, int] = {}
@@ -156,23 +184,42 @@ class SECScraper(BaseScraper):
         # calls, throttled). CFO set routes to CFO_HIRE; the wider finance
         # set is the KEEP filter — 5.02 filings outside it (board elections,
         # CEO changes) are dropped at ingestion.
-        self._cfo_adsh_set = self._fetch_phrase_adsh_set('Chief Financial Officer')
-        self._finance_adsh_set = (
-            self._cfo_adsh_set
-            | self._fetch_phrase_adsh_set('Chief Accounting Officer')
-            | self._fetch_phrase_adsh_set('Controller')
-        )
-        # Fail open: if the prefetch returned nothing (EFTS outage / rate
-        # limit), keep the old ingest-everything behavior rather than
-        # silently dropping ALL 5.02 filings. A real 7-day window always
+        #
+        # A prefetch that FAILS (request error after retries) is different
+        # from one that answers with nothing. A failed or half-built set
+        # would mistype filings (a CFO change filed as a generic officer
+        # change) or wave every filing through ungated, and a saved event is
+        # never re-typed — so the item is skipped this run instead and
+        # reported as an error. The next run re-reads the same window.
+        self._prefetch_error = {}
+        self._cfo_adsh_set, self._finance_adsh_set = set(), set()
+        try:
+            self._cfo_adsh_set = self._fetch_phrase_adsh_set('Chief Financial Officer')
+            self._finance_adsh_set = (
+                self._cfo_adsh_set
+                | self._fetch_phrase_adsh_set('Chief Accounting Officer')
+                | self._fetch_phrase_adsh_set('Controller')
+            )
+        except Exception as e:
+            self._prefetch_error['5.02'] = str(e)
+            self._cfo_adsh_set, self._finance_adsh_set = set(), set()
+            print(f'  - SEC 5.02 finance prefetch failed — item skipped this run: {e}')
+        # Fail open ONLY on an empty answer: if the prefetch succeeded but
+        # returned nothing, keep the old ingest-everything behavior rather
+        # than silently dropping ALL 5.02 filings. A real 7-day window always
         # has finance-related 5.02 filings in territory.
         self._finance_prefetch_ok = bool(self._finance_adsh_set)
 
         # Item 1.01 content gate: union of filings whose full text carries a
-        # definitive M&A agreement phrase. Same fail-open rule as above.
+        # definitive M&A agreement phrase. Same rules as above.
         self._ma_adsh_set = set()
-        for phrase in MA_AGREEMENT_PHRASES:
-            self._ma_adsh_set |= self._fetch_phrase_adsh_set(phrase, item_code='1.01')
+        try:
+            for phrase in MA_AGREEMENT_PHRASES:
+                self._ma_adsh_set |= self._fetch_phrase_adsh_set(phrase, item_code='1.01')
+        except Exception as e:
+            self._prefetch_error['1.01'] = str(e)
+            self._ma_adsh_set = set()
+            print(f'  - SEC 1.01 M&A prefetch failed — item skipped this run: {e}')
         self._ma_prefetch_ok = bool(self._ma_adsh_set)
 
         # Reset per-run counters so the counts reflect this scrape only
@@ -182,6 +229,10 @@ class SECScraper(BaseScraper):
         for item_code, item_def in ITEM_DEFINITIONS.items():
             source_label = f'SEC 8-K Item {item_code}'
             try:
+                if item_code in self._prefetch_error:
+                    raise EFTSUnavailable(
+                        'content gate not built, item skipped this run — '
+                        f'{self._prefetch_error[item_code]}')
                 events, items_fetched = self._scrape_one_item(item_code, item_def)
                 all_events.extend(events)
                 # items_fetched = filings EFTS returned for this item (after
@@ -328,38 +379,82 @@ class SECScraper(BaseScraper):
         MAX_PAGES = 5  # 500 hits max — covers typical 7-day window with headroom
 
         adsh_set: set = set()
-        try:
-            for page in range(MAX_PAGES):
-                params = {
-                    # EFTS treats quoted phrases as required; space = AND.
-                    'q':         f'"{phrase}" "Item {item_code}"',
-                    'forms':     '8-K',
-                    'dateRange': 'custom',
-                    'startdt':   startdt,
-                    'enddt':     enddt,
-                    'locationCodes': ','.join(sorted(self.territory_codes)),
-                    'from':      page * 100,  # EFTS pagination: 100 per page
-                }
-                resp = self.session.get(
-                    self.EFTS_URL, params=params, timeout=self.timeout
-                )
+        for page in range(MAX_PAGES):
+            params = {
+                # EFTS treats quoted phrases as required; space = AND.
+                'q':         f'"{phrase}" "Item {item_code}"',
+                'forms':     '8-K',
+                'dateRange': 'custom',
+                'startdt':   startdt,
+                'enddt':     enddt,
+                'locationCodes': ','.join(sorted(self.territory_codes)),
+                'from':      page * 100,  # EFTS pagination: 100 per page
+            }
+            # Raises when the request cannot be completed — the caller skips
+            # the item rather than gate it on a partial set (see scrape()).
+            hits = self._efts_get(params).get('hits', {}).get('hits', []) or []
+            if not hits:
+                break  # exhausted — stop early
+            for h in hits:
+                adsh = (h.get('_source') or {}).get('adsh', '')
+                if adsh:
+                    adsh_set.add(adsh)
+            self.delay_request()
+            if len(hits) < 100:
+                break  # last page (partial) — done
+        print(f'  - SEC {item_code} prefetch: {len(adsh_set)} filings mention '
+              f'"{phrase}"')
+        return adsh_set
+
+    # ── One EFTS request, with retries and a per-run breaker ──────────────
+
+    @classmethod
+    def reset_efts_breaker(cls) -> None:
+        """Close the shared breaker (tests; a fresh process starts closed)."""
+        SECScraper._efts_breaker.update(open_until=0.0, reason='')
+
+    def _efts_get(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """One EFTS search request → parsed JSON.
+
+        Retries what is plausibly transient — HTTP 5xx / 429, connection and
+        timeout errors, a body that is not JSON — up to EFTS_MAX_TRIES with
+        EFTS_BACKOFF_SECONDS between tries. Any other 4xx is OUR request
+        being wrong: raised at once, no retry, breaker untouched.
+
+        When the tries run out the shared breaker opens for
+        EFTS_BREAKER_SECONDS and every later call raises EFTSUnavailable
+        without touching the network, which bounds what an upstream outage
+        can cost one scrape job.
+        """
+        breaker = SECScraper._efts_breaker
+        if time.monotonic() < breaker['open_until']:
+            raise EFTSUnavailable(
+                f'SEC search skipped — unavailable earlier this run ({breaker["reason"]})')
+
+        last = 'no response'
+        for attempt in range(1, EFTS_MAX_TRIES + 1):
+            try:
+                resp = self.session.get(self.EFTS_URL, params=params, timeout=self.timeout)
                 resp.raise_for_status()
-                hits = resp.json().get('hits', {}).get('hits', []) or []
-                if not hits:
-                    break  # exhausted — stop early
-                for h in hits:
-                    adsh = (h.get('_source') or {}).get('adsh', '')
-                    if adsh:
-                        adsh_set.add(adsh)
-                self.delay_request()
-                if len(hits) < 100:
-                    break  # last page (partial) — done
-            print(f'  - SEC {item_code} prefetch: {len(adsh_set)} filings mention '
-                  f'"{phrase}"')
-            return adsh_set
-        except Exception as e:
-            print(f'  - SEC {item_code} prefetch for "{phrase}" failed: {e}')
-            return adsh_set  # return whatever we got before the error
+                return resp.json()
+            except requests.HTTPError as e:
+                code = getattr(getattr(e, 'response', None), 'status_code', None)
+                if isinstance(code, int) and code < 500 and code != 429:
+                    raise
+                last = f'HTTP {code}' if code else 'HTTP error'
+            except requests.RequestException as e:
+                last = type(e).__name__          # connection reset, timeout, truncated body…
+            except ValueError:
+                last = 'response was not JSON'   # an error page served with a 200
+            if attempt < EFTS_MAX_TRIES:
+                pause = EFTS_BACKOFF_SECONDS[min(attempt - 1, len(EFTS_BACKOFF_SECONDS) - 1)]
+                print(f'    SEC search: {last} — retrying in {pause}s '
+                      f'(try {attempt + 1} of {EFTS_MAX_TRIES})')
+                time.sleep(pause)
+
+        reason = f'{last} after {EFTS_MAX_TRIES} tries'
+        breaker.update(open_until=time.monotonic() + EFTS_BREAKER_SECONDS, reason=reason)
+        raise EFTSUnavailable(f'SEC search unavailable this run ({reason})')
 
     # ── SIC code prefilter ───────────────────────────────────────────────
     # Block off-target industries at SCRAPE time using the filer's SIC code
@@ -472,9 +567,7 @@ class SECScraper(BaseScraper):
                 'locationCodes': loc,
                 'from':      page * 100,
             }
-            resp = self.session.get(self.EFTS_URL, params=params, timeout=self.timeout)
-            resp.raise_for_status()
-            hits = resp.json().get('hits', {}).get('hits', []) or []
+            hits = self._efts_get(params).get('hits', {}).get('hits', []) or []
             self.delay_request()
             if not hits:
                 break
@@ -570,7 +663,9 @@ class SECScraper(BaseScraper):
                 self._board_skipped_count += 1
                 return None
             else:
-                event_type = EventType.EXECUTIVE_HIRE  # prefetch failed — fail open
+                # Prefetch answered with nothing — fail open. (A prefetch that
+                # FAILED never gets here: scrape() skips the item.)
+                event_type = EventType.EXECUTIVE_HIRE
 
         # Item 1.01 content gate: a material-definitive-agreement filing is
         # M&A only when its full text carries a merger / purchase-agreement
@@ -709,10 +804,7 @@ class FormDScraper(SECScraper):
                     'startdt': startdt, 'enddt': enddt,
                     'locationCodes': loc, 'from': page * 100,
                 }
-                resp = self.session.get(self.EFTS_URL, params=params,
-                                        timeout=self.timeout)
-                resp.raise_for_status()
-                hits = resp.json().get('hits', {}).get('hits', []) or []
+                hits = self._efts_get(params).get('hits', {}).get('hits', []) or []
                 if not hits:
                     break
                 items_fetched += len(hits)

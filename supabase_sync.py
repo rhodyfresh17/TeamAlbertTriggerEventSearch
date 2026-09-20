@@ -22,6 +22,9 @@ A.J. runs by hand, so this script PROBES for them and degrades gracefully:
   * source_status.items_fetched / filtered_out (raw candidates vs. gate drops,
     so "feed returned 0" and "all filtered" are distinguishable) are sent only
     when present.
+  * source_status.consecutive_failures / last_success (failure streaks, so a
+    reader can tell one failed run from a source that has been down for
+    days) are sent only when present, and never as NULL.
   * Stale source_status rows (last_check older than STALE_STATUS_DAYS = 60)
     are skipped on push and reaped from Supabase at the end of each run
     (--no-reap to skip). Age is the ONLY criterion the reaper has — it
@@ -101,6 +104,13 @@ SOURCE_COLUMN = 'source'
 
 # source_status counters from the same migration; same probe-then-send rule.
 STATUS_COUNTER_COLUMNS = ('items_fetched', 'filtered_out')
+
+# Failure streaks (supabase/migrations/004_source_status_streaks.sql), computed
+# by the scraper in SQLite (src/database.py save_source_status) and carried
+# here unchanged: how many runs in a row a source ended in 'error', and when
+# it last did not. Probe-then-send like the counters, with one difference —
+# a None is never sent (a fresh SQLite file must not blank a learned value).
+STATUS_STREAK_COLUMNS = ('consecutive_failures', 'last_success')
 
 # Stale source_status rows: a feed removed from config is never saved again,
 # so its last_check freezes; after this many days it is dropped from the push
@@ -206,25 +216,24 @@ def get_source_statuses_from_db(db_path: str = 'trigger_events.db') -> List[dict
     cursor = conn.cursor()
 
     base_cols = 'source_name, source_type, last_check, status, error_message, events_found'
-    try:
-        cursor.execute(f'''
-            SELECT {base_cols}, items_fetched, filtered_out
-            FROM source_status
-            ORDER BY source_type, source_name
-        ''')
-        statuses = [dict(row) for row in cursor.fetchall()]
-    except sqlite3.OperationalError:
-        # Pre-Phase-2 SQLite (no counter columns) or no table at all. The
-        # counters simply read as absent; the rest of the sync is unchanged.
+    # Newest schema first; an older SQLite file (restored from the Actions
+    # cache before the scraper added a column) or no table at all simply
+    # reads with fewer columns — the missing ones count as absent and the
+    # rest of the sync is unchanged.
+    statuses = []
+    for extra in (', items_fetched, filtered_out, consecutive_failures, last_success',
+                  ', items_fetched, filtered_out',
+                  ''):
         try:
             cursor.execute(f'''
-                SELECT {base_cols}
+                SELECT {base_cols}{extra}
                 FROM source_status
                 ORDER BY source_type, source_name
             ''')
             statuses = [dict(row) for row in cursor.fetchall()]
+            break
         except sqlite3.OperationalError:
-            statuses = []
+            continue
 
     conn.close()
     return statuses
@@ -331,13 +340,17 @@ def sync_events(client, events: List[dict], batch_size: int = BATCH_SIZE,
 
 
 def sync_source_statuses(client, statuses: List[dict],
-                         counter_columns: Iterable[str] = ()) -> int:
+                         counter_columns: Iterable[str] = (),
+                         streak_columns: Iterable[str] = ()) -> int:
     """Upsert source_status rows (per-row, keyed on source_name).
 
     `counter_columns` = the subset of STATUS_COUNTER_COLUMNS the caller found
     live; those keys are added to every row (None when the local SQLite
-    predates the counters). With none present the payload is unchanged."""
+    predates the counters). `streak_columns` = the live subset of
+    STATUS_STREAK_COLUMNS; a streak key is added only when the local value is
+    not None. With none present the payload is unchanged."""
     counters = tuple(counter_columns)
+    streaks = tuple(streak_columns)
     synced = 0
     for status in statuses:
         try:
@@ -351,6 +364,9 @@ def sync_source_statuses(client, statuses: List[dict],
             }
             for col in counters:
                 data[col] = status.get(col)
+            for col in streaks:
+                if status.get(col) is not None:
+                    data[col] = status[col]
             client.table('source_status').upsert(data, on_conflict='source_name').execute()
             synced += 1
         except Exception as e:
@@ -446,7 +462,8 @@ def print_dry_run(events: List[dict], window: int, stale: List[dict] = (),
     print(f"Rows to upsert: {len(events)}  (batches of {BATCH_SIZE}, on_conflict='id')")
     print(f"Columns sent:   {', '.join(SCRAPE_OWNED_COLUMNS)}")
     print(f"  + if live:    {SOURCE_COLUMN} (events); "
-          f"{', '.join(STATUS_COUNTER_COLUMNS)} (source_status) — probed per run")
+          f"{', '.join(STATUS_COUNTER_COLUMNS + STATUS_STREAK_COLUMNS)} (source_status) "
+          f"— probed per run")
     print(f"Never sent:     {', '.join(sorted(NEVER_SYNC_COLUMNS))}")
     if events:
         print("Sample payload (first row):")
@@ -502,10 +519,13 @@ def sync_to_supabase(db_path: str = 'trigger_events.db',
     # One probe per run decides the optional typed columns for EVERY row, so
     # a batch never mixes key sets (PostgREST rejects that).
     include_source = SOURCE_COLUMN in _present_columns(client, 'events', (SOURCE_COLUMN,))
-    counter_columns = [c for c in STATUS_COUNTER_COLUMNS
-                       if c in _present_columns(client, 'source_status', STATUS_COUNTER_COLUMNS)]
+    live_status_columns = _present_columns(
+        client, 'source_status', STATUS_COUNTER_COLUMNS + STATUS_STREAK_COLUMNS)
+    counter_columns = [c for c in STATUS_COUNTER_COLUMNS if c in live_status_columns]
+    streak_columns = [c for c in STATUS_STREAK_COLUMNS if c in live_status_columns]
     print(f"Live typed columns: events.source={'yes' if include_source else 'no'}; "
-          f"source_status counters={', '.join(counter_columns) or 'none'}")
+          f"source_status counters={', '.join(counter_columns) or 'none'}; "
+          f"streaks={', '.join(streak_columns) or 'none'}")
 
     if not events:
         print(f"No events discovered in the last {window} days — nothing to upsert")
@@ -519,7 +539,8 @@ def sync_to_supabase(db_path: str = 'trigger_events.db',
         print(f"Skipped {len(stale_statuses)} stale local source status row(s) "
               f"(last_check < {stale_cutoff})")
     if fresh_statuses:
-        synced_statuses = sync_source_statuses(client, fresh_statuses, counter_columns)
+        synced_statuses = sync_source_statuses(client, fresh_statuses, counter_columns,
+                                               streak_columns)
         print(f"Synced {synced_statuses}/{len(fresh_statuses)} source statuses to Supabase")
 
     if reap:

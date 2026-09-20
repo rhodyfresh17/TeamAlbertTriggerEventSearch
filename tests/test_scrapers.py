@@ -773,6 +773,13 @@ PHASE3_FEEDS = [
 ]
 
 
+# Feeds that stay in the config DISABLED: the publisher refuses the hosted CI
+# runner (HTTP 403 on every run), so an enabled entry only ever reports an
+# error. Flipping one back on needs a fetch path that is not refused — this
+# set is what makes that a deliberate change instead of a stray edit.
+REFUSED_BY_PUBLISHER = {'HomeCare Magazine', 'Private Equity Insights'}
+
+
 def _phase3_config():
     """A compact stand-in for config.example.yaml: the real territory shape,
     the finance-leader keyword list, a mega-cap blocklist — and no bank
@@ -1359,8 +1366,12 @@ class TestPhase3FeedConfig(unittest.TestCase):
             self.assertEqual(names.count(name), 1, name)
             self.assertEqual(urls.count(url), 1, url)
             self.assertEqual(by_name[name]['url'], url, name)
-            self.assertTrue(by_name[name].get('enabled', True), name)
+            self.assertEqual(by_name[name].get('enabled', True),
+                             name not in REFUSED_BY_PUBLISHER, name)
             self.assertEqual(by_name[name].get('default_region'), default_region, name)
+        for name in REFUSED_BY_PUBLISHER:
+            self.assertEqual(names.count(name), 1, name)   # kept, not deleted
+            self.assertIs(by_name[name].get('enabled', True), False, name)
         self.assertNotIn(PRN_FIREHOSE_URL, urls)          # the all-news firehose is gone
         regions = {r.lower() for r in cfg['territory']['regions']}
         for feed in feeds:

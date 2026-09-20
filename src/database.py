@@ -86,7 +86,15 @@ class DatabaseManager:
             # tell "feed returned 0" apart from "everything was filtered".
             # Additive + idempotent ALTERs because the SQLite file is restored
             # from the GitHub Actions cache with whatever schema it last had.
-            for column in ('items_fetched INTEGER', 'filtered_out INTEGER'):
+            #
+            # Failure streaks: consecutive_failures = runs in a row this source
+            # ended in status 'error' (0 after any run that did not);
+            # last_success = when it last ended in anything else. One row per
+            # source is overwritten every run, so without these a reader
+            # cannot tell a single failed run from a source that has been
+            # down for days.
+            for column in ('items_fetched INTEGER', 'filtered_out INTEGER',
+                           'consecutive_failures INTEGER', 'last_success TEXT'):
                 try:
                     cursor.execute(f'ALTER TABLE source_status ADD COLUMN {column}')
                 except sqlite3.OperationalError:
@@ -372,23 +380,42 @@ class DatabaseManager:
 
         items_fetched / filtered_out are None for scrapers that do not
         report counters yet — NULL in SQLite, so readers can tell "unknown"
-        from a real 0."""
+        from a real 0.
+
+        The failure streak is carried forward from the row being replaced:
+        status 'error' adds one to consecutive_failures and keeps
+        last_success; any other status ('success', 'partial') resets the
+        streak to 0 and stamps last_success."""
+        now = datetime.now().isoformat()
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
+            cursor.execute(
+                'SELECT consecutive_failures, last_success FROM source_status '
+                'WHERE source_name = ?', (source_name,))
+            previous = cursor.fetchone() or (None, None)
+            if status == 'error':
+                consecutive_failures = (previous[0] or 0) + 1
+                last_success = previous[1]
+            else:
+                consecutive_failures = 0
+                last_success = now
             cursor.execute('''
                 INSERT OR REPLACE INTO source_status
                 (source_name, source_type, last_check, status, error_message,
-                 events_found, items_fetched, filtered_out)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 events_found, items_fetched, filtered_out,
+                 consecutive_failures, last_success)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 source_name,
                 source_type,
-                datetime.now().isoformat(),
+                now,
                 status,
                 error_message,
                 events_found,
                 items_fetched,
                 filtered_out,
+                consecutive_failures,
+                last_success,
             ))
             conn.commit()
 
@@ -398,7 +425,8 @@ class DatabaseManager:
             cursor = conn.cursor()
             cursor.execute('''
                 SELECT source_name, source_type, last_check, status, error_message,
-                       events_found, items_fetched, filtered_out
+                       events_found, items_fetched, filtered_out,
+                       consecutive_failures, last_success
                 FROM source_status
                 ORDER BY source_type, source_name
             ''')
@@ -413,6 +441,8 @@ class DatabaseManager:
                     'events_found': row[5],
                     'items_fetched': row[6],
                     'filtered_out': row[7],
+                    'consecutive_failures': row[8],
+                    'last_success': row[9],
                 }
                 for row in rows
             ]
