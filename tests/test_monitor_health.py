@@ -1427,6 +1427,17 @@ def test_source_health_many_upstreams_in_one_run_fails(monkeypatch):
     assert msg.startswith(f'{mh.SOURCE_FAIL_UPSTREAMS + 1} different upstreams failed in the same run')
 
 
+def test_source_health_alert_text_stays_one_short_post(monkeypatch):
+    broken = [_fresh_status(source_name=f'Journal {i:02d}', source_type='rss', status='error',
+                            consecutive_failures=1, error_message='Timeout: read timed out')
+              for i in range(40)]
+    _status(monkeypatch, _healthy() + broken)
+    status, msg = mh.check_source_health(now=NOW)
+    assert status == mh.FAIL
+    assert msg.count('Journal ') == mh.SOURCE_LIST_MAX and f'+{40 - mh.SOURCE_LIST_MAX} more' in msg
+    assert len(msg) < 1500
+
+
 def test_source_health_before_migration_counts_upstreams_not_rows(monkeypatch):
     """Six errored ROWS used to be a FAIL. Four of them are one upstream; with
     no streak columns yet the check says so and names the migration."""

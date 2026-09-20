@@ -636,6 +636,7 @@ SOURCE_FAIL_UPSTREAMS = 5    # more than this many DIFFERENT upstreams failing i
 SEC_UPSTREAM = 'SEC search'  # every sec_edgar feed rides on the same search endpoint
 STREAK_NOTE = ('(failure streaks not measurable yet — run '
                'supabase/migrations/004_source_status_streaks.sql)')
+SOURCE_LIST_MAX = 8          # upstreams named per list before "+n more" (the alert is one chat post)
 
 
 def _upstream(row):
@@ -687,6 +688,11 @@ def _describe_upstream(upstream, rows, now, measurable):
     oks = [dt for dt in (_parse_ts(r.get('last_success')) for r in rows) if dt is not None]
     last_ok = f'last OK {_ago(max(oks), now)}' if oks else 'no success on record'
     return f'{head}: {error} — {n} run{"s" if n != 1 else ""} in a row, {last_ok}'
+
+
+def _join_capped(lines, limit=SOURCE_LIST_MAX):
+    shown = '; '.join(lines[:limit])
+    return shown + (f'; +{len(lines) - limit} more' if len(lines) > limit else '')
 
 
 def _producing_upstreams(groups, now):
@@ -776,16 +782,16 @@ def check_source_health(now=None):
     def _tail(*parts):
         return ' '.join(p for p in parts if p)
 
-    also = ('Failing repeatedly: ' + '; '.join(repeating) + '.') if repeating else ''
-    once = ('Failed the latest run only (retried next run): ' + '; '.join(blips) + '.') if blips else ''
+    also = ('Failing repeatedly: ' + _join_capped(repeating) + '.') if repeating else ''
+    once = ('Failed the latest run only (retried next run): ' + _join_capped(blips) + '.') if blips else ''
 
     if len(groups) > SOURCE_FAIL_UPSTREAMS:
         return FAIL, _tail(
             f'{len(groups)} different upstreams failed in the same run — that many at once points at '
             f'the scraper\'s side (network or a bad deploy), not theirs: '
-            + '; '.join(down + repeating + blips) + '.', counts + note)
+            + _join_capped(down + repeating + blips) + '.', counts + note)
     if down:
-        return FAIL, _tail(f'DOWN {SOURCE_FAIL_STREAK}+ runs in a row: ' + '; '.join(down) + '.',
+        return FAIL, _tail(f'DOWN {SOURCE_FAIL_STREAK}+ runs in a row: ' + _join_capped(down) + '.',
                            also, once, counts + note)
     if repeating:
         return WARN, _tail(also, once, counts + note)
@@ -794,7 +800,7 @@ def check_source_health(now=None):
     if blips:
         lead = (' · failed the latest run only (retried next run, nothing lost): ' if measurable
                 else ' · errored in the latest run, for how long is unknown: ')
-        return PASS, counts + lead + '; '.join(blips) + note
+        return PASS, counts + lead + _join_capped(blips) + note
     return PASS, counts
 
 
