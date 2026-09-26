@@ -609,7 +609,7 @@ loosen without A.J.
 
 ### Scrapers (`src/scrapers/`)
 - **`base.py`** — `BaseScraper` parent class. **`extract_company_name()`** (40+ verb patterns, case-insensitive) and **`matches_industry()`** live here. Both used heavily downstream.
-- **`rss_scraper.py`** — handles all RSS feeds in `config.sources.rss_feeds`
+- **`rss_scraper.py`** — handles all RSS feeds in `config.sources.rss_feeds`. Each feed is parsed strictly first; one the strict parser rejects is repaired once by `repair_feed_xml` (undeclared namespace prefixes, a bare `&` — e.g. inside an image URL — HTML-only entities like `&nbsp;`, XML-forbidden control characters; CDATA and comments untouched) and parsed again. The Actions log prints `<feed>: repaired malformed feed XML (…)` when that happens; a feed that still fails reports the second error. Tests: `TestFeedXmlRepair` in `tests/test_scrapers.py`.
 - **`sec_scraper.py`** — SEC EDGAR EFTS search. Item 5.02 (officer changes), 2.01 (M&A completion), 1.01 (material agreements). **Pre-fetches CFO-related accession numbers in one extra EFTS call, paginated to 5 pages.** Every EFTS request (8-K searches, the phrase prefetches, Form D pages) goes through `_efts_get`: `EFTS_MAX_TRIES` (3) with `EFTS_BACKOFF_SECONDS` on 5xx / 429 / connection errors / a non-JSON body; any other 4xx raises at once. Exhausted tries open a breaker shared by `SECScraper` and `FormDScraper` for `EFTS_BREAKER_SECONDS`, so an upstream outage costs one exhausted call per run and every SEC feed reports `error` ("SEC search unavailable this run"). A prefetch that FAILS skips its item for the run (a half-built CFO set would mistype filings, and a saved event is never re-typed); the next run re-reads the same lookback window, so nothing is lost. Tests: `tests/test_sec_efts.py`.
 - **`adzuna_scraper.py`** — Adzuna jobs API. Throttled to noon UTC; since
   2026-08-09 runs `title_only` queries ('controller','cfo') with
@@ -962,6 +962,7 @@ Newest first (v2 phases on top; the older rows are the v1 history):
 
 | Commit | What |
 |---|---|
+| 2026-09-26 | Feed XML repair: a feed the strict parser rejects (a publisher shipped a bare `&` in image URLs, which failed the whole feed every run) is repaired once and re-parsed — `rss_scraper.repair_feed_xml` |
 | 2026-09-20 | Source health on persistence: EFTS retry + shared breaker (`_efts_get`), failed prefetch skips its item, `consecutive_failures` / `last_success` per feed (migration 004), per-upstream alerting, `Fetched vs filtered` ignores errored rows, two publisher-refused feeds disabled |
 | `4a5f24b` | v2 Phase 4 (2026-09-08): accounts table + backfill, one grade per account, hashtag guards, hire-subject detection, nightly expiry, golden set in CI, orphans deleted — see §0b |
 | `b3bdfb9` | v2 Phase 3 (2026-09-08): finance-leader feeds + detector fixes, Google News revived, free oracles, sec_iapd trigger, domains, supply scorecard — see §0b |

@@ -6,6 +6,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from email.utils import parsedate_to_datetime
+from html.entities import name2codepoint
 from requests.exceptions import Timeout, ReadTimeout, ConnectTimeout
 
 from .base import BaseScraper, finance_leader_hire_kind
@@ -78,6 +79,49 @@ def sanitize_feed_xml(raw: bytes) -> bytes:
     patched_root = root_tag[:-1] + injections + '>'
     text = text.replace(root_tag, patched_root, 1)
     return text.encode('utf-8')
+
+
+# Other mistakes publishers ship that a strict XML parser rejects outright: a
+# bare "&" (typically inside an image URL, "?w=457&quality=82"), an HTML-only
+# entity XML does not define (&nbsp;, &rsquo;), and control characters XML 1.0
+# forbids. repair_feed_xml fixes those plus the undeclared namespace prefixes
+# above. It runs ONLY after a strict parse has failed, so a well-formed feed is
+# never rewritten, and it copies CDATA sections and comments untouched — a
+# bare "&" is legal inside them.
+_XML_PREDEFINED_ENTITIES = {b'amp', b'lt', b'gt', b'quot', b'apos'}
+_UNTOUCHABLE_RE = re.compile(rb'(<!\[CDATA\[.*?\]\]>|<!--.*?-->)', re.S)
+_NAMED_ENTITY_RE = re.compile(rb'&([A-Za-z][A-Za-z0-9]*);')
+_BARE_AMP_RE = re.compile(rb'&(?!(?:#[0-9]+|#x[0-9A-Fa-f]+|[A-Za-z_:][\w.:-]*);)')
+_XML_ILLEGAL_CHARS_RE = re.compile(rb'[\x00-\x08\x0b\x0c\x0e-\x1f]')
+
+
+def _named_entity(match) -> bytes:
+    name = match.group(1)
+    if name in _XML_PREDEFINED_ENTITIES:
+        return match.group(0)
+    codepoint = name2codepoint.get(name.decode('ascii'))
+    if codepoint:
+        return b'&#%d;' % codepoint           # &nbsp; → &#160;
+    return b'&amp;' + name + b';'             # not an entity anywhere: keep it as text
+
+
+def _repair_markup(segment: bytes) -> bytes:
+    segment = _XML_ILLEGAL_CHARS_RE.sub(b'', segment)
+    segment = _NAMED_ENTITY_RE.sub(_named_entity, segment)
+    return _BARE_AMP_RE.sub(b'&amp;', segment)
+
+
+def repair_feed_xml(raw: bytes) -> bytes:
+    """Best-effort repair of a feed the strict parser rejected: declare
+    missing namespace prefixes (sanitize_feed_xml), then — outside CDATA
+    sections and comments — drop XML-forbidden control characters, turn
+    HTML-only named entities into numeric references, and escape every "&"
+    that does not start a valid reference. Works on bytes with ASCII-only
+    edits, so the feed's declared encoding is respected."""
+    raw = sanitize_feed_xml(raw)
+    # split() with one capture group alternates: markup, untouchable, markup…
+    parts = _UNTOUCHABLE_RE.split(raw)
+    return b''.join(part if i % 2 else _repair_markup(part) for i, part in enumerate(parts))
 
 
 def strip_html(text: str) -> str:
@@ -176,16 +220,16 @@ class RSSScraper(BaseScraper):
             response = self.session.get(url, timeout=self.timeout)
             response.raise_for_status()
 
-            # Parse XML. Sanitize first to inject any namespace prefixes the
-            # feed uses but forgot to declare (common with media:/content:),
-            # which would otherwise fail strict parsing with 'unbound prefix'.
+            # Parse XML strictly first. A feed the strict parser rejects is
+            # repaired once (repair_feed_xml: undeclared namespace prefixes,
+            # a bare "&", HTML-only entities, forbidden control characters)
+            # and parsed again; if that also fails, the second error is the
+            # feed's error for this run.
             try:
                 root = ET.fromstring(response.content)
             except ET.ParseError as pe:
-                if 'unbound prefix' in str(pe):
-                    root = ET.fromstring(sanitize_feed_xml(response.content))
-                else:
-                    raise
+                root = ET.fromstring(repair_feed_xml(response.content))
+                print(f"  - {feed_name}: repaired malformed feed XML ({pe})")
 
             # Handle both RSS and Atom feeds
             items = root.findall('.//item')  # RSS

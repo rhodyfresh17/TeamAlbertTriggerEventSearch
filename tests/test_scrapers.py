@@ -1725,6 +1725,88 @@ class TestBlocklistWholeWordLongForms(unittest.TestCase):
         self.assertNotIn('Pipeline', _phase3_config()['territory']['excluded_industries'])
 
 
+from src.scrapers.rss_scraper import repair_feed_xml  # noqa: E402
+
+# A feed with the mistakes publishers actually ship (all synthetic): a bare
+# "&" inside an image URL attribute, HTML-only entities, a forbidden control
+# character, a word joined by "&" — plus a CDATA section and a comment, where
+# a bare "&" is legal and must survive untouched.
+_MALFORMED_FEED = (
+    b'<?xml version="1.0" encoding="UTF-8"?>\n'
+    b'<rss version="2.0"><channel><title>Example Wire</title>\n'
+    b'<!-- built by a CMS & friends -->\n'
+    b'<item><title>Acme Bank names new treasurer</title><link>https://example.test/a</link>\n'
+    b'<enclosure url="https://example.test/a.png?w=457&quality=82" type="image/png"/>\n'
+    b'<description><![CDATA[<img src="https://example.test/a.png?w=457&quality=82"> Q&A]]></description>\n'
+    b'</item>\n'
+    b'<item><title>Beta Credit Union&rsquo;s controller&nbsp;retires</title>'
+    b'<link>https://example.test/b</link>\n'
+    b'<description>AT&T and R&D\x0b notes &bogus; &amp; &#8217; &#x2019; &lt;done&gt;</description>\n'
+    b'</item></channel></rss>'
+)
+
+
+class TestFeedXmlRepair(unittest.TestCase):
+    """A publisher's malformed feed (a bare "&" in an image URL) made the
+    strict parser reject the WHOLE feed, run after run, until the publisher
+    fixed it. repair_feed_xml repairs the common mistakes once, and only
+    after the strict parse has failed."""
+
+    def _parsed(self):
+        return ET.fromstring(repair_feed_xml(_MALFORMED_FEED))
+
+    def test_fixture_really_breaks_the_strict_parser(self):
+        with self.assertRaises(ET.ParseError):
+            ET.fromstring(_MALFORMED_FEED)
+
+    def test_repair_parses_and_keeps_every_value(self):
+        items = self._parsed().findall('.//item')
+        self.assertEqual(len(items), 2)
+        self.assertEqual(items[0].find('enclosure').get('url'),
+                         'https://example.test/a.png?w=457&quality=82')
+        self.assertTrue(items[0].findtext('description').endswith('?w=457&quality=82"> Q&A'))
+        self.assertEqual(items[1].findtext('title'),
+                         'Beta Credit Union’s controller retires')
+        self.assertEqual(items[1].findtext('description'),
+                         'AT&T and R&D notes &bogus; & ’ ’ <done>')
+
+    def test_valid_references_and_well_formed_feeds_are_left_alone(self):
+        for body in (b'<rss><channel><title>A &amp; B &#38; C &#x26; &lt;D&gt;</title></channel></rss>',
+                     _RSS_TWO_ITEMS.encode('utf-8')):
+            self.assertEqual(repair_feed_xml(body), body)
+
+    def test_repair_also_declares_missing_namespaces(self):
+        body = (b'<rss><channel><item><title>x</title>'
+                b'<media:content url="https://example.test/c.jpg?a=1&b=2"/></item></channel></rss>')
+        root = ET.fromstring(repair_feed_xml(body))
+        content = root.find('.//{http://search.yahoo.com/mrss/}content')
+        self.assertEqual(content.get('url'), 'https://example.test/c.jpg?a=1&b=2')
+
+    def test_scrape_feed_recovers_the_malformed_feed(self):
+        scraper = RSSScraper(_phase3_config())
+        resp = MagicMock(); resp.content = _MALFORMED_FEED; resp.raise_for_status = MagicMock()
+        with patch.object(scraper.session, 'get', return_value=resp):
+            _events, error, fetched = scraper._scrape_feed('https://fixture.test/feed', 'Example Wire')
+        self.assertIsNone(error)
+        self.assertEqual(fetched, 2)
+
+    def test_scrape_feed_never_rewrites_a_well_formed_feed(self):
+        scraper = RSSScraper(_phase3_config())
+        with patch.object(scraper.session, 'get', return_value=_xml_response(_RSS_TWO_ITEMS)), \
+             patch.object(_rss_module, 'repair_feed_xml', side_effect=AssertionError('repair ran')):
+            _events, error, fetched = scraper._scrape_feed('https://fixture.test/feed', 'Clean Feed')
+        self.assertIsNone(error)
+        self.assertEqual(fetched, 2)
+
+    def test_scrape_feed_still_reports_a_feed_it_cannot_repair(self):
+        scraper = RSSScraper(_phase3_config())
+        page = '<html><body><p>Access denied<br></p></body></html>'   # an error page, not a feed
+        with patch.object(scraper.session, 'get', return_value=_xml_response(page)):
+            events, error, fetched = scraper._scrape_feed('https://fixture.test/feed', 'Broken Feed')
+        self.assertEqual((events, fetched), ([], 0))
+        self.assertIn('mismatched tag', error)
+
+
 class TestFeedRetrySleep(unittest.TestCase):
     """LOW: 45 feeds + 69 Google queries under timeout-minutes: 15 — a hung
     feed cost 30s + 60s sleep + 30s. The retry now waits 15s."""
