@@ -629,7 +629,9 @@ def check_launchd_job():
 # consecutive_failures / last_success per feed (src/database.py, synced once
 # supabase/migrations/004_source_status_streaks.sql has run) and the verdict
 # reads those. Failures are counted per UPSTREAM, not per row: several feeds
-# behind one endpoint are one failure.
+# behind one endpoint are one failure. And an upstream is only "down" when
+# none of its feeds were read: one link failing while the same source's other
+# feeds work is at most a WARN.
 SOURCE_WARN_STREAK = 2       # failed this many runs in a row → WARN
 SOURCE_FAIL_STREAK = 3       # …this many (about half a day at the 4-hourly cadence) AND it was producing → FAIL
 SOURCE_FAIL_UPSTREAMS = 5    # more than this many DIFFERENT upstreams failing in one run → FAIL (our side, not theirs)
@@ -684,19 +686,30 @@ def _recorded(rows):
     return any(r.get('consecutive_failures') is not None for r in rows)
 
 
-def _describe_upstream(upstream, rows, now, measurable):
+def _describe_upstream(upstream, rows, now, measurable, working=0):
+    """One line for a failing upstream. `working` = how many OTHER feeds of
+    the same upstream the latest run read fine; when there are any, the line
+    names the failing feeds and says the rest are working."""
     names = sorted(r.get('source_name') or '?' for r in rows)
-    head = upstream if names == [upstream] else (
-        f'{upstream} ({len(rows)} feeds)' if len(rows) > 1 else f'{upstream} [{names[0]}]')
+    if working:
+        shown = ', '.join(names[:3]) + (f' +{len(names) - 3} more' if len(names) > 3 else '')
+        head = f'{upstream} ({len(rows)} of {len(rows) + working} feeds: {shown})'
+    elif names == [upstream]:
+        head = upstream
+    else:
+        head = f'{upstream} ({len(rows)} feeds)' if len(rows) > 1 else f'{upstream} [{names[0]}]'
+    rest = ('' if not working else
+            f'; the other {upstream} feed is working' if working == 1 else
+            f'; the other {working} {upstream} feeds are working')
     error = Counter(_short_error(r.get('error_message')) for r in rows).most_common(1)[0][0]
     if not measurable:
-        return f'{head}: {error}'
+        return f'{head}: {error}{rest}'
     if not _recorded(rows):
-        return f'{head}: {error} — streak not recorded yet'
+        return f'{head}: {error} — streak not recorded yet{rest}'
     n = _streak(rows)
     oks = [dt for dt in (_parse_ts(r.get('last_success')) for r in rows) if dt is not None]
     last_ok = f'last OK {_ago(max(oks), now)}' if oks else 'no success on record'
-    return f'{head}: {error} — {n} run{"s" if n != 1 else ""} in a row, {last_ok}'
+    return f'{head}: {error} — {n} run{"s" if n != 1 else ""} in a row, {last_ok}{rest}'
 
 
 def _join_capped(lines, limit=SOURCE_LIST_MAX):
@@ -722,12 +735,16 @@ def check_source_health(now=None):
     """Are the scraper's sources answering — judged on persistence.
 
     FAIL  an upstream that produced survivors in the 28d yield window has
-          failed ≥ SOURCE_FAIL_STREAK runs in a row; or more than
-          SOURCE_FAIL_UPSTREAMS different upstreams failed in the same run
-          (that many at once is the scraper's side — network, a bad deploy).
+          failed ≥ SOURCE_FAIL_STREAK runs in a row with NONE of its feeds
+          read in the latest run; or more than SOURCE_FAIL_UPSTREAMS
+          different upstreams failed in the same run (that many at once is
+          the scraper's side — network, a bad deploy).
     WARN  any upstream at ≥ SOURCE_WARN_STREAK runs in a row — a feed that
           never produced stays a WARN however long it fails (fix its URL or
-          disable it); fewer than two productive feeds.
+          disable it), and so does a feed that keeps failing while other
+          feeds of the same upstream are read fine (the source is up; one
+          of its links is not — the line says so); fewer than two
+          productive feeds.
     PASS  the counts. An upstream that failed only the latest run is listed
           as information: the next run retries it, and every source re-reads
           a lookback window, so one missed run loses nothing.
@@ -763,6 +780,7 @@ def check_source_health(now=None):
     groups = {}
     for r in errored:
         groups.setdefault(_upstream(r), []).append(r)
+    feeds_per_upstream = Counter(_upstream(r) for r in fresh)
 
     counts = f'{len(productive)} producing · {len(silent)} silent · {len(errored)} errored'
     if errored:
@@ -776,10 +794,11 @@ def check_source_health(now=None):
 
     down, repeating, blips, unrecorded = [], [], [], []
     for up, rows in sorted(groups.items(), key=lambda kv: (-_streak(kv[1]), kv[0])):
-        line = _describe_upstream(up, rows, now, measurable)
+        working = feeds_per_upstream[up] - len(rows)     # its feeds the latest run read fine
+        line = _describe_upstream(up, rows, now, measurable, working)
         n = _streak(rows)
         if n >= SOURCE_FAIL_STREAK and producing is not None and up in producing:
-            down.append(line)
+            (repeating if working else down).append(line)
         elif n >= SOURCE_FAIL_STREAK:
             repeating.append(line + (' (could not check whether it was producing)' if producing is None
                                      else ' (never produced a lead here — fix its URL or disable the feed)'))

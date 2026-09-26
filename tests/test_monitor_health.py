@@ -1546,3 +1546,73 @@ def test_fetched_vs_filtered_errored_feed_is_not_listed_as_an_empty_sibling(monk
     status, msg = mh.check_fetched_vs_filtered(now=NOW)
     assert status == mh.PASS
     assert 'sibling' not in msg and '1 errored (see Source health)' in msg
+
+
+# ── a failing link of a working source is not "the source is down" ──────────
+
+PRN_FEEDS = ('PR Newswire', 'PR Newswire - Personnel Announcements',
+             'PR Newswire - Mergers & Acquisitions', 'PR Newswire - Financial Services')
+
+
+def _prn(failing, streak=3):
+    """The four PR Newswire feeds; the ones named in `failing` errored."""
+    rows = []
+    for name in PRN_FEEDS:
+        if name in failing:
+            rows.append(_fresh_status(
+                source_name=name, source_type='rss_feed', status='error', events_found=0, items_fetched=0,
+                consecutive_failures=streak, last_success=(NOW - timedelta(hours=18)).isoformat(),
+                error_message='503 Server Error: Service Unavailable for url: https://example.test/feed.rss/'))
+        else:
+            rows.append(_fresh_status(source_name=name, source_type='rss_feed', events_found=1, items_fetched=20,
+                                      consecutive_failures=0, last_success=(NOW - timedelta(hours=3)).isoformat()))
+    return rows
+
+
+def test_one_failing_feed_of_a_working_producing_source_warns_not_fails(monkeypatch):
+    _status(monkeypatch, _healthy() + _prn({'PR Newswire'}))
+    _events(monkeypatch, [_row(2, PRN), _row(9, PRN)])            # PR Newswire produces leads
+    status, msg = mh.check_source_health(now=NOW)
+    assert status == mh.WARN
+    assert msg.startswith('Failing repeatedly: PR Newswire (1 of 4 feeds: PR Newswire): HTTP 503 — 3 runs in a row, '
+                          'last OK 18h ago; the other 3 PR Newswire feeds are working.')
+    assert 'DOWN' not in msg
+
+
+def test_every_feed_of_a_producing_source_failing_is_still_down(monkeypatch):
+    _status(monkeypatch, _healthy() + _prn(set(PRN_FEEDS)))
+    _events(monkeypatch, [_row(2, PRN)])
+    status, msg = mh.check_source_health(now=NOW)
+    assert status == mh.FAIL
+    assert msg.startswith('DOWN 3+ runs in a row: PR Newswire (4 feeds): HTTP 503 — 3 runs in a row, last OK 18h ago.')
+    assert 'working' not in msg.split('.')[0]
+
+
+def test_one_sec_item_failing_while_sec_search_answers_is_a_warning(monkeypatch):
+    rows = _sec_errors(streak=4)
+    for r in rows[:3]:                                             # 1.01, 2.01 and 5.02 read fine
+        r.update(status='success', error_message=None, events_found=2, items_fetched=40, consecutive_failures=0)
+    _status(monkeypatch, _healthy() + rows)
+    _events(monkeypatch, [_row(1, SEC8K, 'SEC 8-K Item 5.02 — Co')])
+    status, msg = mh.check_source_health(now=NOW)
+    assert status == mh.WARN
+    assert ('SEC search (1 of 4 feeds: SEC Form D (private raises)): HTTP 500 after 3 tries — 4 runs in a row, '
+            'last OK 6h ago; the other 3 SEC search feeds are working') in msg
+
+
+def test_a_single_failed_run_of_one_feed_names_its_working_siblings(monkeypatch):
+    _status(monkeypatch, _healthy() + _prn({'PR Newswire'}, streak=1))
+    status, msg = mh.check_source_health(now=NOW)
+    assert status == mh.PASS
+    assert msg.endswith('failed the latest run only (retried next run, nothing lost): PR Newswire (1 of 4 feeds: '
+                        'PR Newswire): HTTP 503 — 1 run in a row, last OK 18h ago; the other 3 PR Newswire feeds '
+                        'are working')
+
+
+def test_two_of_four_failing_says_the_other_one_is_working(monkeypatch):
+    _status(monkeypatch, _healthy() + _prn({'PR Newswire', 'PR Newswire - Financial Services', 'PR Newswire - Mergers & Acquisitions'}, streak=2))
+    status, msg = mh.check_source_health(now=NOW)
+    assert status == mh.WARN
+    assert ('PR Newswire (3 of 4 feeds: PR Newswire, PR Newswire - Financial Services, '
+            'PR Newswire - Mergers & Acquisitions): HTTP 503 — 2 runs in a row, last OK 18h ago; '
+            'the other PR Newswire feed is working') in msg

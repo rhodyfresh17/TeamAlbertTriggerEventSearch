@@ -280,7 +280,9 @@ per feed (`src/database.py` → synced when the live columns exist,
 feeds by upstream (`_upstream`: every `sec_edgar` feed = "SEC search"; otherwise the feed label):
 one failed run = a PASS note; ≥ `SOURCE_WARN_STREAK` (2) runs in a row = WARN (a feed that never
 produced stays a WARN — fix or disable it); ≥ `SOURCE_FAIL_STREAK` (3) on an upstream with
-survivors in the 28d window = FAIL; more than `SOURCE_FAIL_UPSTREAMS` (5) different upstreams in
+survivors in the 28d window = FAIL — but only when NONE of that upstream's feeds were read in the
+latest run: one failing link of a source whose other feeds work stays a WARN and the line says so
+("PR Newswire (1 of 4 feeds: …) … the other 3 PR Newswire feeds are working"); more than `SOURCE_FAIL_UPSTREAMS` (5) different upstreams in
 one run = FAIL (that is our side). Only feeds touched in the last 48h are judged. Before
 migration 004 streaks read as unknown and the text names the migration. `Fetched vs filtered`
 skips rows whose run ended in `error` — a failed fetch is not an empty feed.
@@ -962,6 +964,7 @@ Newest first (v2 phases on top; the older rows are the v1 history):
 
 | Commit | What |
 |---|---|
+| 2026-09-26 | Source health: a feed that keeps failing while the same source's other feeds are read fine is a WARN ("1 of 4 feeds … the other 3 are working"), never "DOWN" |
 | 2026-09-26 | Feed XML repair: a feed the strict parser rejects (a publisher shipped a bare `&` in image URLs, which failed the whole feed every run) is repaired once and re-parsed — `rss_scraper.repair_feed_xml` |
 | 2026-09-20 | Source health on persistence: EFTS retry + shared breaker (`_efts_get`), failed prefetch skips its item, `consecutive_failures` / `last_success` per feed (migration 004), per-upstream alerting, `Fetched vs filtered` ignores errored rows, two publisher-refused feeds disabled |
 | `4a5f24b` | v2 Phase 4 (2026-09-08): accounts table + backfill, one grade per account, hashtag guards, hire-subject detection, nightly expiry, golden set in CI, orphans deleted — see §0b |
