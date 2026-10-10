@@ -151,12 +151,22 @@ review; plan file `~/.claude/plans/now-with-the-new-radiant-balloon.md`).
 
 **STATUS 2026-09-08 — ALL FOUR PHASES ARE LIVE.** Commits `747d54d` (Phase 1), `488db2d`
 (Phase 2), `a57924d` (config fix), `c584331` (daily re-verify), `b3bdfb9` (Phase 3), `4a5f24b`
-(Phase 4) are pushed; migrations 001–003 have been run in Supabase (typed columns 2026-09-07,
-`accounts` 2026-09-08, both backfilled); the four Mac jobs are loaded (`enrichment` 6×/day,
+(Phase 4) are pushed; migrations 001–004 have been run in Supabase (typed columns 2026-09-07,
+`accounts` 2026-09-08, both backfilled; `source_status` failure streaks 2026-09-20, no backfill
+needed); the four Mac jobs are loaded (`enrichment` 6×/day,
 `reverify` 06:30 = expiry + ranked re-verify, `healthcheck` 07:00, `oracles` 2nd 05:00). The
 v2 plan is COMPLETE — the job now is to operate, tune thresholds from evidence, and grow the
 golden set with A.J. See §0b-Phase 4 "Operating posture". Phase 1 shipped
 2026-09-07. **Read this before touching enrichment, scrapers, sync or the dashboard.**
+
+**Since the plan closed (operate/tune, all pushed, CI green):** `90b2b24` a Supabase probe
+timeout is no longer read as a missing column (exit 2 + soft notice, §6) · `036e8ea` /
+`fc33e94` / `d856189` source health judged on failure streaks per upstream, SEC search retries,
+two refused feeds disabled (migration 004) · `ee35dbf` a feed the strict XML parser rejects is
+repaired once and re-parsed (`rss_scraper.repair_feed_xml`) · `95cbc2d` a source is "down" only
+when none of its feeds work · `a83cdfc` GlobeNewswire's four feeds disabled (the site refuses all
+scripted requests) and health checks skip config-disabled feeds at once. Details in the
+"Source health" paragraph below, §3, §6 and §7.
 
 **Governing rules**
 1. Every stage yields `in` / `out` / `unknown`. **`unknown` is never shown to reps by
@@ -286,8 +296,11 @@ latest run: one failing link of a source whose other feeds work stays a WARN and
 one run = FAIL (that is our side). Only feeds touched in the last 48h are judged, and a feed
 switched off in the config (`enabled: false`) stops counting at once (`_disabled_feeds`) — its
 frozen error row would otherwise keep alerting for two more days. Before
-migration 004 streaks read as unknown and the text names the migration. `Fetched vs filtered`
-skips rows whose run ended in `error` — a failed fetch is not an empty feed.
+migration 004 streaks read as unknown and the text names the migration; after it, a row not
+re-saved since the columns appeared reads "streak not recorded yet" (never an invented "1 run").
+Each list in the alert names at most `SOURCE_LIST_MAX` (8) upstreams, then "+n more", so one
+post stays readable. `Fetched vs filtered` skips rows whose run ended in `error` — a failed
+fetch is not an empty feed.
 
 **Sync**: sends `events.source` and the counters only when the live columns exist (probe per
 run); legacy Adzuna rows are relabeled `finance_seat_open` at sync time (idempotent); stale
@@ -432,10 +445,21 @@ removed" pivot (reason × source × subindustry), and `expansion` events render 
 **Operating posture (from 2026-09-09).** Nothing needs a human on a schedule. What to read:
 - `#scout-engine` daily: the 06:30 re-verify post (expiry line + `verified:N ambiguous:N staged:N
   not_fit:N`), the 07:00 health check (WARN/FAIL only; "Source yield … went quiet" is REAL — it
-  repeats until the feed recovers; "Source health … DOWN 3+ runs in a row" is REAL too, while a
-  source that failed a single run never alerts; Adzuna/Google News flags from Sept 8 should clear as the
-  Phase 3 scrapers run), Mondays the weekly lines (finance-leader share vs 30%, vertical mix,
-  finance-leader source mix on change only).
+  repeats until the feed recovers; "Source health … DOWN 3+ runs in a row" is REAL too — every
+  feed of a lead-producing source has failed for half a day or more — while a source that failed
+  a single run never alerts and one failing feed of a source whose other feeds work is yellow),
+  Mondays the weekly lines (finance-leader share vs 30%, vertical mix, finance-leader source mix on
+  change only).
+- Routine yellows, no action: "Scrape freshness … 6–7h" (GitHub's "every 4 hours" schedule
+  drifts and skips slots; WARN above 6h, FAIL above 10h — FAIL is the one that means the scraper
+  stopped); "Firecrawl search canary … 1 consecutive empty canary" (search throttling; two in a
+  row switch enrichment to defer mode, and the next useful canary switches it back).
+- When a source keeps failing: test the feed URL with a plain request. A publisher-side block
+  (HTTP 403 "Access Denied" from every network) is not ours to get around — set the feed
+  `enabled: false` with a note (both config files), add it to `REFUSED_BY_PUBLISHER` in
+  `tests/test_scrapers.py`, and re-test now and then. A malformed feed is repaired by the
+  scraper on its own (`repair_feed_xml`). Disabled today: HomeCare Magazine, Private Equity
+  Insights, all four GlobeNewswire feeds (re-test GlobeNewswire around 2026-10-24).
 - The first weeks after 2026-09-08 carry a supply surge (first Phase 3 scrape: 112 events,
   52 `cfo_hire` vs ~10/day before). Expect more `not_fit` and `staged` for a while; that is
   the free gates working, not noise. Firecrawl/DuckDuckGo throttling — not Tavily budget — is
@@ -794,7 +818,7 @@ source venv/bin/activate
 | Daily re-verify job (06:30 ET, `com.teamalbert.reverify.plist` → `run_reverify.sh`, posts to #scout-engine) | `tail -f logs/reverify.log` · pause with `touch state/PAUSE` |
 | Refresh the free oracle tables (SEC advisers + FDIC banks; monthly job does this) | `python scripts/refresh_oracles.py --source all` |
 | **Accounts table (one-time, A.J.)** | paste `supabase/migrations/003_accounts.sql` into Supabase → SQL Editor → Run; then `python scripts/backfill_accounts.py` (dry-run / `--preflight`) and `--apply` (takes `state/enrichment.lock`; `--since` is preview-only and refuses `--apply`; refuses if it cannot read the existing rows) |
-| **Failure-streak columns (one-time, A.J.)** | paste `supabase/migrations/004_source_status_streaks.sql` into Supabase → SQL Editor → Run. No backfill: the next scrape fills them; until then Source health says "streaks not measurable yet" and still counts per upstream |
+| **Failure-streak columns (one-time, A.J. — RUN 2026-09-20)** | paste `supabase/migrations/004_source_status_streaks.sql` into Supabase → SQL Editor → Run. No backfill: the next scrape fills them; until then Source health says "streaks not measurable yet" and still counts per upstream |
 | Expire stale triggers (nightly job does this) | `python scripts/expire_triggers.py` (dry-run) / `--apply` |
 | Regenerate the golden set (then review the diff — never to make a test pass) | `python scripts/build_golden_set.py --out tests/golden/accounts.json` |
 | New-adviser trigger events (dry-run default) | `python scripts/ria_trigger.py` / `--apply` (monthly job: `run_oracles.sh`, log `logs/oracles.log`) |
@@ -1065,7 +1089,8 @@ These came up during today's session but were deferred. Surface them when releva
 | Medium | **Post-fit email digest** (Phase 2 offer to A.J.) | Today's alert email is the raw pre-fit scrape stream (~50% noise). A Mac-side digest of fit-confirmed Grade A/B accounts would replace it. Needs A.J.'s go-ahead. |
 | Medium | **More oracles** | DOL Form 5500 (state + NAICS for consumer services), NCUA credit unions, CRA T3010 (eastern Canada charities) — researched 2026-09-08, feasible as local SQLite tables like `state/oracles.db`. FDIC `/history` structure changes as a bank trigger. |
 | Medium | **Adzuna recruiter blacklist** | Vaco, Robert Half, Korn Ferry, Heidrick & Struggles, JM Search, McCracken Alliance post "Hiring: CFO" for unnamed clients. Judge from the accounts table after a few weeks. |
-| Low | **Fetch path for publisher-refused feeds** | Some trade publishers answer the hosted CI runner with HTTP 403 while serving non-datacenter addresses (HomeCare Magazine, Private Equity Insights — both `enabled: false`). A fetch path outside the CI runner for a config-flagged subset could revive them, and possibly some Phase 3 "blocked" rejects (re-test those from the runner first). Worth it only if Consumer Services stays the thinnest vertical. |
+| Medium | **Re-test disabled feeds** | GlobeNewswire (all four feeds, disabled 2026-10-10: the site refused every scripted request, from any network) — re-test with a plain request around 2026-10-24 and re-enable only if the feed comes back. It was a small source (3 of ~500 survivors in 28 days). |
+| Low | **Fetch path for publisher-refused feeds** | Some trade publishers answer the hosted CI runner with HTTP 403 while serving non-datacenter addresses (HomeCare Magazine, Private Equity Insights — both `enabled: false`). A fetch path outside the CI runner for a config-flagged subset could revive them, and possibly some Phase 3 "blocked" rejects (re-test those from the runner first). Worth it only if Consumer Services stays the thinnest vertical. Does NOT apply to GlobeNewswire, which refuses every scripted client — that block is not ours to get around. |
 | Low | **Hire-detector consolidation** | `src/scrapers/base.py` and `src/pipeline/hires.py` keep two regex sets; base.py still rejects "Former X named CFO" shapes. One shared module in `src/pipeline/` (importable by CI) would end the drift. |
 | Low | **Dashboard polish** | Kanban/pipeline view, hot-lead badges, saved filter presets per user, mobile responsive. |
 | Low | `sec_scraper.py:31-38` Canadian SEC state-code comments (A0–A5) look wrong; the standard ON/QC/NB/NS/PE/NL codes handle Canadian filings anyway. |
