@@ -773,11 +773,16 @@ PHASE3_FEEDS = [
 ]
 
 
-# Feeds that stay in the config DISABLED: the publisher refuses the hosted CI
-# runner (HTTP 403 on every run), so an enabled entry only ever reports an
-# error. Flipping one back on needs a fetch path that is not refused — this
-# set is what makes that a deliberate change instead of a stray edit.
-REFUSED_BY_PUBLISHER = {'HomeCare Magazine', 'Private Equity Insights'}
+# Feeds that stay in the config DISABLED: the publisher refuses our requests
+# (HTTP 403 on every run — the first two refuse the hosted CI runner, the
+# GlobeNewswire feeds refuse every scripted client), so an enabled entry only
+# ever reports an error. Flipping one back on needs a fetch path that is not
+# refused — this set is what makes that a deliberate change, not a stray edit.
+REFUSED_BY_PUBLISHER = {
+    'HomeCare Magazine', 'Private Equity Insights',
+    'Globe Newswire', 'Globe Newswire - CFO Keyword',
+    'Globe Newswire - Chief Financial Officer Keyword', 'Globe Newswire - Management Changes',
+}
 
 
 def _phase3_config():

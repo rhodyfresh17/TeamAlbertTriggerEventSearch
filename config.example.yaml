@@ -1040,17 +1040,24 @@ sources:
     # GlobeNewswire RSS carries no datelines, so rss_scraper admits the
     # finance-leader hires from these with unknown territory and enrichment
     # verifies the HQ; listed issuers are dropped via their stock category.
+    #
+    # ALL FOUR GlobeNewswire feeds (these three and "Globe Newswire" below)
+    # are disabled since 2026-10-10: the site answers every scripted request
+    # with "Access Denied" (HTTP 403), its homepage included and from any
+    # network. Re-enable only after a plain request to one of these URLs
+    # returns the feed again. Google News queries still surface some of its
+    # releases.
     - name: "Globe Newswire - CFO Keyword"
       url: "https://www.globenewswire.com/RssFeed/keyword/CFO/feedTitle/GlobeNewswire%20-%20CFO"
-      enabled: true
+      enabled: false
 
     - name: "Globe Newswire - Chief Financial Officer Keyword"
       url: "https://www.globenewswire.com/RssFeed/keyword/chief%20financial%20officer/feedTitle/GlobeNewswire%20-%20Chief%20Financial%20Officer"
-      enabled: true
+      enabled: false
 
     - name: "Globe Newswire - Management Changes"
       url: "https://www.globenewswire.com/RssFeed/subject/mgc/feedTitle/GlobeNewswire%20-%20Management%20Changes"
-      enabled: true
+      enabled: false
 
     # PRWeb — Cision's small-business wire (added 2026-09-08, live-verified):
     # private mid-market hires and deals that never reach PR Newswire proper.
@@ -1075,9 +1082,9 @@ sources:
       url: "https://www.prnewswire.com/rss/news-releases-list.rss"
       enabled: true
 
-    - name: "Globe Newswire"
+    - name: "Globe Newswire"     # disabled: see the GlobeNewswire note above
       url: "https://www.globenewswire.com/RssFeed/orgclass/1/feedTitle/GlobeNewswire%20-%20News%20Releases"
-      enabled: true
+      enabled: false
 
     - name: "Newswire - Latest"
       url: "https://www.newswire.com/newsroom/rss"

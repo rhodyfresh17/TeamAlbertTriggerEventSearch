@@ -283,7 +283,9 @@ produced stays a WARN — fix or disable it); ≥ `SOURCE_FAIL_STREAK` (3) on an
 survivors in the 28d window = FAIL — but only when NONE of that upstream's feeds were read in the
 latest run: one failing link of a source whose other feeds work stays a WARN and the line says so
 ("PR Newswire (1 of 4 feeds: …) … the other 3 PR Newswire feeds are working"); more than `SOURCE_FAIL_UPSTREAMS` (5) different upstreams in
-one run = FAIL (that is our side). Only feeds touched in the last 48h are judged. Before
+one run = FAIL (that is our side). Only feeds touched in the last 48h are judged, and a feed
+switched off in the config (`enabled: false`) stops counting at once (`_disabled_feeds`) — its
+frozen error row would otherwise keep alerting for two more days. Before
 migration 004 streaks read as unknown and the text names the migration. `Fetched vs filtered`
 skips rows whose run ended in `error` — a failed fetch is not an empty feed.
 
@@ -828,7 +830,10 @@ per upstream (§0b); a failed fetch is never reported as an empty feed. If Sourc
 "DOWN 3+ runs in a row", that one is real. **New feeds must be verified from the CI runner, not
 only from a workstation** — a publisher's bot protection can refuse datacenter addresses while
 answering any other (two feeds refused this way are `enabled: false` in the config;
-`tests/test_scrapers.py::REFUSED_BY_PUBLISHER` pins them).
+`tests/test_scrapers.py::REFUSED_BY_PUBLISHER` pins them). Since 2026-10-10 the four GlobeNewswire
+feeds are disabled too: the site refuses EVERY scripted request (HTTP 403 "Access Denied", homepage
+included, from any network). Never try to get around a publisher's blocking — disable the feed and
+re-test with a plain request now and then.
 
 ### Architectural quirks
 - **`config.yaml` is gitignored** — always edit `config.example.yaml`, then `cp` locally. GitHub Actions does this `cp` automatically in the workflow.
@@ -964,6 +969,7 @@ Newest first (v2 phases on top; the older rows are the v1 history):
 
 | Commit | What |
 |---|---|
+| 2026-10-10 | GlobeNewswire's four feeds disabled (the site now refuses all scripted requests); health checks skip feeds disabled in the config immediately |
 | 2026-09-26 | Source health: a feed that keeps failing while the same source's other feeds are read fine is a WARN ("1 of 4 feeds … the other 3 are working"), never "DOWN" |
 | 2026-09-26 | Feed XML repair: a feed the strict parser rejects (a publisher shipped a bare `&` in image URLs, which failed the whole feed every run) is repaired once and re-parsed — `rss_scraper.repair_feed_xml` |
 | 2026-09-20 | Source health on persistence: EFTS retry + shared breaker (`_efts_get`), failed prefetch skips its item, `consecutive_failures` / `last_success` per feed (migration 004), per-upstream alerting, `Fetched vs filtered` ignores errored rows, two publisher-refused feeds disabled |

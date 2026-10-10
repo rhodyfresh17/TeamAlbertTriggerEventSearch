@@ -750,7 +750,9 @@ def check_source_health(now=None):
           a lookback window, so one missed run loses nothing.
 
     Only feeds the cron touched in the last FEED_ACTIVE_HOURS are judged —
-    the row of a retired or disabled feed keeps its last status forever.
+    the row of a retired or disabled feed keeps its last status forever —
+    and feeds switched off in the config are skipped at once
+    (_disabled_feeds); both count as "retired/stale feeds ignored".
     Before migration 004 every streak reads as unknown (one run): the
     per-upstream count and the breadth FAIL still work and the text names
     the migration."""
@@ -765,8 +767,10 @@ def check_source_health(now=None):
         return WARN, 'No source_status rows — has scraper ever run?'
 
     active_cut = now - timedelta(hours=FEED_ACTIVE_HOURS)
+    disabled = _disabled_feeds()
     fresh = [r for r in status_rows
-             if (_parse_ts(r.get('last_check')) or datetime.min.replace(tzinfo=timezone.utc)) >= active_cut]
+             if r.get('source_name') not in disabled
+             and (_parse_ts(r.get('last_check')) or datetime.min.replace(tzinfo=timezone.utc)) >= active_cut]
     stale = len(status_rows) - len(fresh)
     if not fresh:
         return WARN, (f'No feed was checked in the last {FEED_ACTIVE_HOURS}h '
@@ -960,6 +964,26 @@ def _fetch_recent_events(days=YIELD_WINDOW_DAYS, client=None):
         return _page_all(EVENT_COLUMNS + ',source')
     except Exception:
         return _page_all(EVENT_COLUMNS)   # pre-migration: no `source` column
+
+
+def _disabled_feeds():
+    """Names of RSS feeds switched off in the scraper config (enabled: false).
+    A disabled feed is never scraped again, so its source_status row keeps
+    its last status — usually the error that got it disabled — until it ages
+    out of FEED_ACTIVE_HOURS; without this, disabling a failing feed would
+    leave it alerting for two more days. Read from config.yaml (the copy the
+    scraper uses), else config.example.yaml; unreadable → empty set, i.e.
+    nothing is excluded."""
+    for name in ('config.yaml', 'config.example.yaml'):
+        try:
+            import yaml
+            cfg = yaml.safe_load((PROJECT_DIR / name).read_text()) or {}
+        except Exception:
+            continue
+        feeds = ((cfg.get('sources') or {}).get('rss_feeds') or [])
+        return {f['name'] for f in feeds
+                if isinstance(f, dict) and f.get('name') and f.get('enabled', True) is False}
+    return set()
 
 
 def _fetch_source_status(client=None):
@@ -1158,8 +1182,10 @@ def check_fetched_vs_filtered(now=None):
         return PASS, f'Fetched-vs-filtered not measurable yet {TYPED_COLUMNS_NOTE}'
 
     active_cut = now - timedelta(hours=FEED_ACTIVE_HOURS)
+    disabled = _disabled_feeds()
     latest = [r for r in status_rows
-              if (_parse_ts(r.get('last_check')) or datetime.min.replace(tzinfo=timezone.utc)) >= active_cut]
+              if r.get('source_name') not in disabled
+              and (_parse_ts(r.get('last_check')) or datetime.min.replace(tzinfo=timezone.utc)) >= active_cut]
     stale = len(status_rows) - len(latest)
 
     fetched0, filtered, producing, unknown, errored = [], [], [], 0, 0

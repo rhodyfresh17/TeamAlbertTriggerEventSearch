@@ -30,6 +30,14 @@ import monitor_health as mh
 from src.pipeline import sources
 
 NOW = datetime(2026, 9, 7, 12, 0, tzinfo=timezone.utc)
+_REAL_DISABLED_FEEDS = mh._disabled_feeds      # captured before the autouse stub replaces it
+
+
+@pytest.fixture(autouse=True)
+def no_disabled_feeds(monkeypatch):
+    """Tests use synthetic feed names; never let the real config's disabled
+    list decide which rows a check sees. Tests of that filter override it."""
+    monkeypatch.setattr(mh, '_disabled_feeds', lambda: set())
 
 
 @pytest.fixture(autouse=True)
@@ -1616,3 +1624,48 @@ def test_two_of_four_failing_says_the_other_one_is_working(monkeypatch):
     assert ('PR Newswire (3 of 4 feeds: PR Newswire, PR Newswire - Financial Services, '
             'PR Newswire - Mergers & Acquisitions): HTTP 503 — 2 runs in a row, last OK 18h ago; '
             'the other PR Newswire feed is working') in msg
+
+
+# ── feeds switched off in the config stop counting at once ──────────────────
+
+GNW_FEEDS = ('Globe Newswire', 'Globe Newswire - CFO Keyword',
+             'Globe Newswire - Chief Financial Officer Keyword', 'Globe Newswire - Management Changes')
+
+
+def _gnw_refused():
+    return [_fresh_status(source_name=n, source_type='rss_feed', status='error', events_found=0, items_fetched=0,
+                          consecutive_failures=6, last_success=(NOW - timedelta(hours=44)).isoformat(),
+                          error_message='403 Client Error: Forbidden for url: https://example.test/rss')
+            for n in GNW_FEEDS]
+
+
+def test_a_source_switched_off_in_the_config_stops_alerting_at_once(monkeypatch):
+    gnw = 'https://www.globenewswire.com/news-release/a'
+    _status(monkeypatch, _healthy() + _gnw_refused())
+    _events(monkeypatch, [_row(3, gnw)])                       # it WAS producing: red while enabled
+    assert mh.check_source_health(now=NOW)[0] == mh.FAIL
+
+    monkeypatch.setattr(mh, '_disabled_feeds', lambda: set(GNW_FEEDS))
+    status, msg = mh.check_source_health(now=NOW)
+    assert status == mh.PASS
+    assert msg == '3 producing · 0 silent · 0 errored (of 3 feeds in the latest run; 4 retired/stale feeds ignored)'
+    status, msg = mh.check_fetched_vs_filtered(now=NOW)
+    assert 'Globe' not in msg and '4 retired/stale feeds ignored' in msg
+
+
+def test_disabled_feeds_are_read_from_the_scraper_config(monkeypatch, tmp_path):
+    monkeypatch.setattr(mh, 'PROJECT_DIR', tmp_path)
+    assert _REAL_DISABLED_FEEDS() == set()                     # no config at all → exclude nothing
+    (tmp_path / 'config.example.yaml').write_text(
+        'sources:\n  rss_feeds:\n'
+        '    - {name: "Feed On", url: "https://example.test/a"}\n'
+        '    - {name: "Feed Off", url: "https://example.test/b", enabled: false}\n')
+    assert _REAL_DISABLED_FEEDS() == {'Feed Off'}
+    (tmp_path / 'config.yaml').write_text('sources: {rss_feeds: [{name: "Other Off", enabled: false}]}\n')
+    assert _REAL_DISABLED_FEEDS() == {'Other Off'}             # config.yaml wins when present
+    (tmp_path / 'config.yaml').write_text('sources: [unclosed\n')
+    assert _REAL_DISABLED_FEEDS() == {'Feed Off'}              # unreadable → fall back
+
+
+def test_the_real_config_switches_off_the_refusing_feeds():
+    assert {'HomeCare Magazine', 'Private Equity Insights', *GNW_FEEDS} <= _REAL_DISABLED_FEEDS()
