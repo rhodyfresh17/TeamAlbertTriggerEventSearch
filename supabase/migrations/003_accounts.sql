@@ -90,6 +90,11 @@ CREATE TABLE IF NOT EXISTS public.accounts (
 
 ALTER TABLE public.accounts ENABLE ROW LEVEL SECURITY;
 
+-- API access for the service role ONLY (never anon / authenticated). Supabase
+-- stopped granting this automatically to tables created from 2026-10-30; the
+-- live table predates that and already has it, so re-running this is a no-op.
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.accounts TO service_role;
+
 -- ============================================
 -- 3. Indexes (the dashboard's account views and the monitor's mix checks)
 -- ============================================
