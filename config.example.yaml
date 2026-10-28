@@ -1065,8 +1065,19 @@ sources:
       url: "https://www.prweb.com/rss/news-releases-list.rss"
       enabled: true
 
+    # URL fixed 2026-10-28: /rss/financial-services/mergers-acquisitions-list.rss
+    # is the all-news firehose (no channel title; 16/20 items identical to
+    # "PR Newswire" below). The real deal feed sits under
+    # financial-services-latest-news (channel "Acquisitions, Mergers and
+    # Takeovers", no overlap with the all-news feed).
     - name: "PR Newswire - Mergers & Acquisitions"
-      url: "https://www.prnewswire.com/rss/financial-services/mergers-acquisitions-list.rss"
+      url: "https://www.prnewswire.com/rss/financial-services-latest-news/acquisitions-mergers-and-takeovers-list.rss"
+      enabled: true
+
+    # Venture and private-equity investments into companies (added
+    # 2026-10-28 to replace part of PEHub's deal coverage).
+    - name: "PR Newswire - Venture Capital"
+      url: "https://www.prnewswire.com/rss/financial-services-latest-news/venture-capital-list.rss"
       enabled: true
 
     - name: "PR Newswire - Financial Services"
@@ -1114,7 +1125,9 @@ sources:
     # PEHub and Buyouts Insider are disabled since 2026-10-28: the publisher
     # folded both titles into a paid publication, and both feed addresses now
     # redirect to its sign-up page (a web page, not a feed). PEHub was a real
-    # source of private-equity deal leads; its replacement is being researched.
+    # source of private-equity deal leads; its replacement (2026-10-28) is the
+    # PR Newswire deal and venture feeds, Private Equity Professional, and the
+    # region-grouped private-equity deal searches in the Google News scraper.
     # Re-enable only if a plain request to the URL returns a feed again.
     - name: "PEHub"
       url: "https://www.pehub.com/feed/"
@@ -1124,14 +1137,23 @@ sources:
       url: "https://www.buyoutsinsider.com/feed/"
       enabled: false
 
+    # Private Equity Professional (added 2026-10-28): US mid-market PE deal
+    # news, a free replacement for part of PEHub's coverage. The site sits
+    # behind bot protection that can refuse the hosted CI runner — if Source
+    # health shows it failing on every run, disable it like Private Equity
+    # Insights below.
+    - name: "Private Equity Professional"
+      url: "https://peprofessional.com/feed/"
+      enabled: true
+
     - name: "NVCA"
       url: "https://nvca.org/feed/"
       enabled: true
 
     # Disabled: the publisher's bot protection answers the hosted CI runner
     # with HTTP 403 on every run (the same request succeeds from a
-    # non-datacenter address), so the feed never delivered an item. PEHub,
-    # Buyouts Insider and NVCA cover the same news. Re-enable only together
+    # non-datacenter address), so the feed never delivered an item. NVCA
+    # and Private Equity Professional cover the same news. Re-enable only together
     # with a fetch path that is not refused.
     - name: "Private Equity Insights"
       url: "https://pe-insights.com/feed/atom/"

@@ -1195,7 +1195,8 @@ class TestFeedDefaultRegion(unittest.TestCase):
 
 
 class TestRegionGroupedGoogleNewsQueries(unittest.TestCase):
-    """F6: region-grouped CFO / dealership / home-care queries, every query
+    """F6: region-grouped CFO / dealership / home-care / private-equity deal
+    queries, every query
     short and dated (past ~32 words Google silently drops `when:`), and the
     query's state group as a territory HINT for articles whose text names no
     place — the enrichment HQ gate re-verifies the headquarters."""
@@ -1230,11 +1231,11 @@ class TestRegionGroupedGoogleNewsQueries(unittest.TestCase):
             '("home care" OR "home health") (acquires OR acquired) '
             '("North Carolina" OR Tennessee) when:7d'), 7)
 
-    def test_region_groups_cover_the_territory_with_three_query_shapes(self):
+    def test_region_groups_cover_the_territory_with_four_query_shapes(self):
         self.assertEqual(tuple(GoogleNewsScraper.REGION_GROUPS), self.EXPECTED_GROUPS)
         by_query = dict(self.queries)
         hints = self.scraper._region_hints
-        self.assertEqual(len(hints), 8 * 3)
+        self.assertEqual(len(hints), 8 * 4)
         for group in self.EXPECTED_GROUPS:
             states = ' OR '.join(f'"{s}"' if ' ' in s else s for s in group)
             shapes = {
@@ -1242,11 +1243,40 @@ class TestRegionGroupedGoogleNewsQueries(unittest.TestCase):
                 f'dealership (acquires OR acquired) ({states}) when:7d': EventType.MERGER_ACQUISITION,
                 f'("home care" OR "home health") (acquires OR acquired) ({states}) when:7d':
                     EventType.MERGER_ACQUISITION,
+                f'("private equity" OR "portfolio company" OR "backed by" OR "add-on") '
+                f'(acquires OR acquired OR acquisition) ({states}) when:7d':
+                    EventType.MERGER_ACQUISITION,
             }
             for query, hint in shapes.items():
                 self.assertEqual(by_query.get(query), hint, query)
                 self.assertEqual(hints[query], [s.lower() for s in group])
         self.assertEqual([q for q, _ in self.queries if 'funeral' in q.lower()], [])
+
+    def test_private_equity_deals_are_searched_by_region_only(self):
+        """2026-10-28: the region-grouped private-equity deal query replaces
+        the ungrouped "private equity acquisition" / add-on / bolt-on queries
+        (they found none of PEHub's companies). The PE-backed CFO queries
+        stay."""
+        queries = [q for q, _ in self.queries]
+        for gone in ('private equity acquisition when:7d', '"add-on acquisition" when:7d',
+                     '"bolt-on acquisition" when:7d'):
+            self.assertNotIn(gone, queries)
+        pe_deal = [q for q, hint in self.queries
+                   if q.startswith('("private equity"') and hint == EventType.MERGER_ACQUISITION]
+        self.assertEqual(len(pe_deal), len(self.EXPECTED_GROUPS))
+        self.assertTrue(all(q in self.scraper._region_hints for q in pe_deal))
+        for kept in ('private equity CFO when:7d', '"private equity" "portfolio company" CFO when:7d',
+                     '"PE-backed" CFO appointed when:7d', '"platform company" CFO when:7d'):
+            self.assertIn(kept, queries)
+
+    def test_pe_deal_hint_admits_a_placeless_add_on_as_an_acquisition(self):
+        hint = ['pennsylvania', 'new jersey', 'new york']
+        event = self.scraper._process_entry(
+            self._item('Beta Capital Partners portfolio company Acme acquires Gamma Services'),
+            EventType.MERGER_ACQUISITION, hint)
+        self.assertIsNotNone(event)
+        self.assertEqual(event.event_type, EventType.MERGER_ACQUISITION)
+        self.assertEqual(event.matched_regions, [])
 
     @staticmethod
     def _item(headline):
@@ -1928,3 +1958,62 @@ class TestSupportRoleToTheSeatIsNotAHire(unittest.TestCase):
         self.assertEqual(self.production.detect_event_type(
             'Acme Promotes Jane Doe to Corporate Controller',
             title='Acme Promotes Jane Doe to Corporate Controller'), EventType.EXECUTIVE_HIRE)
+
+
+# ── PEHub replacement feeds (2026-10-28) ────────────────────────────────────
+
+PRN_DEALS_URL = ('https://www.prnewswire.com/rss/financial-services-latest-news/'
+                 'acquisitions-mergers-and-takeovers-list.rss')
+# The old "Mergers & Acquisitions" address: really the all-news feed.
+PRN_FAKE_DEALS_URL = 'https://www.prnewswire.com/rss/financial-services/mergers-acquisitions-list.rss'
+PE_REPLACEMENT_FEEDS = (
+    ('PR Newswire - Mergers & Acquisitions', PRN_DEALS_URL),
+    ('PR Newswire - Venture Capital',
+     'https://www.prnewswire.com/rss/financial-services-latest-news/venture-capital-list.rss'),
+    ('Private Equity Professional', 'https://peprofessional.com/feed/'),
+)
+
+
+class TestPrivateEquityReplacementFeeds(unittest.TestCase):
+    """PEHub's feed became a sign-up page; its deal coverage is replaced by the
+    real PR Newswire deal feed (the configured one was the all-news feed), the
+    PR Newswire venture feed and Private Equity Professional."""
+
+    def _assert_feeds(self, name):
+        with open(os.path.join(REPO_ROOT, name)) as f:
+            feeds = yaml.safe_load(f)['sources']['rss_feeds']
+        names = [f['name'] for f in feeds]
+        urls = [f['url'] for f in feeds]
+        by_name = {f['name']: f for f in feeds}
+        for feed_name, url in PE_REPLACEMENT_FEEDS:
+            self.assertEqual(names.count(feed_name), 1, feed_name)
+            self.assertEqual(urls.count(url), 1, url)
+            self.assertEqual(by_name[feed_name]['url'], url, feed_name)
+            self.assertIs(by_name[feed_name].get('enabled', True), True, feed_name)
+            self.assertNotIn(feed_name, REFUSED_BY_PUBLISHER)
+        self.assertNotIn(PRN_FAKE_DEALS_URL, urls)
+
+    def test_example_config_carries_the_replacement_feeds(self):
+        self._assert_feeds('config.example.yaml')
+
+    def test_local_config_mirrors_them_if_present(self):
+        if not os.path.exists(os.path.join(REPO_ROOT, 'config.yaml')):
+            self.skipTest('no local config.yaml (CI copies the example)')
+        self._assert_feeds('config.yaml')
+
+    def test_sources_and_labels(self):
+        scraper = RSSScraper(_phase3_config())
+        self.assertEqual(scraper._determine_source('PR Newswire - Venture Capital'),
+                         EventSource.PR_NEWSWIRE)
+        self.assertEqual(scraper._determine_source('Private Equity Professional'),
+                         EventSource.OTHER)
+        # the venture feed is one more PR Newswire feed for Source health
+        self.assertEqual(sources.feed_label('PR Newswire - Venture Capital', 'rss_feed'),
+                         'PR Newswire')
+        # PE Professional's events carry its host as their label; the feed
+        # name must still match it (yield table, went-quiet check)
+        row = {'source': 'other', 'title': 'x',
+               'source_url': 'https://peprofessional.com/2026/10/acme-acquires-beta/'}
+        self.assertEqual(sources.source_label(row), 'peprofessional.com')
+        self.assertTrue(sources.feed_matches_label('Private Equity Professional',
+                                                   'peprofessional.com', 'rss_feed'))

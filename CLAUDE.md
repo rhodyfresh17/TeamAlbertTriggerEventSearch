@@ -326,7 +326,7 @@ finance director, head of finance, CAO) → `executive_hire` only with a hire in
 admission ONLY for finance-leader hires (enrichment verifies HQ; false rejects are lost
 forever); Google News: `strip_html` before gates, excluded-location only without an
 in-territory signal, region-grouped queries (≤12 terms, `when:7d`, 8 state groups: CFO hires,
-dealership M&A, home-care M&A) — the state group ADMITS the item only (`matched_regions`
+dealership M&A, home-care M&A, private-equity deals) — the state group ADMITS the item only (`matched_regions`
 stays empty; the HQ gate decides territory); feed-level `default_region` for regional
 journals works the same way (admission only, vetoed by any dateline elsewhere, never a
 relevance boost, never a `stable_target` on its own). Hire TYPE is decided from the TITLE
@@ -461,8 +461,10 @@ removed" pivot (reason × source × subindustry), and `expansion` events render 
   scraper on its own (`repair_feed_xml`). Disabled today: HomeCare Magazine, Private Equity
   Insights, all four GlobeNewswire feeds (still refused 2026-10-28; re-test around 2026-11-25),
   PEHub and Buyouts Insider (since 2026-10-28: folded into a paid publication, the feed
-  addresses redirect to its sign-up page; a free replacement for PEHub's private-equity deal
-  coverage is being researched).
+  addresses redirect to its sign-up page). PEHub's private-equity deal coverage is replaced
+  (2026-10-28) by the real PR Newswire deal feed, the PR Newswire venture feed, Private Equity
+  Professional (bot-protected — disable it if the CI runner is refused) and the region-grouped
+  private-equity deal searches on Google News.
 - The first weeks after 2026-09-08 carry a supply surge (first Phase 3 scrape: 112 events,
   52 `cfo_hire` vs ~10/day before). Expect more `not_fit` and `staged` for a while; that is
   the free gates working, not noise. Firecrawl/DuckDuckGo throttling — not Tavily budget — is
@@ -997,6 +999,7 @@ Newest first (v2 phases on top; the older rows are the v1 history):
 
 | Commit | What |
 |---|---|
+| 2026-10-28 | PEHub replacement: "PR Newswire - Mergers & Acquisitions" pointed at the real deal feed (the old address was the all-news feed); "PR Newswire - Venture Capital" and "Private Equity Professional" added; Google News private-equity deal searches now one per state group (8), replacing the ungrouped "private equity acquisition" / add-on / bolt-on searches |
 | 2026-10-28 | PEHub + Buyouts Insider disabled (feeds now redirect to a sign-up page); a feed that returns a web page is reported as "returns a web page, not a feed (redirected to …)" instead of an XML parse error; alert error text up to 100 chars |
 | 2026-10-10 | GlobeNewswire's four feeds disabled (the site now refuses all scripted requests); health checks skip feeds disabled in the config immediately |
 | 2026-09-26 | Source health: a feed that keeps failing while the same source's other feeds are read fine is a WARN ("1 of 4 feeds … the other 3 are working"), never "DOWN" |
@@ -1095,7 +1098,8 @@ These came up during today's session but were deferred. Surface them when releva
 | Medium | **More oracles** | DOL Form 5500 (state + NAICS for consumer services), NCUA credit unions, CRA T3010 (eastern Canada charities) — researched 2026-09-08, feasible as local SQLite tables like `state/oracles.db`. FDIC `/history` structure changes as a bank trigger. |
 | Medium | **Adzuna recruiter blacklist** | Vaco, Robert Half, Korn Ferry, Heidrick & Struggles, JM Search, McCracken Alliance post "Hiring: CFO" for unnamed clients. Judge from the accounts table after a few weeks. |
 | Medium | **Re-test disabled feeds** | GlobeNewswire (all four feeds, disabled 2026-10-10: the site refused every scripted request, from any network; still refused 2026-10-28) — re-test with a plain request around 2026-11-25 and re-enable only if the feed comes back. It was a small source (3 of ~500 survivors in 28 days). |
-| High | **Replace PEHub's private-equity deal coverage** | PEHub (disabled 2026-10-28) supplied 42 survivors in 90 days on 40 accounts (10 verified), mostly "Venture Capital & Private Equity" M&A; only 9 of those accounts also came from another source. Research started 2026-10-28: a Google News query group for PE deals in the territory, and free PE / middle-market trade feeds (each verified from the CI runner before relying on it). |
+| High | **Check the PEHub replacement on the CI runner** | Added 2026-10-28 (see §7). After the first scheduled scrape, read `source_status` for "Private Equity Professional" (bot-protected site; if the runner gets HTTP 403, disable it like Private Equity Insights) and the two PR Newswire feeds. Expect roughly half of PEHub's companies back; PEHub's "PE-backed company mentioned in a story" (`stable_target`) leads do not return through any free source. |
+| Medium | **Deal-verb detector + 10-results-per-search cap** | `detect_event_type` misses deal phrasings ("buys", "adds", "snaps up", "takes majority stake", "invests in", "strategic/majority investment") — over half the PA/NJ/NY private-equity search results failed on that alone in the 2026-10-28 research. Google News reads only 10 results per search. Both are shared code: change with the golden set and full tests, separately. |
 | Low | **Fetch path for publisher-refused feeds** | Some trade publishers answer the hosted CI runner with HTTP 403 while serving non-datacenter addresses (HomeCare Magazine, Private Equity Insights — both `enabled: false`). A fetch path outside the CI runner for a config-flagged subset could revive them, and possibly some Phase 3 "blocked" rejects (re-test those from the runner first). Worth it only if Consumer Services stays the thinnest vertical. Does NOT apply to GlobeNewswire, which refuses every scripted client — that block is not ours to get around. |
 | Low | **Hire-detector consolidation** | `src/scrapers/base.py` and `src/pipeline/hires.py` keep two regex sets; base.py still rejects "Former X named CFO" shapes. One shared module in `src/pipeline/` (importable by CI) would end the drift. |
 | Low | **Dashboard polish** | Kanban/pipeline view, hot-lead badges, saved filter presets per user, mobile responsive. |

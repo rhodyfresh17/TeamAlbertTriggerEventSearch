@@ -110,8 +110,11 @@ class GoogleNewsScraper(BaseScraper):
         ('Ontario', 'Quebec', 'Nova Scotia', 'New Brunswick'),
     )
     # (template, hint) — {states} becomes `("North Carolina" OR Tennessee …)`.
-    # CFO hires plus the two Consumer Services deal shapes Google News
-    # actually surfaces (dealership and home-care/home-health M&A).
+    # CFO hires, the two Consumer Services deal shapes Google News actually
+    # surfaces (dealership and home-care/home-health M&A), and private-equity
+    # deals (2026-10-28, replacing PEHub's feed: in a 30-day test this shape
+    # found 9 of the 19 companies PEHub sent; the ungrouped "private equity
+    # acquisition" / add-on / bolt-on queries it replaces found none).
     # Funeral-home queries are deliberately absent: no yield in 20 years of
     # results (research 2026-09-08).
     REGION_QUERY_TEMPLATES = (
@@ -120,6 +123,9 @@ class GoogleNewsScraper(BaseScraper):
         ('dealership (acquires OR acquired) ({states}) ' + RECENCY,
          EventType.MERGER_ACQUISITION),
         ('("home care" OR "home health") (acquires OR acquired) ({states}) ' + RECENCY,
+         EventType.MERGER_ACQUISITION),
+        ('("private equity" OR "portfolio company" OR "backed by" OR "add-on") '
+         '(acquires OR acquired OR acquisition) ({states}) ' + RECENCY,
          EventType.MERGER_ACQUISITION),
     )
 
@@ -174,7 +180,8 @@ class GoogleNewsScraper(BaseScraper):
                       'auto dealership', 'real estate brokerage']
         for industry in industries:
             add(f'{industry} CFO', EventType.CFO_HIRE)
-            add(f'{industry} acquisition', EventType.MERGER_ACQUISITION)
+            if industry != 'private equity':   # region-grouped PE deal queries below
+                add(f'{industry} acquisition', EventType.MERGER_ACQUISITION)
         # New-Controller trigger — a stated top trigger with no query until now
         add('new controller appointed', EventType.CFO_HIRE)
         add('"VP of Finance" appointed', EventType.CFO_HIRE)
@@ -189,13 +196,12 @@ class GoogleNewsScraper(BaseScraper):
         for query, hint in crunchbase_queries:
             add(query, hint)
 
-        # Private equity portfolio company moves
+        # Private equity portfolio company moves (PE deals: the region-grouped
+        # queries below)
         pe_queries = [
             ('"private equity" "portfolio company" CFO', EventType.CFO_HIRE),
             ('"PE-backed" CFO appointed', EventType.CFO_HIRE),
             ('"platform company" CFO', EventType.CFO_HIRE),
-            ('"add-on acquisition"', EventType.MERGER_ACQUISITION),
-            ('"bolt-on acquisition"', EventType.MERGER_ACQUISITION),
         ]
         for query, hint in pe_queries:
             add(query, hint)
