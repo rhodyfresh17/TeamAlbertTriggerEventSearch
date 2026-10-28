@@ -1111,13 +1111,18 @@ sources:
       url: "http://feeds.feedburner.com/vcnewsdaily"
       enabled: true
 
+    # PEHub and Buyouts Insider are disabled since 2026-10-28: the publisher
+    # folded both titles into a paid publication, and both feed addresses now
+    # redirect to its sign-up page (a web page, not a feed). PEHub was a real
+    # source of private-equity deal leads; its replacement is being researched.
+    # Re-enable only if a plain request to the URL returns a feed again.
     - name: "PEHub"
       url: "https://www.pehub.com/feed/"
-      enabled: true
+      enabled: false
 
     - name: "Buyouts Insider"
       url: "https://www.buyoutsinsider.com/feed/"
-      enabled: true
+      enabled: false
 
     - name: "NVCA"
       url: "https://nvca.org/feed/"

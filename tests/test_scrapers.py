@@ -773,15 +773,18 @@ PHASE3_FEEDS = [
 ]
 
 
-# Feeds that stay in the config DISABLED: the publisher refuses our requests
-# (HTTP 403 on every run — the first two refuse the hosted CI runner, the
-# GlobeNewswire feeds refuse every scripted client), so an enabled entry only
-# ever reports an error. Flipping one back on needs a fetch path that is not
-# refused — this set is what makes that a deliberate change, not a stray edit.
+# Feeds that stay in the config DISABLED because of the publisher: it refuses
+# our requests (HTTP 403 on every run — the first two refuse the hosted CI
+# runner, the GlobeNewswire feeds refuse every scripted client) or the feed
+# address now leads to a sign-up page (PEHub, Buyouts Insider), so an enabled
+# entry only ever reports an error. Flipping one back on needs a feed that
+# answers again — this set is what makes that a deliberate change, not a
+# stray edit.
 REFUSED_BY_PUBLISHER = {
     'HomeCare Magazine', 'Private Equity Insights',
     'Globe Newswire', 'Globe Newswire - CFO Keyword',
     'Globe Newswire - Chief Financial Officer Keyword', 'Globe Newswire - Management Changes',
+    'PEHub', 'Buyouts Insider',
 }
 
 
@@ -1805,11 +1808,52 @@ class TestFeedXmlRepair(unittest.TestCase):
 
     def test_scrape_feed_still_reports_a_feed_it_cannot_repair(self):
         scraper = RSSScraper(_phase3_config())
-        page = '<html><body><p>Access denied<br></p></body></html>'   # an error page, not a feed
-        with patch.object(scraper.session, 'get', return_value=_xml_response(page)):
+        cut_off = '<rss><channel><item><title>Acme names CFO</title>'   # truncated mid-feed
+        with patch.object(scraper.session, 'get', return_value=_xml_response(cut_off)):
             events, error, fetched = scraper._scrape_feed('https://fixture.test/feed', 'Broken Feed')
         self.assertEqual((events, fetched), ([], 0))
-        self.assertIn('mismatched tag', error)
+        self.assertIn('no element found', error)
+
+
+from src.scrapers.rss_scraper import is_web_page, web_page_error  # noqa: E402
+
+_SIGNUP_PAGE = (b'<!DOCTYPE html>\n<html lang="en"><head><title>Register</title></head>'
+                b'<body><form action="/register">' + b'x' * 2000 + b'</form></body></html>')
+
+
+class TestFeedThatBecameAWebPage(unittest.TestCase):
+    """A feed address that now redirects to a sign-up page used to fail as
+    "not well-formed (invalid token): line 1, column 60267". It must say what
+    happened: a web page came back, and where the redirect went."""
+
+    def test_html_pages_are_web_pages_and_feeds_are_not(self):
+        for page in (_SIGNUP_PAGE, b'\n  <html><body>gone</body></html>',
+                     b'\xef\xbb\xbf<?xml version="1.0"?>\n<!-- cms -->\n<!doctype HTML><html></html>'):
+            self.assertTrue(is_web_page(page), page[:40])
+        for feed in (_RSS_TWO_ITEMS.encode('utf-8'), _MALFORMED_FEED,
+                     b'<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"></feed>',
+                     b'', None):
+            self.assertFalse(is_web_page(feed), (feed or b'')[:40])
+
+    def test_message_names_the_redirect_target_without_query_string(self):
+        resp = MagicMock()
+        resp.history = [MagicMock(status_code=301), MagicMock(status_code=307)]
+        resp.url = 'https://www.example.test/registration/?next=%2Ffeed%2F'
+        self.assertEqual(web_page_error('https://www.old.test/feed/', resp),
+                         'returns a web page, not a feed (redirected to example.test/registration/)')
+        resp.history = []                                          # served in place, no redirect
+        self.assertEqual(web_page_error('https://www.old.test/feed/', resp), 'returns a web page, not a feed')
+
+    def test_scrape_feed_reports_the_web_page_instead_of_a_parse_error(self):
+        scraper = RSSScraper(_phase3_config())
+        resp = MagicMock(); resp.content = _SIGNUP_PAGE; resp.raise_for_status = MagicMock()
+        resp.history = [MagicMock(status_code=301)]
+        resp.url = 'https://www.example.test/registration/'
+        with patch.object(scraper.session, 'get', return_value=resp):
+            events, error, fetched = scraper._scrape_feed('https://www.old.test/feed/', 'Moved Feed')
+        self.assertEqual((events, fetched), ([], 0))
+        self.assertEqual(error, 'returns a web page, not a feed (redirected to example.test/registration/)')
+        self.assertNotIn('not well-formed', error)
 
 
 class TestFeedRetrySleep(unittest.TestCase):

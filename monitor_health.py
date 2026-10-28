@@ -651,7 +651,10 @@ def _upstream(row):
     return feed_label(row.get('source_name'), row.get('source_type'))
 
 
-def _short_error(msg, limit=70):
+SHORT_ERROR_MAX = 100       # long enough for "returns a web page, not a feed (redirected to <host/path>)"
+
+
+def _short_error(msg, limit=SHORT_ERROR_MAX):
     """A stored error_message cut down to what a person needs:
     '500 Server Error: Internal Server Error for url: https://…' → 'HTTP 500';
     '… (HTTP 500 after 3 tries)' → 'HTTP 500 after 3 tries'."""

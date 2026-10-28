@@ -459,7 +459,10 @@ removed" pivot (reason × source × subindustry), and `expansion` events render 
   `enabled: false` with a note (both config files), add it to `REFUSED_BY_PUBLISHER` in
   `tests/test_scrapers.py`, and re-test now and then. A malformed feed is repaired by the
   scraper on its own (`repair_feed_xml`). Disabled today: HomeCare Magazine, Private Equity
-  Insights, all four GlobeNewswire feeds (re-test GlobeNewswire around 2026-10-24).
+  Insights, all four GlobeNewswire feeds (still refused 2026-10-28; re-test around 2026-11-25),
+  PEHub and Buyouts Insider (since 2026-10-28: folded into a paid publication, the feed
+  addresses redirect to its sign-up page; a free replacement for PEHub's private-equity deal
+  coverage is being researched).
 - The first weeks after 2026-09-08 carry a supply surge (first Phase 3 scrape: 112 events,
   52 `cfo_hire` vs ~10/day before). Expect more `not_fit` and `staged` for a while; that is
   the free gates working, not noise. Firecrawl/DuckDuckGo throttling — not Tavily budget — is
@@ -637,7 +640,7 @@ loosen without A.J.
 
 ### Scrapers (`src/scrapers/`)
 - **`base.py`** — `BaseScraper` parent class. **`extract_company_name()`** (40+ verb patterns, case-insensitive) and **`matches_industry()`** live here. Both used heavily downstream.
-- **`rss_scraper.py`** — handles all RSS feeds in `config.sources.rss_feeds`. Each feed is parsed strictly first; one the strict parser rejects is repaired once by `repair_feed_xml` (undeclared namespace prefixes, a bare `&` — e.g. inside an image URL — HTML-only entities like `&nbsp;`, XML-forbidden control characters; CDATA and comments untouched) and parsed again. The Actions log prints `<feed>: repaired malformed feed XML (…)` when that happens; a feed that still fails reports the second error. Tests: `TestFeedXmlRepair` in `tests/test_scrapers.py`.
+- **`rss_scraper.py`** — handles all RSS feeds in `config.sources.rss_feeds`. Each feed is parsed strictly first; one the strict parser rejects is repaired once by `repair_feed_xml` (undeclared namespace prefixes, a bare `&` — e.g. inside an image URL — HTML-only entities like `&nbsp;`, XML-forbidden control characters; CDATA and comments untouched) and parsed again. The Actions log prints `<feed>: repaired malformed feed XML (…)` when that happens; a feed that still fails reports the second error. Before any parsing, a body that is an HTML page (doctype or `<html>` root) is reported as `returns a web page, not a feed (redirected to <host/path>)` — the usual sign that a publisher moved the feed behind a sign-up page or retired it. Tests: `TestFeedXmlRepair`, `TestFeedThatBecameAWebPage` in `tests/test_scrapers.py`.
 - **`sec_scraper.py`** — SEC EDGAR EFTS search. Item 5.02 (officer changes), 2.01 (M&A completion), 1.01 (material agreements). **Pre-fetches CFO-related accession numbers in one extra EFTS call, paginated to 5 pages.** Every EFTS request (8-K searches, the phrase prefetches, Form D pages) goes through `_efts_get`: `EFTS_MAX_TRIES` (3) with `EFTS_BACKOFF_SECONDS` on 5xx / 429 / connection errors / a non-JSON body; any other 4xx raises at once. Exhausted tries open a breaker shared by `SECScraper` and `FormDScraper` for `EFTS_BREAKER_SECONDS`, so an upstream outage costs one exhausted call per run and every SEC feed reports `error` ("SEC search unavailable this run"). A prefetch that FAILS skips its item for the run (a half-built CFO set would mistype filings, and a saved event is never re-typed); the next run re-reads the same lookback window, so nothing is lost. Tests: `tests/test_sec_efts.py`.
 - **`adzuna_scraper.py`** — Adzuna jobs API. Throttled to noon UTC; since
   2026-08-09 runs `title_only` queries ('controller','cfo') with
@@ -857,7 +860,8 @@ answering any other (two feeds refused this way are `enabled: false` in the conf
 `tests/test_scrapers.py::REFUSED_BY_PUBLISHER` pins them). Since 2026-10-10 the four GlobeNewswire
 feeds are disabled too: the site refuses EVERY scripted request (HTTP 403 "Access Denied", homepage
 included, from any network). Never try to get around a publisher's blocking — disable the feed and
-re-test with a plain request now and then.
+re-test with a plain request now and then. Since 2026-10-28 PEHub and Buyouts Insider are disabled
+as well: their feed addresses redirect to a paid publication's sign-up page.
 
 ### Architectural quirks
 - **`config.yaml` is gitignored** — always edit `config.example.yaml`, then `cp` locally. GitHub Actions does this `cp` automatically in the workflow.
@@ -993,6 +997,7 @@ Newest first (v2 phases on top; the older rows are the v1 history):
 
 | Commit | What |
 |---|---|
+| 2026-10-28 | PEHub + Buyouts Insider disabled (feeds now redirect to a sign-up page); a feed that returns a web page is reported as "returns a web page, not a feed (redirected to …)" instead of an XML parse error; alert error text up to 100 chars |
 | 2026-10-10 | GlobeNewswire's four feeds disabled (the site now refuses all scripted requests); health checks skip feeds disabled in the config immediately |
 | 2026-09-26 | Source health: a feed that keeps failing while the same source's other feeds are read fine is a WARN ("1 of 4 feeds … the other 3 are working"), never "DOWN" |
 | 2026-09-26 | Feed XML repair: a feed the strict parser rejects (a publisher shipped a bare `&` in image URLs, which failed the whole feed every run) is repaired once and re-parsed — `rss_scraper.repair_feed_xml` |
@@ -1089,7 +1094,8 @@ These came up during today's session but were deferred. Surface them when releva
 | Medium | **Post-fit email digest** (Phase 2 offer to A.J.) | Today's alert email is the raw pre-fit scrape stream (~50% noise). A Mac-side digest of fit-confirmed Grade A/B accounts would replace it. Needs A.J.'s go-ahead. |
 | Medium | **More oracles** | DOL Form 5500 (state + NAICS for consumer services), NCUA credit unions, CRA T3010 (eastern Canada charities) — researched 2026-09-08, feasible as local SQLite tables like `state/oracles.db`. FDIC `/history` structure changes as a bank trigger. |
 | Medium | **Adzuna recruiter blacklist** | Vaco, Robert Half, Korn Ferry, Heidrick & Struggles, JM Search, McCracken Alliance post "Hiring: CFO" for unnamed clients. Judge from the accounts table after a few weeks. |
-| Medium | **Re-test disabled feeds** | GlobeNewswire (all four feeds, disabled 2026-10-10: the site refused every scripted request, from any network) — re-test with a plain request around 2026-10-24 and re-enable only if the feed comes back. It was a small source (3 of ~500 survivors in 28 days). |
+| Medium | **Re-test disabled feeds** | GlobeNewswire (all four feeds, disabled 2026-10-10: the site refused every scripted request, from any network; still refused 2026-10-28) — re-test with a plain request around 2026-11-25 and re-enable only if the feed comes back. It was a small source (3 of ~500 survivors in 28 days). |
+| High | **Replace PEHub's private-equity deal coverage** | PEHub (disabled 2026-10-28) supplied 42 survivors in 90 days on 40 accounts (10 verified), mostly "Venture Capital & Private Equity" M&A; only 9 of those accounts also came from another source. Research started 2026-10-28: a Google News query group for PE deals in the territory, and free PE / middle-market trade feeds (each verified from the CI runner before relying on it). |
 | Low | **Fetch path for publisher-refused feeds** | Some trade publishers answer the hosted CI runner with HTTP 403 while serving non-datacenter addresses (HomeCare Magazine, Private Equity Insights — both `enabled: false`). A fetch path outside the CI runner for a config-flagged subset could revive them, and possibly some Phase 3 "blocked" rejects (re-test those from the runner first). Worth it only if Consumer Services stays the thinnest vertical. Does NOT apply to GlobeNewswire, which refuses every scripted client — that block is not ours to get around. |
 | Low | **Hire-detector consolidation** | `src/scrapers/base.py` and `src/pipeline/hires.py` keep two regex sets; base.py still rejects "Former X named CFO" shapes. One shared module in `src/pipeline/` (importable by CI) would end the drift. |
 | Low | **Dashboard polish** | Kanban/pipeline view, hot-lead badges, saved filter presets per user, mobile responsive. |

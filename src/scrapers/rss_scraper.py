@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from email.utils import parsedate_to_datetime
 from html.entities import name2codepoint
+from urllib.parse import urlsplit
 from requests.exceptions import Timeout, ReadTimeout, ConnectTimeout
 
 from .base import BaseScraper, finance_leader_hire_kind
@@ -124,6 +125,34 @@ def repair_feed_xml(raw: bytes) -> bytes:
     return b''.join(part if i % 2 else _repair_markup(part) for i, part in enumerate(parts))
 
 
+# A feed address that now serves a WEB PAGE — the publisher moved the feed
+# behind a sign-up page, retired it, or answers with an error page — used to
+# surface as a parse error ("not well-formed (invalid token): line 1, column
+# 60267"), which says nothing about the cause. The body is sniffed before any
+# parsing: an HTML doctype or <html> root is a web page, never a feed.
+_WEB_PAGE_RE = re.compile(
+    rb'\s*(?:\xef\xbb\xbf)?(?:<\?xml[^>]*\?>\s*)?(?:<!--.*?-->\s*)*<(?:!doctype\s+html|html)\b',
+    re.I | re.S)
+
+
+def is_web_page(raw: bytes) -> bool:
+    """True when the response body is an HTML page rather than RSS/Atom."""
+    return bool(_WEB_PAGE_RE.match((raw or b'')[:4096]))
+
+
+def web_page_error(requested_url: str, response) -> str:
+    """'returns a web page, not a feed' — plus where it was redirected to,
+    when it was, as host + path (no query string)."""
+    message = 'returns a web page, not a feed'
+    history = getattr(response, 'history', None)
+    final = getattr(response, 'url', None)
+    if isinstance(history, list) and history and isinstance(final, str) and final != requested_url:
+        parts = urlsplit(final)
+        host = parts.netloc[4:] if parts.netloc.startswith('www.') else parts.netloc
+        message += f' (redirected to {host}{parts.path})'
+    return message
+
+
 def strip_html(text: str) -> str:
     """Remove HTML tags and clean up text."""
     if not text:
@@ -225,6 +254,8 @@ class RSSScraper(BaseScraper):
             # a bare "&", HTML-only entities, forbidden control characters)
             # and parsed again; if that also fails, the second error is the
             # feed's error for this run.
+            if is_web_page(response.content):
+                raise ValueError(web_page_error(url, response))
             try:
                 root = ET.fromstring(response.content)
             except ET.ParseError as pe:

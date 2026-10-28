@@ -1523,7 +1523,12 @@ def test_short_error(raw, short):
 
 
 def test_short_error_is_capped():
-    assert len(mh._short_error('x' * 500)) == 70
+    assert len(mh._short_error('x' * 500)) == mh.SHORT_ERROR_MAX
+
+
+def test_short_error_keeps_a_web_page_redirect_whole():
+    msg = 'returns a web page, not a feed (redirected to privateequityinternational.com/registration/)'
+    assert mh._short_error(msg) == msg
 
 
 def test_upstream_groups_sec_feeds_and_folds_alert_feeds():
