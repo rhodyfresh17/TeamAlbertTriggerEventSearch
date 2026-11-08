@@ -8,7 +8,8 @@
 # check so its "Retry backlog" line reflects this pass. Spend is bounded by the
 # tiers + the 25/day Tavily ration; state/PAUSE and the run lock apply.
 
-PROJECT="/Users/andrewalbertbase/Shared/AI-BOTS/TeamAlbertTriggerEventSearch"
+# The project is the folder this script lives in, so any checkout runs its own code.
+PROJECT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG="$PROJECT/logs/reverify.log"
 ALERT_ENV="${HOME}/Shared/AI-BOTS/hermes-scout-data/.env"
 source "${HOME}/Shared/AI-BOTS/utils/mattermost_notify.sh" 2>/dev/null || true

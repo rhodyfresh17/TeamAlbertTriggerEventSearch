@@ -2,7 +2,8 @@
 # run_enrichment.sh — triggered by launchd every 4 hours, 30 min after
 # GitHub Actions scraper runs (which fires at :00 UTC / ~:00 Eastern).
 
-PROJECT="/Users/andrewalbertbase/Shared/AI-BOTS/TeamAlbertTriggerEventSearch"
+# The project is the folder this script lives in, so any checkout runs its own code.
+PROJECT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG="$PROJECT/logs/enrichment.log"
 
 # Keep log to last 1000 lines so it doesn't grow forever

@@ -6,7 +6,8 @@
 # and writes structured output to logs/health_alerts.log, which Scout's Monday
 # cron reads to produce the plain-English weekly summary.
 
-PROJECT="/Users/andrewalbertbase/Shared/AI-BOTS/TeamAlbertTriggerEventSearch"
+# The project is the folder this script lives in, so any checkout runs its own code.
+PROJECT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ALERTS_LOG="$PROJECT/logs/health_alerts.log"
 RUNTIME_LOG="$PROJECT/logs/health_check_runtime.log"
 

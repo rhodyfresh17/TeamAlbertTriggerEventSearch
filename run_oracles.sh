@@ -9,7 +9,8 @@
 # Research 2026-09-08: ~1,000 new SEC registrations/yr in territory, ~50 in-band.
 # Honors state/PAUSE. Safe to re-run: the trigger keeps a per-firm ledger.
 
-PROJECT="/Users/andrewalbertbase/Shared/AI-BOTS/TeamAlbertTriggerEventSearch"
+# The project is the folder this script lives in, so any checkout runs its own code.
+PROJECT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG="$PROJECT/logs/oracles.log"
 ALERT_ENV="${HOME}/Shared/AI-BOTS/hermes-scout-data/.env"
 source "${HOME}/Shared/AI-BOTS/utils/mattermost_notify.sh" 2>/dev/null || true
