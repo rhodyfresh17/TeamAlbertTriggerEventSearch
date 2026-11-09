@@ -1221,9 +1221,13 @@ sources:
       enabled: true
 
     # Canadian Business
+    # Financial Post is disabled since 2026-11-09: the publisher retired its
+    # feeds — the address (with or without the trailing slash) redirects to
+    # the homepage, which advertises no feed. Re-enable only if a plain
+    # request to the URL returns a feed again.
     - name: "Financial Post"
       url: "https://financialpost.com/feed"
-      enabled: true
+      enabled: false
 
     # WebWire
     - name: "WebWire - Business"

@@ -776,7 +776,8 @@ PHASE3_FEEDS = [
 # Feeds that stay in the config DISABLED because of the publisher: it refuses
 # our requests (HTTP 403 on every run — the first two refuse the hosted CI
 # runner, the GlobeNewswire feeds refuse every scripted client) or the feed
-# address now leads to a sign-up page (PEHub, Buyouts Insider), so an enabled
+# address now leads to a sign-up page (PEHub, Buyouts Insider) or to the
+# homepage of a site that no longer publishes a feed (Financial Post), so an enabled
 # entry only ever reports an error. Flipping one back on needs a feed that
 # answers again — this set is what makes that a deliberate change, not a
 # stray edit.
@@ -784,7 +785,7 @@ REFUSED_BY_PUBLISHER = {
     'HomeCare Magazine', 'Private Equity Insights',
     'Globe Newswire', 'Globe Newswire - CFO Keyword',
     'Globe Newswire - Chief Financial Officer Keyword', 'Globe Newswire - Management Changes',
-    'PEHub', 'Buyouts Insider',
+    'PEHub', 'Buyouts Insider', 'Financial Post',
 }
 
 

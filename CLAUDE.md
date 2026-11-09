@@ -461,7 +461,9 @@ removed" pivot (reason × source × subindustry), and `expansion` events render 
   scraper on its own (`repair_feed_xml`). Disabled today: HomeCare Magazine, Private Equity
   Insights, all four GlobeNewswire feeds (still refused 2026-10-28; re-test around 2026-11-25),
   PEHub and Buyouts Insider (since 2026-10-28: folded into a paid publication, the feed
-  addresses redirect to its sign-up page). PEHub's private-equity deal coverage is replaced
+  addresses redirect to its sign-up page), Financial Post (since 2026-11-09: the feed address
+  redirects to the homepage; the site no longer publishes a feed). PEHub's private-equity deal
+  coverage is replaced
   (2026-10-28) by the real PR Newswire deal feed, the PR Newswire venture feed, Private Equity
   Professional (bot-protected — disable it if the CI runner is refused) and the region-grouped
   private-equity deal searches on Google News.
@@ -863,7 +865,8 @@ answering any other (two feeds refused this way are `enabled: false` in the conf
 feeds are disabled too: the site refuses EVERY scripted request (HTTP 403 "Access Denied", homepage
 included, from any network). Never try to get around a publisher's blocking — disable the feed and
 re-test with a plain request now and then. Since 2026-10-28 PEHub and Buyouts Insider are disabled
-as well: their feed addresses redirect to a paid publication's sign-up page.
+as well: their feed addresses redirect to a paid publication's sign-up page. Since 2026-11-09
+Financial Post too: its feed address redirects to the homepage, which offers no feed.
 
 ### Architectural quirks
 - **`config.yaml` is gitignored** — always edit `config.example.yaml`, then `cp` locally. GitHub Actions does this `cp` automatically in the workflow.
@@ -999,6 +1002,7 @@ Newest first (v2 phases on top; the older rows are the v1 history):
 
 | Commit | What |
 |---|---|
+| 2026-11-09 | Financial Post disabled: the publisher retired its feed (the address redirects to the homepage) |
 | 2026-10-28 | PEHub replacement: "PR Newswire - Mergers & Acquisitions" pointed at the real deal feed (the old address was the all-news feed); "PR Newswire - Venture Capital" and "Private Equity Professional" added; Google News private-equity deal searches now one per state group (8), replacing the ungrouped "private equity acquisition" / add-on / bolt-on searches |
 | 2026-10-28 | PEHub + Buyouts Insider disabled (feeds now redirect to a sign-up page); a feed that returns a web page is reported as "returns a web page, not a feed (redirected to …)" instead of an XML parse error; alert error text up to 100 chars |
 | 2026-10-10 | GlobeNewswire's four feeds disabled (the site now refuses all scripted requests); health checks skip feeds disabled in the config immediately |
@@ -1098,7 +1102,6 @@ These came up during today's session but were deferred. Surface them when releva
 | Medium | **More oracles** | DOL Form 5500 (state + NAICS for consumer services), NCUA credit unions, CRA T3010 (eastern Canada charities) — researched 2026-09-08, feasible as local SQLite tables like `state/oracles.db`. FDIC `/history` structure changes as a bank trigger. |
 | Medium | **Adzuna recruiter blacklist** | Vaco, Robert Half, Korn Ferry, Heidrick & Struggles, JM Search, McCracken Alliance post "Hiring: CFO" for unnamed clients. Judge from the accounts table after a few weeks. |
 | Medium | **Re-test disabled feeds** | GlobeNewswire (all four feeds, disabled 2026-10-10: the site refused every scripted request, from any network; still refused 2026-10-28) — re-test with a plain request around 2026-11-25 and re-enable only if the feed comes back. It was a small source (3 of ~500 survivors in 28 days). |
-| High | **Check the PEHub replacement on the CI runner** | Added 2026-10-28 (see §7). After the first scheduled scrape, read `source_status` for "Private Equity Professional" (bot-protected site; if the runner gets HTTP 403, disable it like Private Equity Insights) and the two PR Newswire feeds. Expect roughly half of PEHub's companies back; PEHub's "PE-backed company mentioned in a story" (`stable_target`) leads do not return through any free source. |
 | Medium | **Deal-verb detector + 10-results-per-search cap** | `detect_event_type` misses deal phrasings ("buys", "adds", "snaps up", "takes majority stake", "invests in", "strategic/majority investment") — over half the PA/NJ/NY private-equity search results failed on that alone in the 2026-10-28 research. Google News reads only 10 results per search. Both are shared code: change with the golden set and full tests, separately. |
 | Low | **Fetch path for publisher-refused feeds** | Some trade publishers answer the hosted CI runner with HTTP 403 while serving non-datacenter addresses (HomeCare Magazine, Private Equity Insights — both `enabled: false`). A fetch path outside the CI runner for a config-flagged subset could revive them, and possibly some Phase 3 "blocked" rejects (re-test those from the runner first). Worth it only if Consumer Services stays the thinnest vertical. Does NOT apply to GlobeNewswire, which refuses every scripted client — that block is not ours to get around. |
 | Low | **Hire-detector consolidation** | `src/scrapers/base.py` and `src/pipeline/hires.py` keep two regex sets; base.py still rejects "Former X named CFO" shapes. One shared module in `src/pipeline/` (importable by CI) would end the drift. |
